@@ -4,6 +4,7 @@ Walk the user through turning an idea into working code. The user is NOT a progr
 
 At the start of EVERY step, announce the step number and name in bold so the user can track progress:
 
+When Epic Mode is NOT active (single task):
 - **"Step 1/7 — Pick the project"**
 - **"Step 2/7 — Get up to date"**
 - **"Step 3/7 — Hear your idea"**
@@ -11,6 +12,16 @@ At the start of EVERY step, announce the step number and name in bold so the use
 - **"Step 5/7 — Create the task"**
 - **"Step 6/7 — Build it"**
 - **"Step 7/7 — Wrap up"**
+
+When Epic Mode IS active (team project):
+- **"Step 1/8 — Pick the project"**
+- **"Step 2/8 — Get up to date"**
+- **"Step 3/8 — Hear your idea"**
+- **"Step 4/8 — Learn the project"**
+- **"Step 5/8 — Create the task"**
+- **"Step 6/8 — Epic check"**
+- **"Step 7/8 — Build it"**
+- **"Step 8/8 — Wrap up"**
 
 Always use this format. Never skip the announcement.
 
@@ -54,6 +65,57 @@ Using what the user described, create a clear GitHub issue using `/board create`
 - Which part of the project it touches
 
 Show the user the issue before creating it. Ask: **"Does this capture your idea? Anything to add or change?"**
+
+## Step 6/8 — Epic check (new step, only runs when relevant)
+
+After creating the GitHub issue in Step 5:
+
+### 1. Analyze whether the issue involves independent workstreams
+
+Look for:
+- Separate ownership domains (different files, no overlap)
+- Different tech layers (e.g. schema, UI logic, orchestration)
+- Work that could genuinely proceed in parallel without blocking each other
+
+### 2. If team mode looks right, say so
+
+In plain language with a reason:
+
+> "This has [X], [Y], and [Z] — three independent pieces that could be built in parallel by a team. That's a good fit for a team session."
+
+If it's a single-issue task: skip to Step 7/8 (proceed with /ship as before).
+
+### 3. Ask the user
+
+- "Build as a team project or keep as a single task?"
+- "Continue here or start a fresh session?"
+  *(Recommend a fresh session for Epics — easier to coordinate in tmux)*
+
+### 4. If team + fresh session
+
+- Generate an epic-brief.md draft using the schema in `commands/epic-brief-schema.md`
+- Save to `.handoffs/epic-brief-<issue>-<timestamp>.md`
+- Write a complete self-contained session prompt the user can copy-paste. The prompt must include:
+  - The epic-brief path
+  - The issue number
+  - A plain-language summary of what to build
+  - The instruction: run `/agent-team <issue>`
+
+### 5. If team + continue here
+
+- Generate epic-brief.md draft, save to `.handoffs/`
+- Call `/agent-team <issue>` directly
+
+### 6. If single task
+
+Proceed to Step 7/8 (call `/ship <issue>`)
+
+---
+
+*When Epic Mode is active, steps are renumbered:*
+- *Step 6/8 — Epic check (this step)*
+- *Step 7/8 — Build it (was Step 6/7)*
+- *Step 8/8 — Wrap up (was Step 7/7)*
 
 ## Step 6/7: Build it
 
