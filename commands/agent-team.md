@@ -99,13 +99,13 @@ Agent(
 ### Step 10: Spawn all workers simultaneously
 
 For each worker in the epic-brief, use the `Agent` tool with `team_name` — visible teammates.
-**Model: sonnet** — workers do focused build work; sonnet is fast and cost-efficient at scale.
+**Model: opusplan** — workers run /ship which has an explicit plan stage followed by execution. opusplan uses Opus during planning for better reasoning, then automatically switches to Sonnet during execution for speed and efficiency.
 
 ```
 Agent(
   team_name: "epic-<issue>",
   name: "worker-<name>",
-  model: "sonnet",
+  model: "opusplan",
   description: "Worker <name> — sub-issue #<sub_issue>",
   prompt: "..."
 )
@@ -198,5 +198,5 @@ Sections: Epic summary, worker results, QA findings, domain updates, merge order
 - **Never create tmux sessions or windows manually — the framework handles split panes.**
 - Workers do not merge, push, or close issues. Orchestrator handles all of this.
 - Orchestrator is the single writer for domain.md. Workers only propose.
-- **Model assignments:** Orchestrator = opus, QA = opus, Workers = sonnet.
+- **Model assignments:** Orchestrator = opus, QA = opus, Workers = opusplan (Opus for plan stage, auto-switches to Sonnet for execution).
 - On any CONFLICT: stop and explain in plain language before proceeding.
