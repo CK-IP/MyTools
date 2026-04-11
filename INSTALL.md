@@ -67,3 +67,22 @@ To add a new personal skill to this repo:
 1. Create the file under `commands/` (e.g. `commands/my-skill.md`)
 2. Symlink it: `ln -s "$(pwd)/commands/my-skill.md" ~/.claude/commands/my-skill.md`
 3. Commit and push
+
+### 3. Set up the new skills from this release
+
+After merging to main, run from inside the repo root:
+
+```bash
+# epic-brief-schema.md (schema reference — symlink optional)
+ln -s "$(pwd)/commands/epic-brief-schema.md" ~/.claude/commands/epic-brief-schema.md
+
+# agent-team.md (orchestrator skill — required)
+ln -s "$(pwd)/commands/agent-team.md" ~/.claude/commands/agent-team.md
+
+# Verify
+ls -la ~/.claude/commands/agent-team.md
+cat ~/.claude/commands/agent-team.md | head -1
+```
+
+> **Note:** Run from the repo root. These symlinks point into this repo and must be
+> created after merging to main — the target files don't exist on main until then.
