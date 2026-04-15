@@ -15,6 +15,16 @@ The native Claude Code agent teams feature handles split panes automatically whe
 
 ## Setup phase
 
+### Step 0: Orchestrator model check
+
+Before doing anything else, say:
+
+> "For best results, the orchestrator (this session) should be running **opus**. If you're not already on opus, switch now — then re-run `/agent-team <issue>`. Workers will run on sonnet; QA will run on opus automatically."
+
+Ask: **"Are you on opus? (yes to continue, no to switch first)"**
+
+Do not proceed until the user confirms yes.
+
 ### Step 1: Read epic-brief
 
 Find `.handoffs/epic-brief-<issue>-*.md` — use the latest by modification time.
@@ -92,26 +102,132 @@ Agent(
   name: "qa",
   model: "opus",
   description: "Rolling QA reviewer",
-  prompt: "..."
+  prompt: "<use the template below>"
 )
+```
+
+**QA prompt template** — fill in the `<placeholders>` from the epic-brief before spawning:
+
+```
+You are the rolling QA reviewer for Epic #<epic_issue>: <epic_title>.
+
+You will be notified via SendMessage as each worker completes. Review each worker
+immediately upon notification — do not wait for all workers to finish.
+
+Your context:
+- Locked contracts: .ship/epic-<epic_issue>/contracts.md
+- Epic acceptance criteria: <paste from epic-brief>
+- Worker ownership map: <list each worker name and their files_owned>
+
+## What /ship already guarantees
+
+Each worker ran /ship on their sub-issue. By the time they report complete:
+- Full test suite passes (green) on their branch
+- All per-step and full-branch red-team findings reviewed (fixed or accepted as risk)
+- A commit exists on ship/<sub_issue>
+- A ship's log exists at .handoffs/ship-log-<sub_issue>-<timestamp>.md
+
+Do NOT re-run /ship's individual code checks. Trust /ship's pipeline. Your job is to
+catch what /ship cannot see: integration conflicts between workers.
+
+## For each worker you review
+
+1. Read their diff: git diff main..ship/<sub_issue>
+2. Read their ship's log (.handoffs/ship-log-<sub_issue>-*.md) — note any HIGH findings
+   accepted as risk that could affect integration
+3. Check contracts: Does the output match their integration_contracts_produces in
+   contracts.md?
+4. Check cross-worker conflicts: Does anything conflict with previously cleared workers?
+5. Check file ownership: Are all changed files in this worker's files_owned list?
+   File ownership violations are always CONFLICT, never ADVISORY.
+
+## Verdicts
+
+- CLEAR: Send "CLEAR — Worker <name> (ship/<sub_issue>). <one-line summary>."
+- CONFLICT: Send "CONFLICT — <description>. Severity: HIGH|MEDIUM. Blocks: <workers>."
+- ADVISORY: Send "ADVISORY — <note>." (non-blocking, continue)
+
+## Severity (use /ship's scale)
+
+- HIGH: Will cause bugs, data loss, or test failures when merged — must resolve
+- MEDIUM: Correctness or design concern — flag, orchestrator decides whether to block
+- LOW: Always ADVISORY
+
+Write your findings to .ship/epic-<epic_issue>/qa-<sub_issue>.md before sending
+your verdict.
+
+Wait for SendMessage from the orchestrator before reviewing each worker.
 ```
 
 ### Step 10: Spawn all workers simultaneously
 
 For each worker in the epic-brief, use the `Agent` tool with `team_name` — visible teammates.
-**Model: opusplan** — workers run /ship which has an explicit plan stage followed by execution. opusplan uses Opus during planning for better reasoning, then automatically switches to Sonnet during execution for speed and efficiency.
+**Model: sonnet** — workers handle implementation execution. The orchestrator (opus) handles all high-stakes reasoning: contract lock, conflict resolution, merge decisions.
 
 ```
 Agent(
   team_name: "epic-<issue>",
   name: "worker-<name>",
-  model: "opusplan",
+  model: "sonnet",
   description: "Worker <name> — sub-issue #<sub_issue>",
-  prompt: "..."
+  prompt: "<use the template below>"
 )
 ```
 
+**Worker prompt template** — fill in the `<placeholders>` from the epic-brief for each worker before spawning:
+
+```
+You are Worker <name> for Epic #<epic_issue>: <epic_title>.
+
+Sub-issue: #<sub_issue>
+Files you own (exclusive write): <files_owned>
+Files you may read: <files_readonly>
+Contracts you produce: <integration_contracts_produces>
+Contracts you consume: <integration_contracts_consumes>
+Domain rules: <paste contents of .ship/domain.md, or "none yet">
+
+## Your task
+
+Run /ship <sub_issue> to build your sub-issue through the full TDD pipeline
+(board → plan → implement → review → commit → learn).
+
+## Rules — these override /ship's end-of-run defaults
+
+1. End-of-run: When /ship presents end-of-run options (Stage 6e), always select
+   "Done — I'll handle it". Never merge, push, or close issues. The orchestrator
+   handles all merging.
+
+2. Domain write: At Stage 6d, do NOT write to domain.md. Note your proposed rules
+   and include them in your completion report to the orchestrator. The orchestrator
+   is the single writer for domain.md.
+
+3. File ownership: Only write to files in your files_owned list. Do not modify any
+   other files, even if /ship's plan suggests doing so.
+
+4. Contracts: Your output must satisfy integration_contracts_produces. If a contract
+   you consume (integration_contracts_consumes) doesn't match what you find in the
+   codebase, report it to the orchestrator immediately — do not work around it silently.
+
+## When /ship completes
+
+Report back to the orchestrator:
+- Worker name: <name>
+- Branch: ship/<sub_issue>
+- Domain proposals: <list each proposed rule from Stage 6, or "none">
+- Advisories: <anything the orchestrator or QA should know>
+```
+
 **All workers spawn in the same call — do not wait for one before spawning the next.**
+
+### Step 10b: Branch-clean check
+
+After all workers spawn, verify each worker's branch starts clean. Run:
+
+```bash
+git diff main --name-only  # on each worker's branch
+```
+
+If any files appear that are NOT in that worker's `files_owned` list, stop that worker immediately via `SendMessage` before it does real work and alert the user: "Worker <name>'s branch contains files outside their ownership: <files>. This needs to be resolved before work begins."
 
 ---
 
@@ -119,9 +235,20 @@ Agent(
 
 ### Step 11: As each worker reports completion
 
-a. Use `TaskUpdate` to mark their task completed.
-b. Reply to the worker: "Done — I'll handle it from here."
-c. Send to QA via `SendMessage`:
+a. Verify the worker followed the rules. Run on their branch:
+   ```bash
+   # 1. Ship completed through commit (ship's log must exist)
+   ls .handoffs/ship-log-<sub_issue>-*.md 2>/dev/null
+   # 2. No unauthorized merges
+   git log main..<branch> --oneline | grep -i "^merge"   # must return nothing
+   # 3. domain.md not touched
+   git diff main..<branch> --name-only | grep "^domain\.md$"  # must return nothing
+   ```
+   If check 1 fails: "Worker <name> has no ship's log — /ship may not have completed through commit. Do not route to QA until confirmed."
+   If check 2 or 3 fails: "Worker <name> broke a rule: [merged a branch / wrote to domain.md]. This needs fixing before QA review."
+b. Use `TaskUpdate` to mark their task completed.
+c. Reply to the worker: "Done — I'll handle it from here."
+d. Send to QA via `SendMessage`:
    `SendMessage(to: "qa", message: "Worker <name> complete. Branch: ship/<sub_issue>.")`
 
 ### Step 12: QA reports back
@@ -198,5 +325,5 @@ Sections: Epic summary, worker results, QA findings, domain updates, merge order
 - **Never create tmux sessions or windows manually — the framework handles split panes.**
 - Workers do not merge, push, or close issues. Orchestrator handles all of this.
 - Orchestrator is the single writer for domain.md. Workers only propose.
-- **Model assignments:** Orchestrator = opus, QA = opus, Workers = opusplan (Opus for plan stage, auto-switches to Sonnet for execution).
+- **Model assignments:** Orchestrator = opus (manual — confirm at Step 0), QA = opus (auto), Workers = sonnet (auto).
 - On any CONFLICT: stop and explain in plain language before proceeding.
