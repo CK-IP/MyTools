@@ -1,0 +1,49 @@
+# MyTools — Claude Code Skills
+
+Custom Claude Code skills for parallel Epic builds and structured development workflows.
+
+---
+
+## What's in here
+
+| Skill | Command | What it does |
+|-------|---------|--------------|
+| Epic orchestrator | `/agent-team <epic-issue>` | Runs a parallel team build: spawns worker agents + rolling QA, coordinates via contracts |
+| Epic planner | `/idea` | Turns an idea into a GitHub issue — detects when work should be split into a parallel Epic |
+| Epic brief schema | `/epic-brief-schema` | Reference template for writing `epic-brief.md` files used by `/agent-team` |
+
+These skills extend the base workflow from `cc-dotfiles` (the org's shared tooling). They don't replace it — `/ship`, `/implement`, `/board` etc. still come from there.
+
+---
+
+## Prerequisites
+
+Before setting up these skills you need:
+
+1. **Claude Code** — the CLI (`claude` command in your terminal). [Install guide](https://docs.anthropic.com/en/docs/claude-code)
+2. **cc-dotfiles** — the org's base skills (`/ship`, `/board`, `/implement`, etc.). Get access from your team lead.
+3. **Git** and a GitHub account with access to this repo.
+
+---
+
+## Setup
+
+See **[INSTALL.md](INSTALL.md)** for full step-by-step instructions.
+
+Quick version:
+```bash
+git clone git@github.com:CK-IP/MyTools.git ~/projects/CK-Skills
+cd ~/projects/CK-Skills && bash install.sh   # coming soon — manual steps in INSTALL.md for now
+```
+
+---
+
+## Workflow guide
+
+**[Dev_Work_Flow.md](Dev_Work_Flow.md)** — step-by-step walkthrough of the full development lifecycle (issue → branch → plan → implement → PR → merge).
+
+---
+
+## Access
+
+This is a private repo. Collaborators have **read-only access** — skills are maintained by the repo owner. If you find a bug or want a change, open a GitHub issue.

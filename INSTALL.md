@@ -1,88 +1,152 @@
 # MyTools — Setup Guide
 
-Personal Claude Code skills and workflow tools for Chris Kuo.
+Step-by-step instructions for setting up the skills in this repo on your machine.
 
 ---
 
-## First-Time Setup
+## Prerequisites
 
-### 1. Clone the repo
+Before starting, verify you have:
+
+```bash
+# Claude Code CLI
+claude --version
+
+# Git
+git --version
+```
+
+If `claude` is not found, install Claude Code first: [docs.anthropic.com/en/docs/claude-code](https://docs.anthropic.com/en/docs/claude-code)
+
+You also need **cc-dotfiles** (the org's base skills) already installed. These skills depend on `/ship`, `/board`, and other commands from that repo. Ask your team lead for access if you don't have it.
+
+---
+
+## Step 1: Clone the repo
 
 ```bash
 git clone git@github.com:CK-IP/MyTools.git ~/projects/CK-Skills
 cd ~/projects/CK-Skills
 ```
 
-### 2. Set up the `/idea` skill symlink
+> You can clone to a different path — just replace `~/projects/CK-Skills` throughout these instructions.
 
-Replace the loose `idea.md` file in `~/.claude/commands/` with a symlink pointing to this repo so the skill is version-controlled.
+---
 
-**Run from inside the repo root:**
+## Step 2: Symlink the skills
+
+Run the following from inside the repo root. This creates symlinks in `~/.claude/commands/` so Claude Code picks up the skills automatically.
 
 ```bash
-# Verify the source file exists first
-ls commands/idea.md
-
 # Ensure the commands directory exists
 mkdir -p ~/.claude/commands
 
-# Remove the old loose file if present (safe even if it doesn't exist)
+# /idea skill
 rm -f ~/.claude/commands/idea.md
-
-# Create the symlink using $(pwd) so the path is always correct
 ln -s "$(pwd)/commands/idea.md" ~/.claude/commands/idea.md
 
-# Verify the symlink — confirm target path and that it resolves
-ls -la ~/.claude/commands/idea.md
-cat ~/.claude/commands/idea.md | head -1
-```
-
-> **Note:** The symlink target is an absolute path derived from `$(pwd)`. Run this command from the repo root (e.g. `~/projects/CK-Skills`), not from a subdirectory.
-
-> **Recovery:** If the symlink is broken (e.g. after moving the repo), re-run the `ln -s` command above from the new repo location.
-
----
-
-## Personal Path Note
-
-`commands/idea.md` contains a hardcoded reference to `/Users/chriskuo/projects/`. If you are setting this up on a different machine or with a different username, search for that path and update it to match your local setup.
-
----
-
-## Out of Scope (Follow-up Issues)
-
-The following skill files in `~/.claude/commands/` are currently plain files (not symlinked to this repo). Migrating them is tracked as follow-up work:
-
-- `prompt.md`
-- `space.md`
-
-All other commands (`ship.md`, `board.md`, `implement.md`, etc.) are symlinked to the org's `cc-dotfiles` repo and should not be modified here.
-
----
-
-## Adding New Personal Skills
-
-To add a new personal skill to this repo:
-
-1. Create the file under `commands/` (e.g. `commands/my-skill.md`)
-2. Symlink it: `ln -s "$(pwd)/commands/my-skill.md" ~/.claude/commands/my-skill.md`
-3. Commit and push
-
-### 3. Set up the new skills from this release
-
-After merging to main, run from inside the repo root:
-
-```bash
-# epic-brief-schema.md (schema reference — symlink optional)
-ln -s "$(pwd)/commands/epic-brief-schema.md" ~/.claude/commands/epic-brief-schema.md
-
-# agent-team.md (orchestrator skill — required)
+# /agent-team skill
+rm -f ~/.claude/commands/agent-team.md
 ln -s "$(pwd)/commands/agent-team.md" ~/.claude/commands/agent-team.md
 
-# Verify
-ls -la ~/.claude/commands/agent-team.md
-cat ~/.claude/commands/agent-team.md | head -1
+# /epic-brief-schema reference
+rm -f ~/.claude/commands/epic-brief-schema.md
+ln -s "$(pwd)/commands/epic-brief-schema.md" ~/.claude/commands/epic-brief-schema.md
 ```
 
-> **Note:** Run from the repo root. These symlinks point into this repo and must be
-> created after merging to main — the target files don't exist on main until then.
+**Verify the symlinks resolved correctly:**
+
+```bash
+ls -la ~/.claude/commands/idea.md
+ls -la ~/.claude/commands/agent-team.md
+ls -la ~/.claude/commands/epic-brief-schema.md
+```
+
+Each line should show `-> /absolute/path/to/CK-Skills/commands/<file>`. If you see `broken symlink`, re-run the `ln -s` commands above from the repo root.
+
+---
+
+## Step 3: Enable the agent teams feature
+
+`/agent-team` requires an experimental Claude Code feature that is off by default. Enable it by adding one line to `~/.claude/settings.json`.
+
+**Option A — one command (recommended):**
+
+```bash
+python3 -c "
+import json, os
+path = os.path.expanduser('~/.claude/settings.json')
+s = json.load(open(path)) if os.path.exists(path) else {}
+s.setdefault('env', {})['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] = '1'
+json.dump(s, open(path, 'w'), indent=2)
+print('Done. Settings saved to', path)
+"
+```
+
+**Option B — manual edit:**
+
+Open `~/.claude/settings.json` in any text editor. If it does not exist, create it. Add the `env` block shown below — if the file already has content, merge the `env` key in rather than replacing the whole file:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  }
+}
+```
+
+**Verify:**
+
+```bash
+cat ~/.claude/settings.json
+```
+
+You should see `"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"` in the output.
+
+**Restart Claude Code** after saving the settings file for the change to take effect.
+
+---
+
+## Step 4: Verify everything works
+
+Open Claude Code and run:
+
+```
+/agent-team
+```
+
+You should see a response that starts with "For best results, the orchestrator (this session) should be running **opus**…" — that confirms the skill loaded correctly.
+
+---
+
+## Path note
+
+Some skill files contain a hardcoded reference to `/Users/chriskuo/projects/`. If commands fail with a path error, search for that string in the relevant skill file and update it to match your local path:
+
+```bash
+grep -r "chriskuo" ~/projects/CK-Skills/commands/
+```
+
+Update any matches to use your own username or path.
+
+---
+
+## Keeping skills up to date
+
+Skills are updated in this repo. To pull the latest:
+
+```bash
+cd ~/projects/CK-Skills
+git pull
+```
+
+The symlinks always point to the current files — no re-linking needed after a pull.
+
+---
+
+## Adding new skills (repo owner only)
+
+1. Create the file: `commands/my-skill.md`
+2. Symlink it: `ln -s "$(pwd)/commands/my-skill.md" ~/.claude/commands/my-skill.md`
+3. Add the symlink command to Step 2 of this file
+4. Commit and push
