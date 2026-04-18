@@ -11,6 +11,7 @@ Custom Claude Code skills for parallel Epic builds and structured development wo
 | Epic orchestrator | `/agent-team <epic-issue>` | Runs a parallel team build: spawns worker agents + rolling QA, coordinates via contracts |
 | Epic planner | `/idea` | Turns an idea into a GitHub issue — detects when work should be split into a parallel Epic |
 | Epic brief schema | `/epic-brief-schema` | Reference template for writing `epic-brief.md` files used by `/agent-team` |
+| Security & quality gate | `/fortify [issue]` | Automated security scan, coverage check, and static analysis on a branch — catches what LLM review misses |
 
 These skills extend the base workflow from `cc-dotfiles` (the org's shared tooling). They don't replace it — `/ship`, `/implement`, `/board` etc. still come from there.
 

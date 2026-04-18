@@ -52,6 +52,10 @@ ln -s "$(pwd)/commands/agent-team.md" ~/.claude/commands/agent-team.md
 # /epic-brief-schema reference
 rm -f ~/.claude/commands/epic-brief-schema.md
 ln -s "$(pwd)/commands/epic-brief-schema.md" ~/.claude/commands/epic-brief-schema.md
+
+# /fortify — automated security, coverage, and static analysis review
+rm -f ~/.claude/commands/fortify.md
+ln -s "$(pwd)/commands/fortify.md" ~/.claude/commands/fortify.md
 ```
 
 **Verify the symlinks resolved correctly:**
@@ -60,13 +64,37 @@ ln -s "$(pwd)/commands/epic-brief-schema.md" ~/.claude/commands/epic-brief-schem
 ls -la ~/.claude/commands/idea.md
 ls -la ~/.claude/commands/agent-team.md
 ls -la ~/.claude/commands/epic-brief-schema.md
+ls -la ~/.claude/commands/fortify.md
 ```
 
 Each line should show `-> /absolute/path/to/CK-Skills/commands/<file>`. If you see `broken symlink`, re-run the `ln -s` commands above from the repo root.
 
 ---
 
-## Step 3: Enable the agent teams feature
+## Step 3: Install recommended review tools (optional)
+
+`/fortify` works with whatever tools you have installed. More tools installed = more coverage.
+
+```bash
+# Core (recommended for all projects)
+brew install semgrep gitleaks
+
+# Python projects (CLI tools — use pipx to avoid venv conflicts on modern macOS/Linux)
+for pkg in pip-audit bandit radon pylint; do pipx install "$pkg"; done
+# coverage is best installed in your project venv: pip install coverage
+
+# Node projects — npm audit is built-in (no install needed)
+# jest --coverage is built-in if you use jest
+
+# Shell scripts
+brew install shellcheck
+```
+
+You can skip this step and install tools later — `/fortify` gracefully skips any tool that is not installed.
+
+---
+
+## Step 4: Enable the agent teams feature
 
 `/agent-team` requires an experimental Claude Code feature that is off by default. Enable it by adding one line to `~/.claude/settings.json`.
 
@@ -107,7 +135,7 @@ You should see `"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"` in the output.
 
 ---
 
-## Step 4: Verify everything works
+## Step 5: Verify everything works
 
 Open Claude Code and run:
 
