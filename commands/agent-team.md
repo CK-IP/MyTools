@@ -60,6 +60,41 @@ Write `.ship/epic-<issue>/contracts.md` — the locked contract document.
 
 One section per contract name: producer, consumers, exact interface spec.
 
+### Step 5b: Generate contract-tests.sh
+
+After writing contracts.md, auto-generate `.ship/epic-<issue>/contract-tests.sh` — a
+runnable validation script derived from the locked contracts:
+
+```bash
+cat > .ship/epic-<issue>/contract-tests.sh << 'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+PASS=0; FAIL=0
+pass() { echo "PASS: $1"; PASS=$((PASS+1)); }
+fail() { echo "FAIL: $1"; FAIL=$((FAIL+1)); }
+
+# One assert_* function per contract — generated from contracts.md
+# Example (replace with actual contracts):
+# assert_user_api() {
+#   grep -q 'def get_user' src/api/users.py || fail "get_user missing in users.py"
+#   grep -q 'def create_user' src/api/users.py || fail "create_user missing in users.py"
+#   pass "user_api contract satisfied"
+# }
+
+# Invoke each contract assertion (one call per assert_* function above):
+# assert_user_api
+# assert_<contract2>
+
+echo "Results: $PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ]
+SCRIPT
+chmod +x .ship/epic-<issue>/contract-tests.sh
+```
+
+The actual assert functions are generated from the `exact interface spec` fields in
+contracts.md. One function per contract name. Present the generated script to the user
+as part of Gate P (Step 6) — they approve both contracts.md AND contract-tests.sh.
+
 ### Step 6: Gate P — user approval
 
 Present the contracts to the user. Ask:
@@ -140,6 +175,22 @@ catch what /ship cannot see: integration conflicts between workers.
 4. Check cross-worker conflicts: Does anything conflict with previously cleared workers?
 5. Check file ownership: Are all changed files in this worker's files_owned list?
    File ownership violations are always CONFLICT, never ADVISORY.
+
+6. Check type compatibility: For each function or class in this worker's diff that
+   is consumed by another worker (per integration_contracts_consumes in contracts.md),
+   verify the signature matches exactly — parameter count, names, and type annotations
+   if present. A mismatch is CONFLICT MEDIUM unless it causes a runtime TypeError, in
+   which case CONFLICT HIGH.
+
+7. Check behavioral contracts: For each contract in integration_contracts_produces,
+   verify not just file presence but that the exact interface spec is satisfied —
+   function name, return shape, and any documented invariants. Passing check 3 does
+   not exempt this check — verify the full interface spec, not just contract file
+   presence.
+
+8. Check import graph conflicts: If this worker's diff adds or removes module-level
+   imports used by another cleared worker's code, flag as CONFLICT MEDIUM. Use
+   `git diff main..ship/<sub_issue> -- '*.py' '*.ts' '*.js'` and scan import lines.
 
 ## Verdicts
 
@@ -246,10 +297,49 @@ a. Verify the worker followed the rules. Run on their branch:
    ```
    If check 1 fails: "Worker <name> has no ship's log — /ship may not have completed through commit. Do not route to QA until confirmed."
    If check 2 or 3 fails: "Worker <name> broke a rule: [merged a branch / wrote to domain.md]. This needs fixing before QA review."
-b. Use `TaskUpdate` to mark their task completed.
-c. Reply to the worker: "Done — I'll handle it from here."
-d. Send to QA via `SendMessage`:
+b. Run contract tests: `bash .ship/epic-<issue>/contract-tests.sh` on the worker's
+   branch. If any assertion fails, treat as CONFLICT HIGH — **skip items c–e entirely**,
+   report the specific failing assertion to the user, and wait for resolution before
+   re-running.
+   _(Step 11b semantic check runs next — gates items c/d/e)_
+c. Use `TaskUpdate` to mark their task completed.
+d. Reply to the worker: "Done — I'll handle it from here."
+e. Send to QA via `SendMessage`:
    `SendMessage(to: "qa", message: "Worker <name> complete. Branch: ship/<sub_issue>.")`
+
+### Step 11b: Semantic conflict check
+
+**Execution order:** Step 11 items a and b run first. Then this step runs as a gate.
+On clean pass, continue with Step 11 items c/d/e.
+
+Run a lightweight semantic analysis on the worker's branch to detect cross-worker
+naming collisions not caught by contract tests:
+
+```bash
+# Scope temp files to this epic to avoid cross-epic collisions
+mkdir -p /tmp/epic-<issue>
+
+# Detect cross-worker naming collisions in Python files
+git diff main..ship/<sub_issue> -- '*.py' | grep '^+def \|^+class ' | \
+  cut -d' ' -f2 | cut -d'(' -f1 | sort > /tmp/epic-<issue>/new_symbols_<sub_issue>.txt
+
+# Compare against symbols from previously cleared workers
+cat /tmp/epic-<issue>/new_symbols_*.txt 2>/dev/null | sort | uniq -d > /tmp/epic-<issue>/collisions.txt
+
+if [ -s /tmp/epic-<issue>/collisions.txt ]; then
+  # SEMANTIC-CONFLICT — report to user and do not route to QA
+  echo "SEMANTIC-CONFLICT: duplicate symbols: $(cat /tmp/epic-<issue>/collisions.txt)"
+fi
+```
+
+For TypeScript/JavaScript, adapt the grep pattern to `^+export .*function \|^+export class `.
+
+**Verdicts:**
+- **SEMANTIC-CONFLICT HIGH:** Symbol collision that will cause a runtime error — blocks QA
+  routing, notify user. Skip Step 11 items c/d/e until resolved.
+- **SEMANTIC-CONFLICT MEDIUM:** Symbol collision in test scope only — ADVISORY, log and
+  continue to Step 11 items c/d/e (non-blocking).
+- **Clean:** Proceed to Step 11 items c/d/e.
 
 ### Step 12: QA reports back
 
@@ -279,42 +369,88 @@ Log in conversation. Continue without blocking.
 
 When all workers are done and QA has cleared all sub-issues, proceed.
 
-### Step 17: Collect and write domain proposals
+### Step 17: Fortify gate
+
+With all workers cleared by QA, run `/fortify` across the integration candidate before
+merging to main.
+
+Create a temporary integration branch:
+
+```bash
+git checkout -b epic-<issue>-integration main
+for branch in <worker branches in dependency_order>; do
+  git merge "$branch" --no-ff -m "integration-check: $branch"
+done
+```
+
+Then run `/fortify` on the integration branch. Read the verdict from the fortify report:
+
+- **BLOCK:** Do not proceed to merge. Tell the user: "Fortify BLOCK on integration
+  branch: <finding summary>. Resolve before merging." Delete the integration branch and
+  wait for user direction.
+- **ADVISORY:** Log the finding in the epic ship's log (Step 23). Continue to Step 18.
+- **CLEAR:** Continue to Step 18.
+
+Delete the integration branch after the check regardless of outcome:
+```bash
+git checkout main
+git branch -D epic-<issue>-integration
+```
+
+### Step 18: Collect and write domain proposals
 
 Collect domain proposals from all workers.
 Write `.ship/domain.md` once — append all accepted rules in a single pass.
 (Workers skipped domain.md writes. The orchestrator is the single writer. No collision risk.)
 
-### Step 18: Full integration validation
+### Step 19: Full integration validation
 
-- Check all worker branches: `git diff main...<each branch>`
+- Check all worker branches: `git diff main..<each branch>`
 - Verify no file ownership violations (no worker modified a file owned by another).
-- Run full test suite: `bash tests/test_step1.sh && bash tests/test_step2.sh && bash tests/test_step3.sh && bash tests/test_step4.sh && bash tests/test_step5.sh && bash tests/test_step6.sh`
+- Run full test suite:
+  ```bash
+  # Tests are order-independent; glob sorts alphabetically
+  for t in tests/test_*.sh; do
+    bash "$t" || { echo "FAILED: $t"; exit 1; }
+  done
+  ```
 
-### Step 19: Merge in dependency order
+### Step 20: Merge in dependency order
 
 Follow `dependency_order` from epic-brief Merge Rules. For each branch in order:
 
 ```bash
 git checkout main
 git merge ship/<sub_issue> --no-ff -m "merge: ship/<sub_issue> — <title>"
+# Verify contracts still hold after this merge
+bash .ship/epic-<issue>/contract-tests.sh || {
+  echo "Contract tests failed after merging ship/<sub_issue> — do not proceed."
+  exit 1
+}
 ```
 
 Run the full test suite after each merge before continuing.
 
-### Step 20: Push
+### Step 21: Push
 
 `git push`
 
-### Step 21: Close Epic
+### Step 22: Close Epic
 
 Spawn @board with: `done <epic_issue>`
 
-### Step 22: Write epic ship's log
+### Step 23: Write epic ship's log
 
 Save to `.handoffs/ship-log-epic-<issue>-<timestamp>.md`.
 
 Sections: Epic summary, worker results, QA findings, domain updates, merge order.
+
+- Ship Health:
+  - Fortify verdict (BLOCK / ADVISORY / CLEAR) with finding summary
+  - Contract test results per worker (pass/fail counts per assert function)
+  - QA finding counts: total CLEAR, CONFLICT (by severity), ADVISORY
+  - HIGH findings accepted as risk (from individual worker ship's logs)
+  - Integration test suite result (pass/fail per test file)
 
 ---
 
