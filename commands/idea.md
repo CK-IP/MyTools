@@ -1,19 +1,17 @@
 Walk the user through turning an idea into working code. The user is NOT a programmer — use plain, simple language throughout. No jargon. Explain everything like you're talking to a smart coworker who doesn't code.
 
+## HARD GATES — MANDATORY COMPLIANCE
+
+Every step below is a **mandatory gate**. You MUST execute each step in order. DO NOT SKIP, bypass, or rationalize away any step — no matter how simple the task seems.
+
+- The **epic check** (Step 6/8) ALWAYS runs after creating the issue. You must evaluate whether the task needs a team build or single agent, and you must ask the user. There are no exceptions.
+- The **build step** (Step 7/8) MUST invoke `/ship` or `/agent-team`. You must NEVER start coding directly — no exceptions.
+- You MUST announce every step number and name before doing any work in that step.
+
 ## Step announcements
 
 At the start of EVERY step, announce the step number and name in bold so the user can track progress:
 
-When Epic Mode is NOT active (single task):
-- **"Step 1/7 — Pick the project"**
-- **"Step 2/7 — Get up to date"**
-- **"Step 3/7 — Hear your idea"**
-- **"Step 4/7 — Learn the project"**
-- **"Step 5/7 — Create the task"**
-- **"Step 6/7 — Build it"**
-- **"Step 7/7 — Wrap up"**
-
-When Epic Mode IS active (team project):
 - **"Step 1/8 — Pick the project"**
 - **"Step 2/8 — Get up to date"**
 - **"Step 3/8 — Hear your idea"**
@@ -25,13 +23,17 @@ When Epic Mode IS active (team project):
 
 Always use this format. Never skip the announcement.
 
-## Step 1/7: Pick the project
+## Step 1/8: Pick the project
+
+> ⛔ HARD GATE — DO NOT SKIP. You must identify and confirm the project.
 
 Look at the projects in /Users/chriskuo/projects/. Ask: **"Which project is this for?"** and list the available projects. If it's obvious from context, confirm instead of asking.
 
 Change your working directory to that project.
 
-## Step 2/7: Get up to date
+## Step 2/8: Get up to date
+
+> ⛔ HARD GATE — DO NOT SKIP. You must check out main and pull latest.
 
 Check if the current branch is `main` and whether it's up to date with the remote. Tell the user:
 
@@ -41,13 +43,17 @@ Run `git checkout main && git pull` in the project directory. If there are updat
 
 If there are uncommitted changes that block the checkout, warn: **"You have some unsaved work in progress. Want me to save it aside so we can update? (This is called 'stashing' — it's like putting papers in a drawer to deal with later.)"**
 
-## Step 3/7: Hear the idea
+## Step 3/8: Hear your idea
+
+> ⛔ HARD GATE — DO NOT SKIP. You must ask for and listen to the user's idea.
 
 Ask: **"What's your idea? Just describe what you want to happen — no technical details needed."**
 
 Listen to their response. Ask 1-2 clarifying questions if needed (no more). Keep it conversational.
 
-## Step 4/7: Learn the project
+## Step 4/8: Learn the project
+
+> ⛔ HARD GATE — DO NOT SKIP. You must check for domain knowledge.
 
 Check if `.ship/domain.md` exists in the project. If not, tell the user:
 
@@ -57,7 +63,9 @@ Then invoke `/train` in discovery mode to bootstrap domain knowledge.
 
 If it already exists, say: **"Project knowledge is loaded — good to go."**
 
-## Step 5/7: Create the task
+## Step 5/8: Create the task
+
+> ⛔ HARD GATE — DO NOT SKIP. You must create a GitHub issue via /board.
 
 Using what the user described, create a clear GitHub issue using `/board create`. Write it in plain language. Include:
 - A clear title
@@ -66,9 +74,11 @@ Using what the user described, create a clear GitHub issue using `/board create`
 
 Show the user the issue before creating it. Ask: **"Does this capture your idea? Anything to add or change?"**
 
-## Step 6/8 — Epic check (new step, only runs when relevant)
+## Step 6/8: Epic check
 
-After creating the GitHub issue in Step 5:
+> ⛔ HARD GATE — DO NOT SKIP. ALWAYS run this step. You must evaluate single vs team and ask the user.
+
+This step determines whether Epic Mode is needed — a team build with parallel agents — or whether it's a single task. After creating the GitHub issue in Step 5:
 
 ### 1. Analyze whether the issue involves independent workstreams
 
@@ -77,13 +87,15 @@ Look for:
 - Different tech layers (e.g. schema, UI logic, orchestration)
 - Work that could genuinely proceed in parallel without blocking each other
 
-### 2. If team mode looks right, say so
+### 2. Present your analysis
 
-In plain language with a reason:
+If team mode looks right, say so in plain language with a reason:
 
 > "This has [X], [Y], and [Z] — three independent pieces that could be built in parallel by a team. That's a good fit for a team session."
 
-If it's a single-issue task: skip to Step 7/8 (proceed with /ship as before).
+If it's a single task, say so:
+
+> "This is a single task — one focus area, no need for a team build."
 
 ### 3. Ask the user
 
@@ -108,16 +120,11 @@ If it's a single-issue task: skip to Step 7/8 (proceed with /ship as before).
 
 ### 6. If single task
 
-Proceed to Step 7/8 (call `/ship <issue>`)
+Announce to the user: this is a single task. Proceed to Step 7/8 — invoke `/ship <issue>`.
 
----
+## Step 7/8: Build it
 
-*When Epic Mode is active, steps are renumbered:*
-- *Step 6/8 — Epic check (this step)*
-- *Step 7/8 — Build it (was Step 6/7)*
-- *Step 8/8 — Wrap up (was Step 7/7)*
-
-## Step 6/7: Build it
+> ⛔ HARD GATE — DO NOT SKIP. You must invoke /ship or /agent-team. NEVER code directly.
 
 Once the issue is created, tell the user:
 
@@ -141,7 +148,9 @@ When the pipeline pauses for user input, translate what happened into plain lang
 - Instead of "Red team found HIGH severity issue" → **"The security reviewer found a problem that could cause issues — here's what it is in simple terms: [explain]"**
 - Instead of "Plan compliance drift" → **"The security reviewer noticed the code started going in a different direction than we planned. Here's what changed: [explain]"**
 
-## Step 7/7: Wrap up
+## Step 8/8: Wrap up
+
+> ⛔ HARD GATE — DO NOT SKIP. You must present the summary and next steps to the user.
 
 When `/ship` finishes, tell the user:
 
@@ -159,3 +168,7 @@ When `/ship` finishes, tell the user:
 - If something fails, explain what went wrong and what you're doing about it in plain terms
 - Be encouraging — the user is creating real software even though they don't code
 - ALWAYS announce the step number and name at the start of each step
+- MANDATORY: Execute every step (1–8) in order. Never skip a step for any reason.
+- MANDATORY: ALWAYS run the epic check (Step 6/8) after creating the issue — evaluate for team vs single and ask the user.
+- MANDATORY: ALWAYS invoke /ship <issue> or /agent-team <issue> to build. NEVER start coding directly — no exceptions.
+- MANDATORY: Announce the step number and name at the start of each step before doing any work.

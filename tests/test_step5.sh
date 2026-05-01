@@ -41,11 +41,11 @@ else
   fail "does not contain 'epic-brief'"
 fi
 
-# --- Assertion 5: contains "Step 6/8" or "Step 7/8" or "Step 8/8" ---
-if grep -qE "Step [678]/8" "$TARGET"; then
-  pass "contains Epic Mode step numbering (Step X/8)"
+# --- Assertion 5: contains "Epic check" in a step header ---
+if grep -q "Epic check" "$TARGET"; then
+  pass "contains 'Epic check' step header"
 else
-  fail "does not contain any Epic Mode step numbering (Step 6/8, 7/8, or 8/8)"
+  fail "does not contain 'Epic check' step header"
 fi
 
 # --- Summary ---
