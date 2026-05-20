@@ -4,8 +4,8 @@ Walk the user through turning an idea into working code. The user is NOT a progr
 
 Every step below is a **mandatory gate**. You MUST execute each step in order. DO NOT SKIP, bypass, or rationalize away any step — no matter how simple the task seems.
 
-- The **epic check** (Step 6/8) ALWAYS runs after creating the issue. You must evaluate whether the task needs a team build or single agent, and you must ask the user. There are no exceptions.
-- The **build step** (Step 7/8) MUST invoke `/ship` or `/agent-team`. You must NEVER start coding directly — no exceptions.
+- The **t-shirt sizing** (Step 6/8) ALWAYS runs after creating the issue. You must evaluate whether the task is a Small, Medium, Large, or XL, and you must ask the user. There are no exceptions.
+- The **build step** (Step 7/8) MUST invoke `/skiff`, `/ship-lite`, `/ship`, or `/agent-team`. You must NEVER start coding directly — no exceptions.
 - You MUST announce every step number and name before doing any work in that step.
 
 ## Step announcements
@@ -17,7 +17,7 @@ At the start of EVERY step, announce the step number and name in bold so the use
 - **"Step 3/8 — Hear your idea"**
 - **"Step 4/8 — Learn the project"**
 - **"Step 5/8 — Create the task"**
-- **"Step 6/8 — Epic check"**
+- **"Step 6/8 — T-shirt size it"**
 - **"Step 7/8 — Build it"**
 - **"Step 8/8 — Wrap up"**
 
@@ -74,32 +74,53 @@ Using what the user described, create a clear GitHub issue using `/board create`
 
 Show the user the issue before creating it. Ask: **"Does this capture your idea? Anything to add or change?"**
 
-## Step 6/8: Epic check
+## Step 6/8: T-shirt size it
 
-> ⛔ HARD GATE — DO NOT SKIP. ALWAYS run this step. You must evaluate single vs team and ask the user.
+> ⛔ HARD GATE — DO NOT SKIP. ALWAYS run this step. You must t-shirt size the task and ask the user to confirm.
 
-This step determines whether Epic Mode is needed — a team build with parallel agents — or whether it's a single task. After creating the GitHub issue in Step 5:
+This step determines how the work should be built. It replaces the former Epic check with a full complexity triage — think of it like picking a t-shirt size for the work. After creating the GitHub issue in Step 5:
 
-### 1. Analyze whether the issue involves independent workstreams
+### 1. Classify the size
 
-Look for:
-- Separate ownership domains (different files, no overlap)
-- Different tech layers (e.g. schema, UI logic, orchestration)
-- Work that could genuinely proceed in parallel without blocking each other
+Look at the issue you just created and ask three questions:
+- **How many files does it touch?** (1-3 = S, 3-5 = M, 5+ = L)
+- **How many steps to build it?** (1-3 = S, 3-5 = M, 5+ = L)
+- **What kind of work is it?** (bugfix/follow-up/doc edit = S; single concern with existing patterns = M; new feature with unknowns or new patterns = L; independent workstreams = XL)
+
+| Size | What it means | Pipeline |
+|---|---|---|
+| **S** (Small) | 1-3 files, bugfix/follow-up/doc edit, straightforward | `/skiff` |
+| **M** (Medium) | Single concern, <5 files, existing patterns, <200 LOC | `/ship-lite` |
+| **L** (Large) | Multi-file, new patterns, unknowns, security-touching | `/ship` |
+| **XL** (Extra Large) | Independent workstreams, parallel team build (Epic Mode) | `/agent-team` |
 
 ### 2. Present your analysis
 
-If team mode looks right, say so in plain language with a reason:
+**If it's a Small:**
 
-> "This has [X], [Y], and [Z] — three independent pieces that could be built in parallel by a team. That's a good fit for a team session."
+> "I'd call this a **Small** — [describe what and why]. It touches [N] files and needs about [N] steps. I'll use the fast track — plan, build, one review, and it goes straight onto the main branch."
 
-If it's a single task, say so:
+**If it's a Medium:**
 
-> "This is a single task — one focus area, no need for a team build."
+> "I'd call this a **Medium** — [describe scope]. It touches a few files and uses existing patterns. I'll use the standard process — plan with a review, build, another review, and commit on a branch."
+
+**If it's a Large:**
+
+> "I'd call this a **Large** — [describe scope]. It touches multiple files and has some unknowns. I'll use the full process with step-by-step reviews and multiple safety checks."
+
+**If it's an XL** (Epic Mode):
+
+> "This is an **XL** — it has [X], [Y], and [Z] — [N] independent pieces that could be built in parallel by a team. That's a good fit for a team session."
 
 ### 3. Ask the user
 
-- "Build as a team project or keep as a single task?"
+For S/M/L decisions:
+
+> "I'm calling this a [Small / Medium / Large]. Sound right, or should I size it differently?"
+
+For XL:
+
+- "Build as a team project or keep it simpler?"
 - "Continue here or start a fresh session?"
   *(Recommend a fresh session for Epics — easier to coordinate in tmux)*
 
@@ -118,15 +139,66 @@ If it's a single task, say so:
 - Generate epic-brief.md draft, save to `.handoffs/`
 - Call `/agent-team <issue>` directly
 
-### 6. If single task
+### 6. If full feature
 
-Announce to the user: this is a single task. Proceed to Step 7/8 — invoke `/ship <issue>`.
+Proceed to Step 7/8 — invoke `/ship <issue>`.
+
+### 7. If standard build
+
+Proceed to Step 7/8 — invoke `/ship-lite <issue>`.
+
+### 8. If small fix
+
+Proceed to Step 7/8 — invoke `/skiff <issue>`.
 
 ## Step 7/8: Build it
 
-> ⛔ HARD GATE — DO NOT SKIP. You must invoke /ship or /agent-team. NEVER code directly.
+> ⛔ HARD GATE — DO NOT SKIP. You must invoke /skiff, /ship-lite, /ship, or /agent-team. NEVER code directly.
 
-Once the issue is created, tell the user:
+### If /skiff (small fix)
+
+Tell the user:
+
+**"Great — this is a focused fix, so I'm using the fast track. Here's how it works:**
+- **I'll make a short plan and show it to you for approval**
+- **Then I'll write tests and code**
+- **A reviewer checks the work automatically**
+- **When it's done, the fix goes straight onto the main branch**
+
+**You just need to say 'looks good' or tell me what to change. Ready?"**
+
+Then invoke `/skiff` with the issue number.
+
+#### At checkpoints during /skiff
+
+- Instead of "plan mode" → **"I've written up what I'm going to change. Take a look and let me know if it covers what you want."**
+- Instead of "red-team convergence" → **"The reviewer is checking the code for problems — like a second pair of eyes."**
+- Instead of "CRITICAL finding" → **"The reviewer found something important that needs fixing — here's what it is: [explain]"**
+
+### If /ship-lite (standard build)
+
+Tell the user:
+
+**"Great — I'm using the standard build process. Here's how it works:**
+- **I'll make a plan, and a reviewer checks it before we start**
+- **Then I'll write tests and code**
+- **Another reviewer checks the finished work**
+- **Everything goes on a separate branch so it can be reviewed before going live**
+
+**You just need to say 'looks good' or tell me what to change. Ready?"**
+
+Then invoke `/ship-lite` with the issue number.
+
+#### At checkpoints during /ship-lite
+
+- Instead of "plan-level red-team" → **"A reviewer is checking whether the plan is solid before we start building."**
+- Instead of "red-team full-branch review" → **"The reviewer is checking all the code changes for problems."**
+- Instead of "CRITICAL finding" → **"The reviewer found something important — here's what it is: [explain]"**
+- Instead of "escalate to /ship" → **"The reviewer found something big enough that we should use the full process instead. Want to switch?"**
+
+### If /ship (full feature)
+
+Tell the user:
 
 **"Great — now I'm going to build this step by step. Here's how it works:**
 - **I'll make a plan first and show it to you for approval**
@@ -138,7 +210,7 @@ Once the issue is created, tell the user:
 
 Then invoke `/ship` with the issue number.
 
-### At every checkpoint during /ship
+#### At every checkpoint during /ship
 
 When the pipeline pauses for user input, translate what happened into plain language:
 
@@ -152,13 +224,21 @@ When the pipeline pauses for user input, translate what happened into plain lang
 
 > ⛔ HARD GATE — DO NOT SKIP. You must present the summary and next steps to the user.
 
-When `/ship` finishes, tell the user:
+### If /skiff was used
 
-**"All done! Here's what was built: [plain summary]. The code is saved on a branch called [branch name].**
+When `/skiff` finishes, tell the user:
 
-**Reminder: Two things left to do when you're ready:**
-1. **Open a PR** — push the branch and request a review from Gregg
-2. **After Gregg approves and it's merged** — run `/board done [issue-number]` to close out the issue"
+**"All done! Here's what was fixed: [plain summary]. The change is already on the main branch — it's live.**
+
+**The issue has been closed automatically. Nothing else to do on this one."**
+
+### If /ship-lite or /ship was used
+
+When the build finishes, tell the user:
+
+**"All done! Here's what was built: [plain summary]. The code has been merged to the main branch.**
+
+**The issue has been closed automatically. If anything looks off, just let me know."**
 
 ## Rules
 
@@ -169,6 +249,6 @@ When `/ship` finishes, tell the user:
 - Be encouraging — the user is creating real software even though they don't code
 - ALWAYS announce the step number and name at the start of each step
 - MANDATORY: Execute every step (1–8) in order. Never skip a step for any reason.
-- MANDATORY: ALWAYS run the epic check (Step 6/8) after creating the issue — evaluate for team vs single and ask the user.
-- MANDATORY: ALWAYS invoke /ship <issue> or /agent-team <issue> to build. NEVER start coding directly — no exceptions.
+- MANDATORY: ALWAYS run the t-shirt sizing (Step 6/8) after creating the issue — evaluate for S/M/L/XL and ask the user.
+- MANDATORY: ALWAYS invoke /skiff <issue>, /ship-lite <issue>, /ship <issue>, or /agent-team <issue> to build. NEVER start coding directly — no exceptions.
 - MANDATORY: Announce the step number and name at the start of each step before doing any work.

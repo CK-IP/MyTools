@@ -56,6 +56,10 @@ ln -s "$(pwd)/commands/epic-brief-schema.md" ~/.claude/commands/epic-brief-schem
 # /fortify — automated security, coverage, and static analysis review
 rm -f ~/.claude/commands/fortify.md
 ln -s "$(pwd)/commands/fortify.md" ~/.claude/commands/fortify.md
+
+# /ship-lite — standard-weight ship pipeline (between /skiff and /ship)
+rm -f ~/.claude/commands/ship-lite.md
+ln -s "$(pwd)/commands/ship-lite.md" ~/.claude/commands/ship-lite.md
 ```
 
 **Verify the symlinks resolved correctly:**
@@ -65,6 +69,7 @@ ls -la ~/.claude/commands/idea.md
 ls -la ~/.claude/commands/agent-team.md
 ls -la ~/.claude/commands/epic-brief-schema.md
 ls -la ~/.claude/commands/fortify.md
+ls -la ~/.claude/commands/ship-lite.md
 ```
 
 Each line should show `-> /absolute/path/to/CK-Skills/commands/<file>`. If you see `broken symlink`, re-run the `ln -s` commands above from the repo root.
