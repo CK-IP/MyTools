@@ -1,6 +1,6 @@
 # MyTools — Claude Code Skills
 
-Custom Claude Code skills for parallel Epic builds and structured development workflows.
+Custom Claude Code skills for structured development workflows — from quick fixes to parallel team builds.
 
 ---
 
@@ -8,12 +8,13 @@ Custom Claude Code skills for parallel Epic builds and structured development wo
 
 | Skill | Command | What it does |
 |-------|---------|--------------|
+| Idea to issue | `/idea` | Turns an idea into a GitHub issue, t-shirt sizes it (S/M/L/XL), and routes to the right pipeline |
+| Standard pipeline | `/ship-lite <issue>` | Plan (1 red-team round) → implement → red-team → commit on branch → merge. Middle ground between `/skiff` and `/ship` |
 | Epic orchestrator | `/agent-team <epic-issue>` | Runs a parallel team build: spawns worker agents + rolling QA, coordinates via contracts |
-| Epic planner | `/idea` | Turns an idea into a GitHub issue — detects when work should be split into a parallel Epic |
 | Epic brief schema | `/epic-brief-schema` | Reference template for writing `epic-brief.md` files used by `/agent-team` |
 | Security & quality gate | `/fortify [issue]` | Automated security scan, coverage check, and static analysis on a branch — catches what LLM review misses |
 
-These skills extend the base workflow from `cc-dotfiles` (the org's shared tooling). They don't replace it — `/ship`, `/implement`, `/board` etc. still come from there.
+These skills extend the base workflow from `cc-dotfiles` (the org's shared tooling). They don't replace it — `/ship`, `/skiff`, `/implement`, `/board` etc. still come from there.
 
 ---
 
