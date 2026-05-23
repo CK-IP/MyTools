@@ -127,15 +127,28 @@ Each line should show `-> /absolute/path/to/CK-Skills/...`. If you see `broken s
 
 This repo includes a `CLAUDE.md` file with research-first operating rules — read files before editing, confirm understanding in plain language, keep changes minimal. It lives at `home/CLAUDE.md`.
 
-**Only symlink this if you do NOT already have your own `~/.claude/CLAUDE.md`:**
+**Only set this up if you do NOT already have your own `~/.claude/CLAUDE.md`.**
+
+The file contains placeholder references (name, memory path) that need to match your profile. Run this one-touch setup to copy and personalize it:
 
 ```bash
-# Skip this if you already have a personal CLAUDE.md
-rm -f ~/.claude/CLAUDE.md
-ln -s "$(pwd)/home/CLAUDE.md" ~/.claude/CLAUDE.md
+read -rp "Your first name (used in Claude's operating rules): " MY_NAME
+[ -z "$MY_NAME" ] && { echo "Name cannot be empty."; return 1 2>/dev/null || exit 1; }
+cp "$(pwd)/home/CLAUDE.md" ~/.claude/CLAUDE.md
+MEMORY_PATH="$HOME/.claude/projects/$(echo "$HOME/projects" | sed 's|/|-|g')/memory/MEMORY.md"
+# macOS sed; on Linux, drop the '' after -i
+sed -i '' \
+  -e "s/Chris/$MY_NAME/g" \
+  -e "s|/Users/chriskuo/.claude/projects/-Users-chriskuo-projects/memory/MEMORY.md|$MEMORY_PATH|g" \
+  ~/.claude/CLAUDE.md
+echo "Done — ~/.claude/CLAUDE.md personalized for $MY_NAME"
 ```
 
-If you already have your own global rules, read `home/CLAUDE.md` for ideas you might want to borrow — no need to symlink.
+> **Note:** This copies the file (not symlinks), so your personalized version won't change when the repo updates. To pick up new rules after a `git pull`, re-run the commands above.
+
+> **Linux users:** Replace `sed -i ''` with `sed -i` (no empty string argument).
+
+If you already have your own global rules, read `home/CLAUDE.md` for ideas you might want to borrow.
 
 ---
 
@@ -311,6 +324,8 @@ grep -r "chriskuo" ~/projects/CK-Skills/commands/
 ```
 
 Update any matches to use your own username or path.
+
+> If you ran the one-touch setup in Step 2b, `~/.claude/CLAUDE.md` is already personalized — this grep only covers commands.
 
 ---
 
