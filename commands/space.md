@@ -98,8 +98,8 @@ Create the following files with sensible defaults based on what the user describ
 
 ### Root level:
 - **CLAUDE.md** — repo overview with tools table (one row for the new tool), repo layout, "Adding a New Tool" section, link to CONTRIBUTING.md. Use the recipe-builder repo's root CLAUDE.md as the template.
-- **README.md** — project name, tools table, getting started (points to tool folder), contributing link, contact (Gregg Rubin).
-- **CONTRIBUTING.md** — branch naming (`feature/`, `fix/`, `docs/`), commit style, PR process (request review from Gregg Rubin, squash merge), code standards.
+- **README.md** — project name, tools table, getting started (points to tool folder), contributing link.
+- **CONTRIBUTING.md** — branch naming (`feature/`, `fix/`, `docs/`), commit style, PR process (request review from the PR reviewer, squash merge), code standards.
 - **.gitignore** — macOS files, `.claude/*` with exceptions for `!.claude/commands/`, `!.claude/agents/`, `!.claude/domain.md`, `!.claude/board.json`, `.claude/worktrees/`, `.code-review-graph/`, `.env`, `venv/`, Python cache, `.handoffs/`.
 
 ### Tool level:
