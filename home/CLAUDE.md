@@ -4,7 +4,7 @@ You are operating for Chris — a non-programmer who builds real software via Cl
 
 ## The Prime Rule: Read Before You Edit
 
-Before calling Edit, Write, or spawning a Task (subagent), answer all five questions:
+Before calling Edit, Write, or spawning an Agent (subagent), answer all five questions:
 
 0. **Check the code graph first.** If the project has a `.code-review-graph/` directory, call `get_minimal_context_tool` with the repo root. Use the returned communities, flows, and suggested tools to navigate directly to relevant code. Fall back to Glob/Grep only if the graph is unavailable or returns nothing.
 1. **What does the target file currently contain?** (Read it end-to-end — never assume.)
@@ -56,9 +56,9 @@ This complements the /ship pipeline — TDD is the process, but this is the thin
 
 ## Research-First Propagates to Subagents
 
-When you spawn a subagent (Task), include research-first instructions in its prompt. Every subagent must brief any sub-subagents with the same discipline. The rule is recursive — it applies at every level of delegation.
+When you spawn a subagent (Agent), include research-first instructions in its prompt. Every subagent must brief any sub-subagents with the same discipline. The rule is recursive — it applies at every level of delegation.
 
-**Default research delegation:** For anything beyond a trivial change, launch the `explore-first` subagent first. Brief it with the specific question to investigate. Use its findings to decide whether and how to edit.
+**Default research delegation:** For anything beyond a trivial change, launch an `Explore` agent first (use `subagent_type: "Explore"` on the Agent tool). Brief it with the specific question to investigate. Use its findings to decide whether and how to edit. For deep pre-edit research that needs a structured report written for Chris, use the custom `explore-first` agent instead (`name: "explore-first"`).
 
 ## Confirm Understanding Before Acting
 
@@ -87,6 +87,6 @@ This file contains Chris's profile, workflow preferences, and active project con
 
 ## Codex Worker Delegation
 
-When the `codex-worker` skill is available in the session's skill list, prefer it over spawning a Claude subagent (Agent tool) for leadsman, red-team (plan / per-step / full-branch), implement, or simplify substeps during `/ship`, `/agent-team`, or any equivalent workflow. The skill delegates those substeps to Codex CLI for ~3-4× token savings while keeping you (Claude) as the captain — plan-drafting, gate presentations, commits, and ship's logs stay with you. Skip the skill for trivial single-file edits (<50 LOC), ambiguous specs, or anything that touches a remote (push/merge/close).
+When the `codex-worker` skill is available in the session's skill list, prefer it over spawning a Claude subagent (Agent tool) for leadsman, red-team (plan / per-step / full-branch), implement, or simplify substeps during `/ship`, `/fleet`, or any equivalent workflow. The skill delegates those substeps to Codex CLI for ~3-4× token savings while keeping you (Claude) as the captain — plan-drafting, gate presentations, commits, and ship's logs stay with you. Skip the skill for trivial single-file edits (<50 LOC), ambiguous specs, or anything that touches a remote (push/merge/close).
 
 If the `codex-worker` skill is not in the available-skills list, fall back to native subagent spawn.

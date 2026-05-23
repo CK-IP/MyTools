@@ -9,186 +9,154 @@ A step-by-step workflow for professional feature development using GitHub, desig
 Every new idea follows this lifecycle:
 
 ```
-Define → Branch → Plan → Implement → Commit → Push → PR → Merge → Close
+Idea → Issue → T-shirt size → Pipeline → Review → Merge → Close
 ```
 
-Each phase has a specific purpose. Skipping phases leads to rework, lost context, or merge conflicts.
+The `/idea` command handles the first three steps automatically, then routes to the right pipeline based on complexity.
 
 ---
 
-## Phase 1: Define the Work
+## The Fast Path: `/idea`
 
-**Purpose:** Create a trackable record of *what* you're building and *why*, before writing any code. This prevents duplicate work and gives you acceptance criteria to code against.
+For most work, start here:
 
-**Prompt:**
+```
+/idea
+```
+
+`/idea` walks you through 8 steps:
+1. Pick the project
+2. Pull latest code
+3. Describe your idea
+4. Load project knowledge
+5. Create a GitHub issue
+6. T-shirt size it (S/M/L/XL)
+7. Build it (routes to the right pipeline automatically)
+8. Wrap up
+
+You just describe what you want — `/idea` handles the rest.
+
+### How t-shirt sizing works
+
+| Size | What it means | Pipeline | How it works |
+|------|---------------|----------|--------------|
+| **S** (Small) | 1-3 files, bugfix/follow-up/doc edit | `/skiff` | Plan → build → review → commit direct to main |
+| **M** (Medium) | Single concern, <5 files, existing patterns | `/sloop` | Plan (1 review round) → build → review → commit on branch → merge |
+| **L** (Large) | Multi-file, new patterns, unknowns | `/ship` | Full ceremony: orientation → plan (5 review rounds) → per-step gates → full review → simplify → commit |
+| **XL** (Extra Large) | Independent workstreams, parallel team build | `/fleet` | Spawns worker agents + rolling QA, coordinates via contracts |
+
+---
+
+## Running pipelines directly
+
+If you already have a GitHub issue and know the size, you can skip `/idea` and call the pipeline directly:
+
+```
+/skiff 42        # Small fix — direct to main
+/sloop 42        # Standard build — branch + merge
+/ship 42         # Full feature — all gates
+/fleet 42        # Epic — parallel team build
+```
+
+---
+
+## The manual path
+
+For work that doesn't fit a pipeline (exploratory research, one-off scripts, configuration changes), you can still work step by step:
+
+### Phase 1: Define the Work
+
 ```
 /board create "Short title of your idea"
 ```
 
-This creates a GitHub issue with acceptance criteria and adds it to the project board. Discuss the idea in issue comments with colleagues before starting.
+Creates a GitHub issue with acceptance criteria and adds it to the project board.
 
-**Guidelines:**
-- Small idea (< 1 hour): single issue
-- Large idea (multi-day): create an epic issue, then break into smaller child issues — one per PR
+### Phase 2: Create Your Workspace
 
----
-
-## Phase 2: Create Your Workspace
-
-**Purpose:** Feature branches isolate your work from `main` so colleagues aren't affected by incomplete changes, and you aren't affected by theirs.
-
-**Prompt:**
 ```
 Create a feature branch for issue #X
 ```
 
-This checks out `main`, pulls latest, and creates a new branch.
+Checks out `main`, pulls latest, and creates a new branch.
 
-### Branch Naming Options
+#### Branch Naming
 
 | Style | Example | Best for |
 |-------|---------|----------|
-| `ship/<issue#>` | `ship/42` | Fast, ties directly to issue |
-| `feature/<description>` | `feature/chart-zoom` | Readable at a glance |
-| `<name>/<issue#>-<desc>` | `chris/42-chart-zoom` | Teams where multiple people branch often |
+| `ship/<issue#>` | `ship/42` | Pipeline work (created automatically) |
+| `feature/<description>` | `feature/chart-zoom` | Manual feature branches |
+| `fix/<description>` | `fix/data-import` | Manual bugfix branches |
 
-Pick one convention and use it consistently.
+### Phase 3: Plan Before Coding
 
----
-
-## Phase 3: Plan Before Coding
-
-**Purpose:** Planning surfaces problems before you've invested hours coding the wrong approach. For non-trivial changes, always plan first.
-
-**Prompt:**
 ```
 Enter plan mode. I want to implement <describe the feature>. Here's the issue: #X
 ```
 
-In plan mode, Claude reads relevant code, loads domain context, and produces a step-by-step implementation plan. Review and adjust before any code is written. Each step becomes an `/implement` call.
+In plan mode, Claude reads relevant code, loads domain context, and produces a step-by-step implementation plan.
 
-**When to skip:** Trivial changes (one-line fixes, typo corrections, config-only edits) don't need a formal plan.
+### Phase 4: Implement
 
----
-
-## Phase 4: Implement
-
-**Purpose:** `/implement` follows TDD — write a failing test, write code to pass it, run the full suite, then red-team review. This catches bugs before they reach colleagues.
-
-**Prompt (repeat for each step from the plan):**
 ```
 /implement <description of this step>
 ```
 
-Each `/implement` cycle:
-1. Writes a failing test
-2. Writes the code to make it pass
-3. Runs the full test suite
-4. Performs a red-team review
+Each `/implement` cycle: writes a failing test → writes code to pass it → runs the full suite → red-team review.
 
----
+### Phase 5: Commit
 
-## Phase 5: Commit (Save Your Progress)
-
-**Purpose:** Commits are save points. Frequent commits mean you can always get back to a working state if something goes wrong.
-
-**Prompt:**
 ```
 Commit these changes
 ```
 
-Claude runs the test suite, reviews the diff, and creates a commit with a clear message.
-
-### When to Commit
+**When to commit:**
 - After each `/implement` step passes tests
 - Before switching context (lunch, meeting, different task)
 - Before any risky refactor
 
-### Commit Frequency Options
+### Phase 6: Push to Remote
 
-| Style | When | Trade-off |
-|-------|------|-----------|
-| **Atomic** | One commit per logical change | Clean history, easy to revert, slightly more overhead |
-| **Checkpoint** | Whenever tests pass | Faster flow, squash when merging |
-| **Batched** | Once per session | Risky — lose work if something breaks |
-
-**Recommendation:** Atomic commits during development, squash-merge your PRs. You get safe save points and a tidy `main` history.
-
----
-
-## Phase 6: Push to Remote (Backup)
-
-**Purpose:** Local commits only exist on your machine. Pushing backs up your work and lets colleagues see progress.
-
-**Prompt:**
 ```
 Push my changes
 ```
 
-### When to Push
-- End of every work session (minimum)
-- Before any meeting where someone might look at your branch
-- After completing a logical chunk of work
+Push at least at the end of every work session. Pushing incomplete work to a feature branch is fine — that's what branches are for.
 
-Pushing incomplete work to a feature branch is perfectly professional — that's what branches are for.
+### Phase 7: Open the PR
 
----
-
-## Phase 7: Open the PR
-
-**Purpose:** Pull requests are where colleagues review, discuss, and approve changes before they reach `main`.
-
-**Prompt:**
 ```
 Create a PR for issue #X
 ```
 
-Claude summarizes all commits on the branch, writes a description with a test plan, and links the issue.
+### Phase 8: After Merge
 
-### PR Size Options
-
-| Style | Scope | Trade-off |
-|-------|-------|-----------|
-| **Small & focused** | One concern per PR | Easy to review, fast to merge |
-| **Feature bundle** | All changes for one issue | Full context in one place, harder to review |
-
-**Recommendation:** Small and focused. A PR that takes 10 minutes to review gets merged today. A PR that takes an hour gets merged "later."
-
----
-
-## Phase 8: After Merge
-
-**Purpose:** Close the loop — verify the work meets acceptance criteria and update the project board.
-
-**Prompt:**
 ```
 Post acceptance review on issue #X and move it to done on the board
 ```
-
-This posts a PASS/FAIL review comment with test evidence on the issue, then updates the project board status.
 
 ---
 
 ## Quick Reference
 
 ```
-/board create "My idea"              # 1. Track the work
-Create a branch for issue #X         # 2. Isolate your workspace
-Enter plan mode for #X               # 3. Plan the approach
-/implement <step>                    # 4. Code with TDD (repeat)
-Commit these changes                 # 5. Save progress (repeat)
-Push my changes                      # 6. Backup to remote
-Create a PR for issue #X             # 7. Request review
-Post acceptance review on #X         # 8. Close the loop
-/board move #X done                  # 9. Update the board
+/idea                            # Best starting point for most work
+/skiff 42                        # Small fix (S)
+/sloop 42                        # Standard build (M)
+/ship 42                         # Full feature (L)
+/fleet 42                        # Epic team build (XL)
+/board create "My idea"          # Create an issue manually
+/implement <step>                # TDD cycle (used within pipelines)
+/fortify                         # Security + coverage scan
+/memory-audit                    # Check memory for staleness
 ```
 
 ---
 
 ## Tips
 
+- **Start with `/idea`.** It picks the right pipeline for you.
 - **Don't fear small PRs.** Three small PRs are better than one large one.
 - **Commit before you experiment.** If the experiment fails, you can revert cleanly.
 - **Push before you stop.** Your laptop is not a backup strategy.
-- **Plan non-trivial work.** Five minutes of planning saves an hour of rework.
 - **One branch per issue.** Mixing concerns in a branch leads to painful reviews and partial reverts.

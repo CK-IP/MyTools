@@ -11,14 +11,43 @@
       "Glob",
       "Grep",
       "Read",
+      "WebFetch(domain:unpkg.com)",
       "Write"
     ],
     "defaultMode": "auto"
   },
   "model": "claude-opus-4-6",
   "hooks": {
-    "_comment_hooks": "Most hooks are installed by cc-dotfiles. The two CK-Skills hooks below need manual wiring after symlinking.",
+    "_comment_hooks": "cc-dotfiles installs its own hooks via install.sh. The CK-Skills hooks below need manual wiring after symlinking. Both sets coexist under the same event keys.",
 
+    "Notification": [
+      {
+        "_comment": "cc-dotfiles: macOS notification sound on model output",
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/notify.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "_comment": "cc-dotfiles: auto-format Python files + update CRG graph after edits",
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/ruff-format.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/crg-update.sh"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "_comment": "CK-Skills: redirects eligible /ship substeps to Codex CLI",
@@ -40,7 +69,36 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "_comment": "cc-dotfiles: enforces /ship and /skiff completion gates",
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/ship-stop-gate.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/ship-skiff-stop-gate.sh"
+          }
+        ]
+      }
     ]
   },
-  "effortLevel": "high"
+  "statusLine": {
+    "_comment": "cc-dotfiles: shows pipeline stage + issue in the status bar",
+    "type": "command",
+    "command": "~/.claude/statusline.sh"
+  },
+  "enabledPlugins": {
+    "_comment": "Optional — enable as needed",
+    "warp@claude-code-warp": true,
+    "frontend-design@claude-plugins-official": true
+  },
+  "effortLevel": "high",
+  "autoUpdatesChannel": "stable",
+  "teammateMode": "tmux",
+  "voiceEnabled": true
 }
