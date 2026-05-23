@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ImplementationResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["files_changed", "summary"],
+  "properties": {
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "Absolute path to a file Codex modified."
+      }
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One paragraph: what changed and why. Must align with the approved plan step."
+    },
+    "follow_ups": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Anything Codex deferred and the captain should note — e.g., a domain rule candidate, a future cleanup, a deliberately-not-handled edge case."
+    },
+    "test_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {"type": "string"},
+        "passed": {"type": "boolean"},
+        "tail": {"type": "string", "description": "Last few lines of test output for the captain to inspect."}
+      },
+      "description": "Optional: result of running the leadsman test post-edit. The captain re-runs independently regardless."
+    },
+    "clarification_needed": {
+      "type": "string",
+      "description": "Populated when the spec was too ambiguous to implement safely; files_changed should be empty in that case."
+    }
+  }
+}

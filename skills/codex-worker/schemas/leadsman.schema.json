@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LeadsmanResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["test_file", "test_names", "run_command", "failure_reason"],
+  "properties": {
+    "test_file": {
+      "type": "string",
+      "description": "Absolute path to the file the test was written to."
+    },
+    "test_names": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string"}
+    },
+    "run_command": {
+      "type": "string",
+      "description": "Shell command to run just this test; must include `cd <worktree> && ` prefix.",
+      "pattern": "^cd .+ && .+"
+    },
+    "failure_reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One-line explanation of which assertion fails and the expected message — used by the captain to verify the test fails for the RIGHT reason."
+    },
+    "clarification_needed": {
+      "type": "string",
+      "description": "Populated when the spec is too ambiguous to write a meaningful failing test."
+    }
+  }
+}
