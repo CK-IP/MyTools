@@ -162,6 +162,61 @@ You should see a response that starts with "For best results, the orchestrator (
 
 ---
 
+## Step 6: Set up background automation (optional, macOS only)
+
+This step installs two macOS LaunchAgents:
+
+1. **CRG daemon** — auto-starts the code-review-graph daemon on login so your code maps stay up to date
+2. **Memory audit reminder** — sends a macOS notification on the 1st of each month reminding you to run `/memory-audit`
+
+### Install the plist files
+
+Run from the repo root (`cd ~/projects/CK-Skills`):
+
+```bash
+cd ~/projects/CK-Skills
+
+# CRG daemon — replace placeholder with your local uvx path
+sed "s|__UVX_PATH__|$(which uvx)|g" config/com.crg.daemon.plist \
+  > ~/Library/LaunchAgents/com.crg.daemon.plist
+
+# Memory audit reminder — replace placeholder with your repo path
+sed "s|__REPO_ROOT__|$(pwd)|g" config/com.crg.memory-audit-reminder.plist \
+  > ~/Library/LaunchAgents/com.crg.memory-audit-reminder.plist
+```
+
+### Load the agents
+
+```bash
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.crg.daemon.plist
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.crg.memory-audit-reminder.plist
+```
+
+### Verify
+
+```bash
+launchctl list | grep crg
+```
+
+You should see two lines — one for `com.crg.daemon` and one for `com.crg.memory-audit-reminder`.
+
+To check the daemon is running:
+
+```bash
+uvx code-review-graph daemon status
+```
+
+### Removing (if needed)
+
+To stop and remove the agents:
+
+```bash
+launchctl bootout "gui/$(id -u)/com.crg.daemon"
+launchctl bootout "gui/$(id -u)/com.crg.memory-audit-reminder"
+```
+
+---
+
 ## Path note
 
 Some skill files contain a hardcoded reference to `/Users/chriskuo/projects/`. If commands fail with a path error, search for that string in the relevant skill file and update it to match your local path:

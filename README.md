@@ -48,6 +48,12 @@ cd ~/projects/CK-Skills && bash install.sh   # coming soon — manual steps in I
 
 ---
 
+## Background automation
+
+Optional macOS LaunchAgents for auto-start of the CRG daemon (keeps code maps up to date) and a monthly `/memory-audit` reminder notification. See **[INSTALL.md](INSTALL.md) Step 6** for setup.
+
+---
+
 ## Access
 
 This is a private repo. Collaborators have **read-only access** — skills are maintained by the repo owner. If you find a bug or want a change, open a GitHub issue.
