@@ -1,0 +1,46 @@
+{
+  "_comment": "Reference copy of ~/.claude/settings.json — DO NOT symlink this file. cc-dotfiles merges into the real settings.json, so it must remain a regular file. Use this as a guide for what to configure.",
+
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "Read",
+      "Write"
+    ],
+    "defaultMode": "auto"
+  },
+  "model": "claude-opus-4-6",
+  "hooks": {
+    "_comment_hooks": "Most hooks are installed by cc-dotfiles. The two CK-Skills hooks below need manual wiring after symlinking.",
+
+    "PreToolUse": [
+      {
+        "_comment": "CK-Skills: redirects eligible /ship substeps to Codex CLI",
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/codex-redirect.sh"
+          }
+        ]
+      },
+      {
+        "_comment": "CK-Skills: soft gate — injects research checklist before edits",
+        "matcher": "Edit|Write|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/research-gate.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "effortLevel": "high"
+}

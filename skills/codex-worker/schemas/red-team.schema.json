@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RedTeamReview",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["review_type", "findings", "verdict", "summary"],
+  "properties": {
+    "review_type": {
+      "type": "string",
+      "enum": ["plan", "per-implement", "full-branch"]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "root_cause", "issue", "fix"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^(RT|S\\d+\\.R\\d+|F\\.R\\d+|P\\.R\\d+)[-.]?[A-Za-z0-9.-]*$"},
+          "severity": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
+          "category": {
+            "type": "string",
+            "enum": ["bug", "security", "correctness", "design", "plan-drift", "domain-rule"]
+          },
+          "root_cause": {
+            "type": "string",
+            "enum": ["plan_gap", "implementation_drift", "domain_gap", "emergent"]
+          },
+          "file": {"type": ["string", "null"]},
+          "line": {"type": ["integer", "null"]},
+          "issue": {"type": "string", "minLength": 1},
+          "impact": {"type": "string"},
+          "fix": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "pass-with-notes", "fail"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "clarification_needed": {
+      "type": "string",
+      "description": "Populated when the spec is too ambiguous to review safely; findings should be empty in that case."
+    }
+  }
+}

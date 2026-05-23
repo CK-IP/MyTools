@@ -33,13 +33,15 @@ cd ~/projects/CK-Skills
 
 ---
 
-## Step 2: Symlink the skills
+## Step 2: Symlink commands, agents, hooks, and skills
 
-Run the following from inside the repo root. This creates symlinks in `~/.claude/commands/` so Claude Code picks up the skills automatically.
+Run the following from inside the repo root. This creates symlinks so Claude Code picks up everything automatically.
 
 ```bash
-# Ensure the commands directory exists
-mkdir -p ~/.claude/commands
+# Ensure directories exist
+mkdir -p ~/.claude/commands ~/.claude/agents ~/.claude/hooks ~/.claude/skills
+
+# --- Commands (slash skills) ---
 
 # /idea skill
 rm -f ~/.claude/commands/idea.md
@@ -68,11 +70,34 @@ ln -s "$(pwd)/commands/memory-audit.md" ~/.claude/commands/memory-audit.md
 # /space — set up a new project workspace from scratch
 rm -f ~/.claude/commands/space.md
 ln -s "$(pwd)/commands/space.md" ~/.claude/commands/space.md
+
+# --- Agents ---
+
+# explore-first — read-only research investigator (no edit tools)
+rm -f ~/.claude/agents/explore-first.md
+ln -s "$(pwd)/agents/explore-first.md" ~/.claude/agents/explore-first.md
+
+# --- Hooks ---
+
+# codex-redirect — PreToolUse on Agent: routes /ship substeps to Codex CLI
+rm -f ~/.claude/hooks/codex-redirect.sh
+ln -s "$(pwd)/hooks/codex-redirect.sh" ~/.claude/hooks/codex-redirect.sh
+
+# research-gate — PreToolUse on Edit|Write|Task: soft gate research checklist
+rm -f ~/.claude/hooks/research-gate.sh
+ln -s "$(pwd)/hooks/research-gate.sh" ~/.claude/hooks/research-gate.sh
+
+# --- Skills ---
+
+# codex-worker — delegates leadsman/implement/red-team substeps to Codex CLI
+rm -f ~/.claude/skills/codex-worker
+ln -s "$(pwd)/skills/codex-worker" ~/.claude/skills/codex-worker
 ```
 
 **Verify the symlinks resolved correctly:**
 
 ```bash
+# Commands
 ls -la ~/.claude/commands/idea.md
 ls -la ~/.claude/commands/fleet.md
 ls -la ~/.claude/commands/epic-brief-schema.md
@@ -80,9 +105,37 @@ ls -la ~/.claude/commands/fortify.md
 ls -la ~/.claude/commands/sloop.md
 ls -la ~/.claude/commands/memory-audit.md
 ls -la ~/.claude/commands/space.md
+
+# Agent
+ls -la ~/.claude/agents/explore-first.md
+
+# Hooks
+ls -la ~/.claude/hooks/codex-redirect.sh
+ls -la ~/.claude/hooks/research-gate.sh
+
+# Skill
+ls -la ~/.claude/skills/codex-worker
 ```
 
-Each line should show `-> /absolute/path/to/CK-Skills/commands/<file>`. If you see `broken symlink`, re-run the `ln -s` commands above from the repo root.
+Each line should show `-> /absolute/path/to/CK-Skills/...`. If you see `broken symlink`, re-run the `ln -s` commands above from the repo root.
+
+> **Hooks wiring:** After symlinking the hook scripts, you also need to register them in `~/.claude/settings.json`. See `home/settings.reference.json` in this repo for the exact JSON blocks to add under `hooks.PreToolUse`. cc-dotfiles' `install.sh` does not manage these hooks — they are CK-Skills additions.
+
+---
+
+## Step 2b: Research-first operating rules (optional)
+
+This repo includes a `CLAUDE.md` file with research-first operating rules — read files before editing, confirm understanding in plain language, keep changes minimal. It lives at `home/CLAUDE.md`.
+
+**Only symlink this if you do NOT already have your own `~/.claude/CLAUDE.md`:**
+
+```bash
+# Skip this if you already have a personal CLAUDE.md
+rm -f ~/.claude/CLAUDE.md
+ln -s "$(pwd)/home/CLAUDE.md" ~/.claude/CLAUDE.md
+```
+
+If you already have your own global rules, read `home/CLAUDE.md` for ideas you might want to borrow — no need to symlink.
 
 ---
 
@@ -274,9 +327,14 @@ The symlinks always point to the current files — no re-linking needed after a 
 
 ---
 
-## Adding new skills (repo owner only)
+## Adding new items (repo owner only)
 
-1. Create the file: `commands/my-skill.md`
-2. Symlink it: `ln -s "$(pwd)/commands/my-skill.md" ~/.claude/commands/my-skill.md`
+**Commands:** `commands/my-skill.md` -> symlink to `~/.claude/commands/`
+**Agents:** `agents/my-agent.md` -> symlink to `~/.claude/agents/`
+**Hooks:** `hooks/my-hook.sh` -> symlink to `~/.claude/hooks/` + register in `settings.json`
+**Skills:** `skills/my-skill/` -> symlink directory to `~/.claude/skills/`
+
+1. Create the file in the appropriate directory
+2. Symlink it (see Step 2 for examples)
 3. Add the symlink command to Step 2 of this file
 4. Commit and push
