@@ -13,6 +13,7 @@
 ### Worker: <name>
 - **sub_issue:** <!-- GitHub issue number this worker will ship -->
 - **scope:** <!-- Plain description of what this worker builds -->
+- **pipeline:** <!-- `/ship` (default) or `/sloop`. /skiff is excluded — fleet coordination requires per-worker branches. -->
 - **files_owned:**
   <!-- Files this worker has exclusive write access to. No other worker touches these. -->
   - path/to/file1

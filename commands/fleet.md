@@ -1,4 +1,4 @@
-Walk Claude through running a parallel agent team build for an Epic. The orchestrator coordinates workers and a rolling QA agent. Usage: `/fleet <epic-issue-number>`
+Walk Claude through running a parallel agent team build for an Epic (XL tier of the S/M/L/XL t-shirt size framework). The orchestrator coordinates workers and a rolling QA agent. Usage: `/fleet <epic-issue-number>`
 
 ## ⚠️ Critical: How to spawn teammates
 
@@ -52,7 +52,7 @@ Say in plain language:
 
 ### Step 4: Extract contracts from epic-brief
 
-Read all `integration_contracts_produces` and `integration_contracts_consumes` fields from the epic-brief.
+Read all `pipeline`, `integration_contracts_produces`, and `integration_contracts_consumes` fields from the epic-brief.
 
 ### Step 5: Write contracts.md
 
@@ -154,21 +154,21 @@ Your context:
 - Epic acceptance criteria: <paste from epic-brief>
 - Worker ownership map: <list each worker name and their files_owned>
 
-## What /ship already guarantees
+## What the worker's pipeline already guarantees
 
-Each worker ran /ship on their sub-issue. By the time they report complete:
+Each worker ran /ship or /sloop on their sub-issue. By the time they report complete:
 - Full test suite passes (green) on their branch
-- All per-step and full-branch red-team findings reviewed (fixed or accepted as risk)
+- Red-team findings reviewed (per-step and full-branch for /ship; full-branch for /sloop)
 - A commit exists on ship/<sub_issue>
-- A ship's log exists at .handoffs/ship-log-<sub_issue>-<timestamp>.md
+- A ship's log exists at .handoffs/ship-log-<sub_issue>*.md
 
-Do NOT re-run /ship's individual code checks. Trust /ship's pipeline. Your job is to
-catch what /ship cannot see: integration conflicts between workers.
+Do NOT re-run the worker's pipeline checks. Trust the pipeline. Your job is to
+catch what individual pipelines cannot see: integration conflicts between workers.
 
 ## For each worker you review
 
 1. Read their diff: git diff main..ship/<sub_issue>
-2. Read their ship's log (.handoffs/ship-log-<sub_issue>-*.md) — note any HIGH findings
+2. Read their ship's log (.handoffs/ship-log-<sub_issue>*.md) — note any HIGH findings
    accepted as risk that could affect integration
 3. Check contracts: Does the output match their integration_contracts_produces in
    contracts.md?
@@ -239,10 +239,16 @@ Domain rules: <paste contents of .ship/domain.md, or "none yet">
 
 ## Your task
 
-Run /ship <sub_issue> to build your sub-issue through the full TDD pipeline
-(board → plan → implement → review → commit → learn).
+Run <pipeline> <sub_issue> to build your sub-issue.
 
-## Rules — these override /ship's end-of-run defaults
+If your pipeline is `/ship`, this runs the full TDD pipeline
+(board → plan → implement → review → commit → learn).
+If your pipeline is `/sloop`, this runs the standard-weight pipeline
+(plan → implement → red-team → commit on branch → learn).
+
+## Rules — these override your pipeline's end-of-run defaults
+
+### If your pipeline is `/ship`:
 
 1. End-of-run: When /ship presents end-of-run options (Stage 6e), always select
    "Done — I'll handle it". Never merge, push, or close issues. The orchestrator
@@ -252,19 +258,32 @@ Run /ship <sub_issue> to build your sub-issue through the full TDD pipeline
    and include them in your completion report to the orchestrator. The orchestrator
    is the single writer for domain.md.
 
+### If your pipeline is `/sloop`:
+
+1. End-of-run: When /sloop presents the convergence gate (Stage 3d), select
+   "Commit only". Never push or close issues. The orchestrator handles all
+   merging.
+
+2. Domain write: At Stage 5 (Learn), do NOT write to domain.md. Note your proposed
+   rules and include them in your completion report to the orchestrator. The
+   orchestrator is the single writer for domain.md.
+
+### All pipelines:
+
 3. File ownership: Only write to files in your files_owned list. Do not modify any
-   other files, even if /ship's plan suggests doing so.
+   other files, even if the plan suggests doing so.
 
 4. Contracts: Your output must satisfy integration_contracts_produces. If a contract
    you consume (integration_contracts_consumes) doesn't match what you find in the
    codebase, report it to the orchestrator immediately — do not work around it silently.
 
-## When /ship completes
+## When your pipeline completes
 
 Report back to the orchestrator:
 - Worker name: <name>
+- Pipeline used: <pipeline>
 - Branch: ship/<sub_issue>
-- Domain proposals: <list each proposed rule from Stage 6, or "none">
+- Domain proposals: <list each proposed rule, or "none">
 - Advisories: <anything the orchestrator or QA should know>
 ```
 
@@ -288,14 +307,14 @@ If any files appear that are NOT in that worker's `files_owned` list, stop that 
 
 a. Verify the worker followed the rules. Run on their branch:
    ```bash
-   # 1. Ship completed through commit (ship's log must exist)
-   ls .handoffs/ship-log-<sub_issue>-*.md 2>/dev/null
+   # 1. Pipeline completed through commit (ship's log must exist)
+   ls .handoffs/ship-log-<sub_issue>*.md 2>/dev/null
    # 2. No unauthorized merges
    git log main..<branch> --oneline | grep -i "^merge"   # must return nothing
    # 3. domain.md not touched
    git diff main..<branch> --name-only | grep "^domain\.md$"  # must return nothing
    ```
-   If check 1 fails: "Worker <name> has no ship's log — /ship may not have completed through commit. Do not route to QA until confirmed."
+   If check 1 fails: "Worker <name> has no ship's log — the worker's pipeline may not have completed through commit. Do not route to QA until confirmed."
    If check 2 or 3 fails: "Worker <name> broke a rule: [merged a branch / wrote to domain.md]. This needs fixing before QA review."
 b. Run contract tests: `bash .ship/epic-<issue>/contract-tests.sh` on the worker's
    branch. If any assertion fails, treat as CONFLICT HIGH — **skip items c–e entirely**,
@@ -463,3 +482,11 @@ Sections: Epic summary, worker results, QA findings, domain updates, merge order
 - Orchestrator is the single writer for domain.md. Workers only propose.
 - **Model assignments:** Orchestrator = opus (manual — confirm at Step 0), QA = opus (auto), Workers = sonnet (auto).
 - On any CONFLICT: stop and explain in plain language before proceeding.
+
+## Cross-references
+
+- `commands/idea.md` — triage skill that routes to /fleet for XL
+- `commands/sloop.md` — standard-weight pipeline; available as worker pipeline
+- `cc-dotfiles: home/commands/ship.md` — full pipeline; default worker pipeline
+- `cc-dotfiles: home/commands/skiff.md` — lightweight pipeline; excluded from /fleet (no branch isolation)
+- `commands/epic-brief-schema.md` — epic-brief template consumed at Step 1
