@@ -19,7 +19,6 @@
 # 7. transcript not parseable → exit 0
 # 8. empty transcript → exit 0
 
-set -euo pipefail
 
 command -v jq >/dev/null 2>&1 || exit 0
 
