@@ -63,6 +63,20 @@ Then invoke `/train` in discovery mode to bootstrap domain knowledge.
 
 If it already exists, say: **"Project knowledge is loaded — good to go."**
 
+Next, check if `.code-review-graph/` exists in the project root.
+
+If it does NOT exist, tell the user:
+
+**"This project doesn't have a code map yet. A code map is like an index for all the code — it helps me find things faster and give better answers. Want me to build one? It takes about a minute."**
+
+If the user says yes, run: `uvx code-review-graph build`
+
+Then say: **"Code map built! This will update automatically as we make changes."**
+
+If the user says no, say: **"No problem — I can always build it later."**
+
+If it already exists, say: **"Code map is up to date."**
+
 ## Step 5/8: Create the task
 
 > ⛔ HARD GATE — DO NOT SKIP. You must create a GitHub issue via /board.

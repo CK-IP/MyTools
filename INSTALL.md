@@ -64,6 +64,10 @@ ln -s "$(pwd)/commands/ship-lite.md" ~/.claude/commands/ship-lite.md
 # /memory-audit — cross-reference memory files against code for staleness
 rm -f ~/.claude/commands/memory-audit.md
 ln -s "$(pwd)/commands/memory-audit.md" ~/.claude/commands/memory-audit.md
+
+# /space — set up a new project workspace from scratch
+rm -f ~/.claude/commands/space.md
+ln -s "$(pwd)/commands/space.md" ~/.claude/commands/space.md
 ```
 
 **Verify the symlinks resolved correctly:**
@@ -75,6 +79,7 @@ ls -la ~/.claude/commands/epic-brief-schema.md
 ls -la ~/.claude/commands/fortify.md
 ls -la ~/.claude/commands/ship-lite.md
 ls -la ~/.claude/commands/memory-audit.md
+ls -la ~/.claude/commands/space.md
 ```
 
 Each line should show `-> /absolute/path/to/CK-Skills/commands/<file>`. If you see `broken symlink`, re-run the `ln -s` commands above from the repo root.
