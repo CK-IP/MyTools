@@ -77,6 +77,18 @@ If the user says no, say: **"No problem — I can always build it later."**
 
 If it already exists, say: **"Code map is up to date."**
 
+Finally, check if embeddings are available by running `semantic_search_nodes_tool` with a simple test query (e.g., the project name). If the result shows `"search_mode": "keyword"` instead of `"hybrid"`, embeddings are missing.
+
+If embeddings are NOT available, tell the user:
+
+**"The code map is built, but it's missing the 'smart search' feature. Smart search lets me find code by meaning instead of just exact names — it's much better at understanding what you're asking for. Want me to set it up? It takes about a minute."**
+
+If the user says yes, run `embed_graph_tool` with the project's `repo_root`. Then say: **"Smart search is ready! I can now find code by what it does, not just what it's called."**
+
+If the user says no, say: **"No problem — keyword search still works fine. You can always add it later."**
+
+If embeddings ARE available (search_mode is "hybrid"), say nothing extra — move on.
+
 ## Step 5/8: Create the task
 
 > ⛔ HARD GATE — DO NOT SKIP. You must create a GitHub issue via /board.

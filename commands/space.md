@@ -157,11 +157,17 @@ Tell the user:
 
 Run: `uvx code-review-graph build`
 
-Then say: **"Code map built! This will update automatically as you make changes."**
+Then say: **"Code map built! Now let me add smart search — this lets me find code by meaning, not just exact names."**
+
+Run `embed_graph_tool` with the project's `repo_root`. If it succeeds, say: **"Smart search is ready! The code map is fully set up."**
+
+If `embed_graph_tool` fails with "sentence-transformers not installed", tell the user:
+
+**"Smart search needs an extra piece installed. Check that your `.mcp.json` file (in your projects folder) includes `sentence-transformers` in the server setup, then restart Claude Code. The INSTALL.md in CK-Skills has the exact steps."**
 
 ### If no code yet (just scaffolding):
 
-Say: **"Since this is a brand new project with no code yet, I'll skip building the code map for now. It'll get built automatically the first time you use `/idea` to add a feature."**
+Say: **"Since this is a brand new project with no code yet, I'll skip building the code map for now. It'll get built automatically the first time you use `/idea` to add a feature. Smart search will be set up at that time too."**
 
 ## Step 9/9: Ready check
 

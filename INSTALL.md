@@ -162,7 +162,39 @@ You should see a response that starts with "For best results, the orchestrator (
 
 ---
 
-## Step 6: Set up background automation (optional, macOS only)
+## Step 6: Enable smart search for the code map
+
+The code map (code-review-graph) can search by meaning — not just exact names — if `sentence-transformers` is available. This requires a `.mcp.json` file in your projects directory that tells Claude Code to load the library when starting the code map server.
+
+**Create the file:**
+
+```bash
+cat > ~/projects/.mcp.json << 'EOF'
+{
+  "mcpServers": {
+    "code-review-graph": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--with", "sentence-transformers", "code-review-graph", "serve"]
+    }
+  }
+}
+EOF
+```
+
+> If you keep your projects in a different folder, put this `.mcp.json` in that folder instead.
+
+**Apply the change:**
+
+Restart Claude Code (exit and relaunch), or type `/mcp` inside Claude Code to reconnect the server.
+
+**Verify:**
+
+In Claude Code, ask: *"Run `list_repos_tool` and test a semantic search on one of my projects."* If the search result shows `"search_mode": "hybrid"`, smart search is working. If it shows `"keyword"`, the server didn't pick up the change — try restarting Claude Code.
+
+---
+
+## Step 7: Set up background automation (optional, macOS only)
 
 This step installs two macOS LaunchAgents:
 
