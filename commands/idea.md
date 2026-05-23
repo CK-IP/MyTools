@@ -5,7 +5,7 @@ Walk the user through turning an idea into working code. The user is NOT a progr
 Every step below is a **mandatory gate**. You MUST execute each step in order. DO NOT SKIP, bypass, or rationalize away any step — no matter how simple the task seems.
 
 - The **t-shirt sizing** (Step 6/8) ALWAYS runs after creating the issue. You must evaluate whether the task is a Small, Medium, Large, or XL, and you must ask the user. There are no exceptions.
-- The **build step** (Step 7/8) MUST invoke `/skiff`, `/ship-lite`, `/ship`, or `/agent-team`. You must NEVER start coding directly — no exceptions.
+- The **build step** (Step 7/8) MUST invoke `/skiff`, `/sloop`, `/ship`, or `/fleet`. You must NEVER start coding directly — no exceptions.
 - You MUST announce every step number and name before doing any work in that step.
 
 ## Step announcements
@@ -104,9 +104,9 @@ Look at the issue you just created and ask three questions:
 | Size | What it means | Pipeline |
 |---|---|---|
 | **S** (Small) | 1-3 files, bugfix/follow-up/doc edit, straightforward | `/skiff` |
-| **M** (Medium) | Single concern, <5 files, existing patterns, <200 LOC | `/ship-lite` |
+| **M** (Medium) | Single concern, <5 files, existing patterns, <200 LOC | `/sloop` |
 | **L** (Large) | Multi-file, new patterns, unknowns, security-touching | `/ship` |
-| **XL** (Extra Large) | Independent workstreams, parallel team build (Epic Mode) | `/agent-team` |
+| **XL** (Extra Large) | Independent workstreams, parallel team build (Epic Mode) | `/fleet` |
 
 ### 2. Present your analysis
 
@@ -146,12 +146,12 @@ For XL:
   - The epic-brief path
   - The issue number
   - A plain-language summary of what to build
-  - The instruction: run `/agent-team <issue>`
+  - The instruction: run `/fleet <issue>`
 
 ### 5. If team + continue here
 
 - Generate epic-brief.md draft, save to `.handoffs/`
-- Call `/agent-team <issue>` directly
+- Call `/fleet <issue>` directly
 
 ### 6. If full feature
 
@@ -159,7 +159,7 @@ Proceed to Step 7/8 — invoke `/ship <issue>`.
 
 ### 7. If standard build
 
-Proceed to Step 7/8 — invoke `/ship-lite <issue>`.
+Proceed to Step 7/8 — invoke `/sloop <issue>`.
 
 ### 8. If small fix
 
@@ -167,7 +167,7 @@ Proceed to Step 7/8 — invoke `/skiff <issue>`.
 
 ## Step 7/8: Build it
 
-> ⛔ HARD GATE — DO NOT SKIP. You must invoke /skiff, /ship-lite, /ship, or /agent-team. NEVER code directly.
+> ⛔ HARD GATE — DO NOT SKIP. You must invoke /skiff, /sloop, /ship, or /fleet. NEVER code directly.
 
 ### If /skiff (small fix)
 
@@ -189,7 +189,7 @@ Then invoke `/skiff` with the issue number.
 - Instead of "red-team convergence" → **"The reviewer is checking the code for problems — like a second pair of eyes."**
 - Instead of "CRITICAL finding" → **"The reviewer found something important that needs fixing — here's what it is: [explain]"**
 
-### If /ship-lite (standard build)
+### If /sloop (standard build)
 
 Tell the user:
 
@@ -201,9 +201,9 @@ Tell the user:
 
 **You just need to say 'looks good' or tell me what to change. Ready?"**
 
-Then invoke `/ship-lite` with the issue number.
+Then invoke `/sloop` with the issue number.
 
-#### At checkpoints during /ship-lite
+#### At checkpoints during /sloop
 
 - Instead of "plan-level red-team" → **"A reviewer is checking whether the plan is solid before we start building."**
 - Instead of "red-team full-branch review" → **"The reviewer is checking all the code changes for problems."**
@@ -246,7 +246,7 @@ When `/skiff` finishes, tell the user:
 
 **The issue has been closed automatically. Nothing else to do on this one."**
 
-### If /ship-lite or /ship was used
+### If /sloop or /ship was used
 
 When the build finishes, tell the user:
 
@@ -264,5 +264,5 @@ When the build finishes, tell the user:
 - ALWAYS announce the step number and name at the start of each step
 - MANDATORY: Execute every step (1–8) in order. Never skip a step for any reason.
 - MANDATORY: ALWAYS run the t-shirt sizing (Step 6/8) after creating the issue — evaluate for S/M/L/XL and ask the user.
-- MANDATORY: ALWAYS invoke /skiff <issue>, /ship-lite <issue>, /ship <issue>, or /agent-team <issue> to build. NEVER start coding directly — no exceptions.
+- MANDATORY: ALWAYS invoke /skiff <issue>, /sloop <issue>, /ship <issue>, or /fleet <issue> to build. NEVER start coding directly — no exceptions.
 - MANDATORY: Announce the step number and name at the start of each step before doing any work.

@@ -9,9 +9,9 @@ Custom Claude Code skills for structured development workflows — from quick fi
 | Skill | Command | What it does |
 |-------|---------|--------------|
 | Idea to issue | `/idea` | Turns an idea into a GitHub issue, t-shirt sizes it (S/M/L/XL), and routes to the right pipeline |
-| Standard pipeline | `/ship-lite <issue>` | Plan (1 red-team round) → implement → red-team → commit on branch → merge. Middle ground between `/skiff` and `/ship` |
-| Epic orchestrator | `/agent-team <epic-issue>` | Runs a parallel team build: spawns worker agents + rolling QA, coordinates via contracts |
-| Epic brief schema | `/epic-brief-schema` | Reference template for writing `epic-brief.md` files used by `/agent-team` |
+| Standard pipeline | `/sloop <issue>` | Plan (1 red-team round) → implement → red-team → commit on branch → merge. Middle ground between `/skiff` and `/ship` |
+| Epic orchestrator | `/fleet <epic-issue>` | Runs a parallel team build: spawns worker agents + rolling QA, coordinates via contracts |
+| Epic brief schema | `/epic-brief-schema` | Reference template for writing `epic-brief.md` files used by `/fleet` |
 | Security & quality gate | `/fortify [issue]` | Automated security scan, coverage check, and static analysis on a branch — catches what LLM review misses |
 | Memory audit | `/memory-audit` | Audits memory files for staleness, broken refs, and contradictions — cross-references against filesystem and CRG graph |
 | Project setup | `/space [name]` | Sets up a new project workspace — folder structure, GitHub repo, task board, code map |

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# test_ship_lite.sh
-# Structural assertions for commands/ship-lite.md and hooks/ship-lite-stop-gate.sh.
+# test_sloop.sh
+# Structural assertions for commands/sloop.md and hooks/sloop-stop-gate.sh.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL="$REPO_ROOT/commands/ship-lite.md"
-HOOK="$REPO_ROOT/hooks/ship-lite-stop-gate.sh"
+SKILL="$REPO_ROOT/commands/sloop.md"
+HOOK="$REPO_ROOT/hooks/sloop-stop-gate.sh"
 
 PASS=0
 FAIL=0
@@ -18,9 +18,9 @@ fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 # 1: skill file exists and is not empty
 if [ -e "$SKILL" ] && [ -s "$SKILL" ]; then
-  pass "commands/ship-lite.md exists and is not empty"
+  pass "commands/sloop.md exists and is not empty"
 else
-  fail "commands/ship-lite.md does not exist or is empty"
+  fail "commands/sloop.md does not exist or is empty"
 fi
 
 # 2: contains /implement invocation
@@ -80,47 +80,47 @@ else
 fi
 
 # 10: contains sentinel cleanup
-if grep -q "ship-lite-active" "$SKILL" 2>/dev/null; then
-  pass "contains ship-lite-active sentinel"
+if grep -q "sloop-active" "$SKILL" 2>/dev/null; then
+  pass "contains sloop-active sentinel"
 else
-  fail "does not contain ship-lite-active sentinel"
+  fail "does not contain sloop-active sentinel"
 fi
 
-# 11: contains "pipeline.*ship-lite" in state file
-if grep -q '"pipeline": "ship-lite"' "$SKILL" 2>/dev/null; then
-  pass "state file has pipeline: ship-lite identifier"
+# 11: contains "pipeline.*sloop" in state file
+if grep -q '"pipeline": "sloop"' "$SKILL" 2>/dev/null; then
+  pass "state file has pipeline: sloop identifier"
 else
-  fail "state file missing pipeline: ship-lite identifier"
+  fail "state file missing pipeline: sloop identifier"
 fi
 
-# 12: does NOT contain "compass" (ship-lite skips compass)
+# 12: does NOT contain "compass" (sloop skips compass)
 if ! grep -qi "compass" "$SKILL" 2>/dev/null; then
   pass "does not contain compass (correctly omitted)"
 else
-  fail "contains compass — ship-lite should not use compass"
+  fail "contains compass — sloop should not use compass"
 fi
 
-# 13: does NOT contain "leadsman" (ship-lite skips leadsman)
+# 13: does NOT contain "leadsman" (sloop skips leadsman)
 if ! grep -qi "leadsman" "$SKILL" 2>/dev/null; then
   pass "does not contain leadsman (correctly omitted)"
 else
-  fail "contains leadsman — ship-lite should not use leadsman"
+  fail "contains leadsman — sloop should not use leadsman"
 fi
 
 # --- Hook file assertions ---
 
 # 14: hook file exists and is executable
 if [ -e "$HOOK" ] && [ -x "$HOOK" ]; then
-  pass "hooks/ship-lite-stop-gate.sh exists and is executable"
+  pass "hooks/sloop-stop-gate.sh exists and is executable"
 else
-  fail "hooks/ship-lite-stop-gate.sh does not exist or is not executable"
+  fail "hooks/sloop-stop-gate.sh does not exist or is not executable"
 fi
 
 # 15: hook contains sentinel check
-if grep -q "ship-lite-active" "$HOOK" 2>/dev/null; then
-  pass "hook checks ship-lite-active sentinel"
+if grep -q "sloop-active" "$HOOK" 2>/dev/null; then
+  pass "hook checks sloop-active sentinel"
 else
-  fail "hook does not check ship-lite-active sentinel"
+  fail "hook does not check sloop-active sentinel"
 fi
 
 # 16: hook contains stop_hook_active guard

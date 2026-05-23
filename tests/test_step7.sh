@@ -27,18 +27,18 @@ else
   fail "does not contain '~/.claude/commands/epic-brief-schema.md'"
 fi
 
-# --- Assertion 3: contains "commands/agent-team.md" ---
-if grep -q "commands/agent-team.md" "$TARGET" 2>/dev/null; then
-  pass "contains 'commands/agent-team.md'"
+# --- Assertion 3: contains "commands/fleet.md" ---
+if grep -q "commands/fleet.md" "$TARGET" 2>/dev/null; then
+  pass "contains 'commands/fleet.md'"
 else
-  fail "does not contain 'commands/agent-team.md'"
+  fail "does not contain 'commands/fleet.md'"
 fi
 
-# --- Assertion 4: contains "~/.claude/commands/agent-team.md" ---
-if grep -q '~/.claude/commands/agent-team.md' "$TARGET" 2>/dev/null; then
-  pass "contains '~/.claude/commands/agent-team.md'"
+# --- Assertion 4: contains "~/.claude/commands/fleet.md" ---
+if grep -q '~/.claude/commands/fleet.md' "$TARGET" 2>/dev/null; then
+  pass "contains '~/.claude/commands/fleet.md'"
 else
-  fail "does not contain '~/.claude/commands/agent-team.md'"
+  fail "does not contain '~/.claude/commands/fleet.md'"
 fi
 
 # --- Summary ---

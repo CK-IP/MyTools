@@ -45,9 +45,9 @@ mkdir -p ~/.claude/commands
 rm -f ~/.claude/commands/idea.md
 ln -s "$(pwd)/commands/idea.md" ~/.claude/commands/idea.md
 
-# /agent-team skill
-rm -f ~/.claude/commands/agent-team.md
-ln -s "$(pwd)/commands/agent-team.md" ~/.claude/commands/agent-team.md
+# /fleet skill
+rm -f ~/.claude/commands/fleet.md
+ln -s "$(pwd)/commands/fleet.md" ~/.claude/commands/fleet.md
 
 # /epic-brief-schema reference
 rm -f ~/.claude/commands/epic-brief-schema.md
@@ -57,9 +57,9 @@ ln -s "$(pwd)/commands/epic-brief-schema.md" ~/.claude/commands/epic-brief-schem
 rm -f ~/.claude/commands/fortify.md
 ln -s "$(pwd)/commands/fortify.md" ~/.claude/commands/fortify.md
 
-# /ship-lite — standard-weight ship pipeline (between /skiff and /ship)
-rm -f ~/.claude/commands/ship-lite.md
-ln -s "$(pwd)/commands/ship-lite.md" ~/.claude/commands/ship-lite.md
+# /sloop — standard-weight ship pipeline (between /skiff and /ship)
+rm -f ~/.claude/commands/sloop.md
+ln -s "$(pwd)/commands/sloop.md" ~/.claude/commands/sloop.md
 
 # /memory-audit — cross-reference memory files against code for staleness
 rm -f ~/.claude/commands/memory-audit.md
@@ -74,10 +74,10 @@ ln -s "$(pwd)/commands/space.md" ~/.claude/commands/space.md
 
 ```bash
 ls -la ~/.claude/commands/idea.md
-ls -la ~/.claude/commands/agent-team.md
+ls -la ~/.claude/commands/fleet.md
 ls -la ~/.claude/commands/epic-brief-schema.md
 ls -la ~/.claude/commands/fortify.md
-ls -la ~/.claude/commands/ship-lite.md
+ls -la ~/.claude/commands/sloop.md
 ls -la ~/.claude/commands/memory-audit.md
 ls -la ~/.claude/commands/space.md
 ```
@@ -111,7 +111,7 @@ You can skip this step and install tools later — `/fortify` gracefully skips a
 
 ## Step 4: Enable the agent teams feature
 
-`/agent-team` requires an experimental Claude Code feature that is off by default. Enable it by adding one line to `~/.claude/settings.json`.
+`/fleet` requires an experimental Claude Code feature that is off by default. Enable it by adding one line to `~/.claude/settings.json`.
 
 **Option A — one command (recommended):**
 
@@ -155,7 +155,7 @@ You should see `"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"` in the output.
 Open Claude Code and run:
 
 ```
-/agent-team
+/fleet
 ```
 
 You should see a response that starts with "For best results, the orchestrator (this session) should be running **opus**…" — that confirms the skill loaded correctly.

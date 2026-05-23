@@ -54,18 +54,18 @@ else
   fail "must contain /ship invocation"
 fi
 
-# --- Assertion 6: contains "/agent-team" ---
-if grep -q "/agent-team" "$TARGET" 2>/dev/null; then
-  pass "contains /agent-team invocation"
+# --- Assertion 6: contains "/fleet" ---
+if grep -q "/fleet" "$TARGET" 2>/dev/null; then
+  pass "contains /fleet invocation"
 else
-  fail "must contain /agent-team invocation"
+  fail "must contain /fleet invocation"
 fi
 
 # --- Assertion 7: contains "MANDATORY" ---
 if grep -q "MANDATORY" "$TARGET" 2>/dev/null; then
   pass "contains MANDATORY"
 else
-  fail "must contain MANDATORY (epic check and /ship or /agent-team invocation must be marked mandatory)"
+  fail "must contain MANDATORY (epic check and /ship or /fleet invocation must be marked mandatory)"
 fi
 
 # --- Assertion 8: no Step X/7 remnants (7-step flow is replaced by 8-step flow) ---

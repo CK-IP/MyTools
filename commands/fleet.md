@@ -1,4 +1,4 @@
-Walk Claude through running a parallel agent team build for an Epic. The orchestrator coordinates workers and a rolling QA agent. Usage: `/agent-team <epic-issue-number>`
+Walk Claude through running a parallel agent team build for an Epic. The orchestrator coordinates workers and a rolling QA agent. Usage: `/fleet <epic-issue-number>`
 
 ## ⚠️ Critical: How to spawn teammates
 
@@ -19,7 +19,7 @@ The native Claude Code agent teams feature handles split panes automatically whe
 
 Before doing anything else, say:
 
-> "For best results, the orchestrator (this session) should be running **opus**. If you're not already on opus, switch now — then re-run `/agent-team <issue>`. Workers will run on sonnet; QA will run on opus automatically."
+> "For best results, the orchestrator (this session) should be running **opus**. If you're not already on opus, switch now — then re-run `/fleet <issue>`. Workers will run on sonnet; QA will run on opus automatically."
 
 Ask: **"Are you on opus? (yes to continue, no to switch first)"**
 

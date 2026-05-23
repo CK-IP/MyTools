@@ -27,11 +27,11 @@ else
   fail "does not contain 'independent workstreams'"
 fi
 
-# --- Assertion 3: contains "/agent-team" ---
-if grep -q "/agent-team" "$TARGET"; then
-  pass "contains '/agent-team'"
+# --- Assertion 3: contains "/fleet" ---
+if grep -q "/fleet" "$TARGET"; then
+  pass "contains '/fleet'"
 else
-  fail "does not contain '/agent-team'"
+  fail "does not contain '/fleet'"
 fi
 
 # --- Assertion 4: contains "epic-brief" ---

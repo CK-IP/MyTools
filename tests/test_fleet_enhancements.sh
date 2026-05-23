@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TARGET="$REPO_ROOT/commands/agent-team.md"
+TARGET="$REPO_ROOT/commands/fleet.md"
 
 PASS=0
 FAIL=0

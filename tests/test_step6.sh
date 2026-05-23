@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # test_step6.sh
-# Asserts that commands/agent-team.md exists, is not empty, and contains key content.
+# Asserts that commands/fleet.md exists, is not empty, and contains key content.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TARGET="$REPO_ROOT/commands/agent-team.md"
+TARGET="$REPO_ROOT/commands/fleet.md"
 
 PASS=0
 FAIL=0
@@ -15,9 +15,9 @@ fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 # --- Assertion 1: exists and is not empty ---
 if [ -e "$TARGET" ] && [ -s "$TARGET" ]; then
-  pass "commands/agent-team.md exists and is not empty"
+  pass "commands/fleet.md exists and is not empty"
 else
-  fail "commands/agent-team.md does not exist or is empty"
+  fail "commands/fleet.md does not exist or is empty"
 fi
 
 # --- Assertion 2: contains "tmux" ---

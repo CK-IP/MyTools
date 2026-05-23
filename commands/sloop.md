@@ -28,22 +28,22 @@ hooks:
     - matcher: ""
       hooks:
         - type: command
-          command: bash ~/projects/CK-Skills/hooks/ship-lite-stop-gate.sh
+          command: bash ~/projects/CK-Skills/hooks/sloop-stop-gate.sh
 ---
 Standard-weight ship pipeline: plan (1 RT round) → implement → red-team (1 round) → commit on branch → learn. Middle ground between /skiff (direct-to-main) and /ship (full ceremony). Issue number: $ARGUMENTS
 
-Ship-lite is the standard workboat — same crew, same standards, lighter loadout. Where `/ship` runs the full gated pipeline (board → orientation → plan red-team × 5 → per-step gates → full-branch red-team × 5 → simplify → learn → commit), and `/skiff` runs the bare minimum (plan → implement → red-team → commit direct to main), `/ship-lite` runs the load-bearing middle: plan with one red-team round, TDD implementation, one post-implementation red-team round, commit on a branch, and learn.
+Sloop is the standard workboat — same crew, same standards, lighter loadout. Where `/ship` runs the full gated pipeline (board → orientation → plan red-team × 5 → per-step gates → full-branch red-team × 5 → simplify → learn → commit), and `/skiff` runs the bare minimum (plan → implement → red-team → commit direct to main), `/sloop` runs the load-bearing middle: plan with one red-team round, TDD implementation, one post-implementation red-team round, commit on a branch, and learn.
 
-## When to use /ship-lite vs /skiff vs /ship
+## When to use /sloop vs /skiff vs /ship
 
-| Use `/skiff` for | Use `/ship-lite` for | Use `/ship` for |
+| Use `/skiff` for | Use `/sloop` for | Use `/ship` for |
 |---|---|---|
 | Bugfixes touching 1-3 files | Single-concern fix or small feature, <5 files | New features (multi-file architectural) |
 | Follow-ups from prior ships | Work using existing patterns, <200 LOC | Anything with significant unknowns |
 | Spec-text edits, doc edits | Changes that need a branch but not full ceremony | Work spanning >5 files or new patterns |
 | Direct-to-main work | Standard issues from the board | Security-touching code |
 
-If unsure, start with `/ship-lite`. If the plan grows past 5 steps or the red-team finds architectural issues, /ship-lite escalates to `/ship`.
+If unsure, start with `/sloop`. If the plan grows past 5 steps or the red-team finds architectural issues, /sloop escalates to `/ship`.
 
 ## Arguments
 
@@ -55,7 +55,7 @@ Parse `$ARGUMENTS` for a single issue number (e.g., `42`). If empty, ask the use
 
 Print:
 ```
-Ship-lite v1 — #<issue>
+Sloop v1 — #<issue>
 ```
 
 ### Tool loading
@@ -66,7 +66,7 @@ Fetch required tools:
 ToolSearch({ query: "select:AskUserQuestion,EnterPlanMode,ExitPlanMode", max_results: 3 })
 ```
 
-If any fail, stop: "Failed to load required tools — retry `/ship-lite <issue>`."
+If any fail, stop: "Failed to load required tools — retry `/sloop <issue>`."
 
 ### Issue fetch
 
@@ -76,11 +76,11 @@ Print: `#<issue>: <title> — labels: <labels>`
 
 ### Branch + worktree
 
-/ship-lite creates a `ship/<issue>` branch with worktree isolation (unlike /skiff's direct-to-main).
+/sloop creates a `ship/<issue>` branch with worktree isolation (unlike /skiff's direct-to-main).
 
 ```bash
 repo_root=$(git rev-parse --show-toplevel)
-wt_path="$repo_root/.claude/worktrees/ship-lite-<issue>"
+wt_path="$repo_root/.claude/worktrees/sloop-<issue>"
 
 git worktree prune 2>/dev/null || true
 
@@ -113,7 +113,7 @@ Write the initial state using a Bash heredoc (hooks read this file):
 cat > "$HOME/.ship/ship-state-$PPID.json" << 'SHIPSTATE'
 {
   "issue": <N>,
-  "pipeline": "ship-lite",
+  "pipeline": "sloop",
   "stage": "setup",
   "label": "initializing",
   "plan_step": 0,
@@ -139,7 +139,7 @@ SHIPSTATE
 ### Sentinel write
 
 ```bash
-rm -f "$HOME/.ship/ship-lite-active-$PPID"; : > "$HOME/.ship/ship-lite-active-$PPID"
+rm -f "$HOME/.ship/sloop-active-$PPID"; : > "$HOME/.ship/sloop-active-$PPID"
 ```
 
 ### Domain knowledge
@@ -166,7 +166,7 @@ Call `EnterPlanMode`. Follow the standard plan-mode workflow:
 3. **Phase 3 — Red-team the plan.** Spawn 1 `@red-team` round on the plan only (read-only, no code changes). Prompt:
 
    ```
-   You are @red-team reviewing a /ship-lite plan for issue #<N>.
+   You are @red-team reviewing a /sloop plan for issue #<N>.
    review_type: "plan"
    Working directory: <wt_path>
 
@@ -194,7 +194,7 @@ Call `EnterPlanMode`. Follow the standard plan-mode workflow:
 If the user rejects the plan, clean up:
 
 ```bash
-rm -f "$HOME/.ship/ship-lite-active-$PPID"
+rm -f "$HOME/.ship/sloop-active-$PPID"
 rm -f "$HOME/.ship/ship-state-$PPID.json"
 git checkout main
 git worktree remove "$wt_path" 2>/dev/null || true
@@ -222,7 +222,7 @@ Skill({
            then commits.
          - DO NOT push. Do not run /ship or /skiff.
          - Step 7 (internal red-team) of /implement is redundant under
-           /ship-lite — the orchestrator runs full-branch red-team after
+           /sloop — the orchestrator runs full-branch red-team after
            you return — so you may omit it.
 
          STOP IF PLAN IS WRONG: if during execution you discover that the
@@ -241,7 +241,7 @@ Skill({
 
 When `/implement` returns, capture files modified, test counts, and anomalies.
 
-Log: `→ /ship-lite #<N>: /implement returned — <X> files changed, <Y/Z> tests pass`
+Log: `→ /sloop #<N>: /implement returned — <X> files changed, <Y/Z> tests pass`
 
 **Auto-transition to Stage 3 is unconditional and silent for the Clean case.** ZERO user-facing text between /implement's return and the Stage 3 red-team dispatch for the Clean case.
 
@@ -261,8 +261,8 @@ All non-Clean cases use `header: "Anomalous /implement return"` (load-bearing fo
 **Escalate to /ship:** Stash work, sentinel cleanup, end. User re-runs `/ship <N>`.
 
 ```bash
-cd "$wt_path" && git stash push -u -m "ship-lite-<N>-prelude"
-rm -f "$HOME/.ship/ship-lite-active-$PPID"
+cd "$wt_path" && git stash push -u -m "sloop-<N>-prelude"
+rm -f "$HOME/.ship/sloop-active-$PPID"
 rm -f "$HOME/.ship/ship-state-$PPID.json"
 ```
 
@@ -270,7 +270,7 @@ rm -f "$HOME/.ship/ship-state-$PPID.json"
 
 ```bash
 cd "$wt_path" && git checkout -- .
-rm -f "$HOME/.ship/ship-lite-active-$PPID"
+rm -f "$HOME/.ship/sloop-active-$PPID"
 rm -f "$HOME/.ship/ship-state-$PPID.json"
 git checkout main
 git worktree remove "$wt_path" 2>/dev/null || true
@@ -292,7 +292,7 @@ cd "$wt_path" && git ls-files -z --others --exclude-standard | xargs -0 -r git a
 Spawn `@red-team` via the `Agent` tool with `subagent_type: "Explore"`, `model: "opus"`.
 
 ```
-You are @red-team performing a full-branch review of /ship-lite #<issue>.
+You are @red-team performing a full-branch review of /sloop #<issue>.
 
 review_type: "full-branch"
 Working directory: <wt_path>. Use absolute paths for Read/Glob/Grep.
@@ -331,11 +331,11 @@ Compute:
 
 ```json
 {
-  "question": "Architectural CRIT/HIGH detected. /ship-lite runs 1 RT round and cannot safely iterate on architectural issues. Recommend re-running as /ship.",
+  "question": "Architectural CRIT/HIGH detected. /sloop runs 1 RT round and cannot safely iterate on architectural issues. Recommend re-running as /ship.",
   "header": "Architectural finding",
   "multiSelect": false,
   "options": [
-    {"label": "Escalate to /ship (Recommended)", "description": "Stash work, end ship-lite, re-run as /ship <issue>."},
+    {"label": "Escalate to /ship (Recommended)", "description": "Stash work, end sloop, re-run as /ship <issue>."},
     {"label": "Attempt fix anyway", "description": "Apply fix inline; if it fails, the commit gate will catch it."},
     {"label": "Abort", "description": "Revert all changes, remove branch."}
   ]
@@ -361,8 +361,8 @@ Present to user:
 
 ```json
 {
-  "question": "Ship-lite #<N> reviewed (<C>C <H>H <M>M <L>L). <summary>. Ready to commit on ship/<N> and push?",
-  "header": "Ship-lite complete",
+  "question": "Sloop #<N> reviewed (<C>C <H>H <M>M <L>L). <summary>. Ready to commit on ship/<N> and push?",
+  "header": "Sloop complete",
   "multiSelect": false,
   "options": [
     {"label": "Commit + push (Recommended)", "description": "Commit on ship/<N>, push, close issue."},
@@ -430,7 +430,7 @@ git push
 ### 4e. Close issue
 
 ```bash
-gh issue close <issue> --comment "Landed in $(git rev-parse --short HEAD) via ship-lite.
+gh issue close <issue> --comment "Landed in $(git rev-parse --short HEAD) via sloop.
 
 **Summary:** <one-paragraph what changed>
 
@@ -465,7 +465,7 @@ Write to `$original_repo_path/.handoffs/ship-log-<issue>.md`:
 ```markdown
 # Ship's Log — #<issue>: <title>
 
-**Pipeline:** ship-lite v1
+**Pipeline:** sloop v1
 **Branch:** `ship/<issue>`
 **Started:** <ISO timestamp>
 **Completed:** <ISO timestamp>
@@ -487,18 +487,18 @@ Write to `$original_repo_path/.handoffs/ship-log-<issue>.md`:
 ### Sentinel cleanup
 
 ```bash
-rm -f "$HOME/.ship/ship-lite-active-$PPID"
+rm -f "$HOME/.ship/sloop-active-$PPID"
 rm -f "$HOME/.ship/ship-state-$PPID.json"
 ```
 
 ## Rules
 
-- **Never produce target-repo implementation code yourself outside /implement or Stage 3c inline fixes.** The /implement skill handles Stage 2 writes; /ship-lite orchestrates and applies bounded red-team fixes only.
+- **Never produce target-repo implementation code yourself outside /implement or Stage 3c inline fixes.** The /implement skill handles Stage 2 writes; /sloop orchestrates and applies bounded red-team fixes only.
 - **Never skip the red-team round.** Even on a small change, the round catches wiring issues, domain violations, and test gaps.
-- **Escalate architectural findings.** If the red-team flags CRIT/HIGH with fix_type: architectural, offer to escalate to /ship. /ship-lite's single round cannot safely iterate on structural issues.
+- **Escalate architectural findings.** If the red-team flags CRIT/HIGH with fix_type: architectural, offer to escalate to /ship. /sloop's single round cannot safely iterate on structural issues.
 - **Pre-stage untracked files before the red-team round.** `git add -N` makes new files visible to `git diff`.
 - **Auto-transition Stage 2 → Stage 3.** Never pause between /implement return and red-team dispatch for the Clean case.
-- **Always create a branch + worktree.** /ship-lite never commits direct to main. If the user wants direct-to-main, use /skiff.
+- **Always create a branch + worktree.** /sloop never commits direct to main. If the user wants direct-to-main, use /skiff.
 - **State file via Bash heredoc only.** Write `ship-state-$PPID.json` via `cat >` in Bash, never via Write/Edit tools. The shared hooks intercept Bash output to read state.
 - **All Bash heredocs with user-derived content use quoted delimiters** (`<< 'EOF'`).
 
@@ -510,13 +510,13 @@ rm -f "$HOME/.ship/ship-state-$PPID.json"
 - **No independent test writer.** /implement writes its own tests.
 - **No per-step gates.** Implementation runs as one unit.
 - **No simplify step.** Code ships as /implement wrote it (plus inline fixes).
-- **No codex shadow dispatch.** /implement may use codex internally; /ship-lite does not orchestrate it.
+- **No codex shadow dispatch.** /implement may use codex internally; /sloop does not orchestrate it.
 - **No cost tracking.** Estimate via usage trailers if needed.
 
 ## Cross-references
 
-- `cc-dotfiles: home/commands/ship.md` — full pipeline; what /ship-lite escalates to
-- `cc-dotfiles: home/commands/skiff.md` — lightweight pipeline; what /ship-lite is heavier than
+- `cc-dotfiles: home/commands/ship.md` — full pipeline; what /sloop escalates to
+- `cc-dotfiles: home/commands/skiff.md` — lightweight pipeline; what /sloop is heavier than
 - `cc-dotfiles: home/commands/implement.md` — TDD skill invoked at Stage 2
-- `commands/idea.md` — triage skill that routes to /ship-lite
+- `commands/idea.md` — triage skill that routes to /sloop
 - `.ship/domain.md` — project-specific rules read by plan and red-team
