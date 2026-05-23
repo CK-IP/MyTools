@@ -100,6 +100,13 @@ else
   fail "must NOT contain 'steps are renumbered' — flow is always 8 steps, no conditional renumbering"
 fi
 
+# --- Assertion 12: contains CRG integration (code-review-graph or code map) ---
+if grep -q "code-review-graph" "$TARGET" 2>/dev/null || grep -q "code map" "$TARGET" 2>/dev/null; then
+  pass "contains CRG integration (code-review-graph or code map)"
+else
+  fail "must contain code-review-graph or code map reference (CRG integration in Step 4)"
+fi
+
 # --- Summary ---
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
