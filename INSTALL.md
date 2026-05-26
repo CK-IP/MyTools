@@ -71,6 +71,10 @@ ln -s "$(pwd)/commands/refresh.md" ~/.claude/commands/refresh.md
 rm -f ~/.claude/commands/space.md
 ln -s "$(pwd)/commands/space.md" ~/.claude/commands/space.md
 
+# /culture — RnD-Wiki knowledge base interaction (setup, add, search)
+rm -f ~/.claude/commands/culture.md
+ln -s "$(pwd)/commands/culture.md" ~/.claude/commands/culture.md
+
 # --- Agents ---
 
 # explore-first — read-only research investigator (no edit tools)
@@ -105,6 +109,7 @@ ls -la ~/.claude/commands/fortify.md
 ls -la ~/.claude/commands/sloop.md
 ls -la ~/.claude/commands/refresh.md
 ls -la ~/.claude/commands/space.md
+ls -la ~/.claude/commands/culture.md
 
 # Agent
 ls -la ~/.claude/agents/explore-first.md
