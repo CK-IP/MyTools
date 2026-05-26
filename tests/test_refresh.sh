@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# test_memory_audit.sh
-# Structural assertions for commands/memory-audit.md.
+# test_refresh.sh
+# Structural assertions for commands/refresh.md.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SKILL="$REPO_ROOT/commands/memory-audit.md"
+SKILL="$REPO_ROOT/commands/refresh.md"
 INSTALL="$REPO_ROOT/INSTALL.md"
 README="$REPO_ROOT/README.md"
 
@@ -17,13 +17,13 @@ fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 # --- 1: skill file exists and is not empty ---
 if [ -f "$SKILL" ] && [ -s "$SKILL" ]; then
-  pass "commands/memory-audit.md exists and is not empty"
+  pass "commands/refresh.md exists and is not empty"
 else
-  fail "commands/memory-audit.md does not exist or is empty"
+  fail "commands/refresh.md does not exist or is empty"
 fi
 
-# --- 2: contains all four step announcements ---
-for step in "Step 1/4" "Step 2/4" "Step 3/4" "Step 4/4"; do
+# --- 2: contains all five step announcements ---
+for step in "Step 1/5" "Step 2/5" "Step 3/5" "Step 4/5" "Step 5/5"; do
   if grep -q "$step" "$SKILL" 2>/dev/null; then
     pass "contains '$step'"
   else
@@ -46,7 +46,7 @@ else
 fi
 
 # --- 5: contains severity levels ---
-for sev in "STALE" "BROKEN-REF" "CONTRADICTION" "UNVERIFIED" "INDEX-DRIFT"; do
+for sev in "STALE" "BROKEN-REF" "CONTRADICTION" "DUPLICATE" "UNVERIFIED" "INDEX-DRIFT"; do
   if grep -q "$sev" "$SKILL" 2>/dev/null; then
     pass "contains severity '$sev'"
   else
@@ -75,18 +75,32 @@ else
   fail "contains hardcoded 'chriskuo' path — should be portable"
 fi
 
-# --- 9: INSTALL.md has memory-audit symlink ---
-if grep -q "commands/memory-audit.md" "$INSTALL" 2>/dev/null; then
-  pass "INSTALL.md has memory-audit symlink"
+# --- 9: INSTALL.md has refresh symlink ---
+if grep -q "commands/refresh.md" "$INSTALL" 2>/dev/null; then
+  pass "INSTALL.md has refresh symlink"
 else
-  fail "INSTALL.md does not have memory-audit symlink"
+  fail "INSTALL.md does not have refresh symlink"
 fi
 
-# --- 10: README.md mentions memory-audit ---
-if grep -q "memory-audit" "$README" 2>/dev/null; then
-  pass "README.md mentions memory-audit"
+# --- 10: README.md mentions refresh ---
+if grep -q "/refresh" "$README" 2>/dev/null; then
+  pass "README.md mentions /refresh"
 else
-  fail "README.md does not mention memory-audit"
+  fail "README.md does not mention /refresh"
+fi
+
+# --- 11: contains preview / dry-run step ---
+if grep -q "Preview proposed changes" "$SKILL" 2>/dev/null || grep -q "Apply all" "$SKILL" 2>/dev/null; then
+  pass "contains preview/dry-run step"
+else
+  fail "does not contain preview/dry-run step"
+fi
+
+# --- 12: contains merge behavior ---
+if grep -q "Merge behavior" "$SKILL" 2>/dev/null || grep -q "merging two duplicate" "$SKILL" 2>/dev/null; then
+  pass "contains merge behavior for duplicates"
+else
+  fail "does not contain merge behavior for duplicates"
 fi
 
 # --- Summary ---

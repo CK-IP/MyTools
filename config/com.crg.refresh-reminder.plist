@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.crg.memory-audit-reminder</string>
+	<string>com.crg.refresh-reminder</string>
 
 	<key>ProgramArguments</key>
 	<array>
-		<string>__REPO_ROOT__/config/memory-audit-reminder.sh</string>
+		<string>__REPO_ROOT__/config/refresh-reminder.sh</string>
 	</array>
 
 	<key>StartCalendarInterval</key>

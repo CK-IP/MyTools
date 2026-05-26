@@ -6,8 +6,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DAEMON_PLIST="$REPO_ROOT/config/com.crg.daemon.plist"
-REMINDER_PLIST="$REPO_ROOT/config/com.crg.memory-audit-reminder.plist"
-REMINDER_SCRIPT="$REPO_ROOT/config/memory-audit-reminder.sh"
+REMINDER_PLIST="$REPO_ROOT/config/com.crg.refresh-reminder.plist"
+REMINDER_SCRIPT="$REPO_ROOT/config/refresh-reminder.sh"
 INSTALL="$REPO_ROOT/INSTALL.md"
 README="$REPO_ROOT/README.md"
 
@@ -26,16 +26,16 @@ fi
 
 # --- 2: reminder plist exists and non-empty ---
 if [ -f "$REMINDER_PLIST" ] && [ -s "$REMINDER_PLIST" ]; then
-  pass "config/com.crg.memory-audit-reminder.plist exists and is not empty"
+  pass "config/com.crg.refresh-reminder.plist exists and is not empty"
 else
-  fail "config/com.crg.memory-audit-reminder.plist does not exist or is empty"
+  fail "config/com.crg.refresh-reminder.plist does not exist or is empty"
 fi
 
 # --- 3: reminder script exists and has set -euo pipefail ---
 if [ -f "$REMINDER_SCRIPT" ] && grep -q "set -euo pipefail" "$REMINDER_SCRIPT" 2>/dev/null; then
-  pass "memory-audit-reminder.sh exists and has set -euo pipefail"
+  pass "refresh-reminder.sh exists and has set -euo pipefail"
 else
-  fail "memory-audit-reminder.sh missing or lacks set -euo pipefail"
+  fail "refresh-reminder.sh missing or lacks set -euo pipefail"
 fi
 
 # --- 4: daemon plist contains code-review-graph ---

@@ -63,9 +63,9 @@ ln -s "$(pwd)/commands/fortify.md" ~/.claude/commands/fortify.md
 rm -f ~/.claude/commands/sloop.md
 ln -s "$(pwd)/commands/sloop.md" ~/.claude/commands/sloop.md
 
-# /memory-audit — cross-reference memory files against code for staleness
-rm -f ~/.claude/commands/memory-audit.md
-ln -s "$(pwd)/commands/memory-audit.md" ~/.claude/commands/memory-audit.md
+# /refresh — check memory for staleness, broken refs, duplicates, and contradictions
+rm -f ~/.claude/commands/refresh.md
+ln -s "$(pwd)/commands/refresh.md" ~/.claude/commands/refresh.md
 
 # /space — set up a new project workspace from scratch
 rm -f ~/.claude/commands/space.md
@@ -103,7 +103,7 @@ ls -la ~/.claude/commands/fleet.md
 ls -la ~/.claude/commands/epic-brief-schema.md
 ls -la ~/.claude/commands/fortify.md
 ls -la ~/.claude/commands/sloop.md
-ls -la ~/.claude/commands/memory-audit.md
+ls -la ~/.claude/commands/refresh.md
 ls -la ~/.claude/commands/space.md
 
 # Agent
@@ -265,7 +265,7 @@ In Claude Code, ask: *"Run `list_repos_tool` and test a semantic search on one o
 This step installs two macOS LaunchAgents:
 
 1. **CRG daemon** — auto-starts the code-review-graph daemon on login so your code maps stay up to date
-2. **Memory audit reminder** — sends a macOS notification on the 1st of each month reminding you to run `/memory-audit`
+2. **Memory refresh reminder** — sends a macOS notification on the 1st of each month reminding you to run `/refresh`
 
 ### Install the plist files
 
@@ -278,16 +278,16 @@ cd ~/projects/CK-Skills
 sed "s|__UVX_PATH__|$(which uvx)|g" config/com.crg.daemon.plist \
   > ~/Library/LaunchAgents/com.crg.daemon.plist
 
-# Memory audit reminder — replace placeholder with your repo path
-sed "s|__REPO_ROOT__|$(pwd)|g" config/com.crg.memory-audit-reminder.plist \
-  > ~/Library/LaunchAgents/com.crg.memory-audit-reminder.plist
+# Memory refresh reminder — replace placeholder with your repo path
+sed "s|__REPO_ROOT__|$(pwd)|g" config/com.crg.refresh-reminder.plist \
+  > ~/Library/LaunchAgents/com.crg.refresh-reminder.plist
 ```
 
 ### Load the agents
 
 ```bash
 launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.crg.daemon.plist
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.crg.memory-audit-reminder.plist
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.crg.refresh-reminder.plist
 ```
 
 ### Verify
@@ -296,7 +296,7 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.crg.memory-audit-r
 launchctl list | grep crg
 ```
 
-You should see two lines — one for `com.crg.daemon` and one for `com.crg.memory-audit-reminder`.
+You should see two lines — one for `com.crg.daemon` and one for `com.crg.refresh-reminder`.
 
 To check the daemon is running:
 
@@ -310,7 +310,7 @@ To stop and remove the agents:
 
 ```bash
 launchctl bootout "gui/$(id -u)/com.crg.daemon"
-launchctl bootout "gui/$(id -u)/com.crg.memory-audit-reminder"
+launchctl bootout "gui/$(id -u)/com.crg.refresh-reminder"
 ```
 
 ---

@@ -148,7 +148,7 @@ Post acceptance review on issue #X and move it to done on the board
 /board create "My idea"          # Create an issue manually
 /implement <step>                # TDD cycle (used within pipelines)
 /fortify                         # Security + coverage scan
-/memory-audit                    # Check memory for staleness
+/refresh                         # Check memory for staleness
 ```
 
 ---

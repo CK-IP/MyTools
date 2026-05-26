@@ -13,7 +13,7 @@ Custom Claude Code skills for structured development workflows — from quick fi
 | Epic orchestrator | `/fleet <epic-issue>` | Runs a parallel team build: spawns worker agents + rolling QA, coordinates via contracts |
 | Epic brief schema | `/epic-brief-schema` | Reference template for writing `epic-brief.md` files used by `/fleet` |
 | Security & quality gate | `/fortify [issue]` | Automated security scan, coverage check, and static analysis on a branch — catches what LLM review misses |
-| Memory audit | `/memory-audit` | Audits memory files for staleness, broken refs, and contradictions — cross-references against filesystem and CRG graph |
+| Memory refresh | `/refresh` | Checks memory for staleness, broken refs, duplicates, and contradictions — previews a clean-up plan before making changes |
 | Project setup | `/space [name]` | Sets up a new project workspace — folder structure, GitHub repo, task board, code map |
 
 These skills extend the base workflow from `cc-dotfiles` (the org's shared tooling). They don't replace it — `/ship`, `/skiff`, `/implement`, `/board` etc. still come from there.
@@ -50,7 +50,7 @@ cd ~/projects/CK-Skills && bash install.sh   # coming soon — manual steps in I
 
 ## Background automation
 
-Optional macOS LaunchAgents for auto-start of the CRG daemon (keeps code maps up to date) and a monthly `/memory-audit` reminder notification. See **[INSTALL.md](INSTALL.md) Step 6** for setup.
+Optional macOS LaunchAgents for auto-start of the CRG daemon (keeps code maps up to date) and a monthly `/refresh` reminder notification. See **[INSTALL.md](INSTALL.md) Step 6** for setup.
 
 ---
 
