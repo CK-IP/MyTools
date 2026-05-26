@@ -7,6 +7,7 @@ Parse `$ARGUMENTS` for the subcommand. The first word determines which section t
 - `setup` → run the **Setup** section
 - `add` or `add <topic>` → run the **Add** section (everything after `add` is the topic)
 - `search` or `search <query>` → run the **Search** section
+- `refresh` → run the **Refresh** section
 - anything else or empty → show the **Help** section
 
 ## Help
@@ -18,6 +19,7 @@ If no subcommand is provided, or the subcommand is not recognized, show:
 - **`/culture setup`** — One-time setup. Connects your projects to the knowledge base so every agent can find domain knowledge automatically.
 - **`/culture add`** — Capture something you learned during this session into a knowledge base article. Creates a draft and opens it for review.
 - **`/culture search <topic>`** — Look up what's in the knowledge base. *(Coming soon)*
+- **`/culture refresh`** — Run a health check on the knowledge base. Finds duplicates, articles that should be split or merged, miscategorized articles, and more.
 
 **Just type one of those to get started."**
 
@@ -132,7 +134,66 @@ Convert the topic to a slug:
 
 Show the user: **"I'll call this article `<slug>`. The file will be at `articles/<domain>/<slug>.md`."**
 
-### Step 4: Create the branch and file
+### Step 4: Check for related articles
+
+Before creating anything, scan the existing knowledge base for articles that might already cover this topic.
+
+1. Read `~/projects/RnD-Wiki/INDEX.md`
+2. Scan the "By Domain" tables for articles with similar titles, overlapping tags, or semantically related summaries. Compare the new topic against every existing article's title, summary, and tags. Look for:
+   - Same or synonymous concepts (e.g., "UF membrane cleaning" vs "membrane CIP procedure")
+   - Overlapping tags
+   - Summaries that describe the same underlying knowledge
+
+3. **If NO related articles found:** proceed silently to Step 5.
+
+4. **If related articles found**, show them to the user:
+
+   **"Before I create a new article, I found these existing articles that might be related:**
+
+   - **`<slug-1>`** — <summary> *(status: <status>)*
+   - **`<slug-2>`** — <summary> *(status: <status>)*
+
+   **Is this genuinely a new topic, or should this knowledge go into one of these existing articles?"**
+
+5. **If the user says it's new:** proceed to Step 5 (branch creation).
+
+6. **If the user says it belongs in an existing article:** still capture the knowledge — ask the same questions you would for a new article (summary, details, sources). Then file it as a GitHub issue:
+
+   ```bash
+   gh issue create --repo Icelandic-Provisions/RnD-Wiki \
+     --title "knowledge: add to <existing-slug>" \
+     --label "knowledge-addition" \
+     --body "$(cat << 'EOF'
+   ## Knowledge to Add
+
+   **Target article:** `<existing-slug>` (`articles/<domain>/<existing-slug>.md`)
+
+   ### Summary
+
+   <one-line summary of the new knowledge>
+
+   ### Details
+
+   <the captured knowledge content>
+
+   ### Sources
+
+   <source references from the current session>
+
+   ---
+   *Filed automatically by `/culture add` — this knowledge was identified as belonging
+   to an existing article rather than a new one.*
+   EOF
+   )"
+   ```
+
+   Then tell the user:
+
+   **"Got it — I've filed the knowledge as an issue on the wiki. Someone can merge it into the existing article during the next review. You're all set to get back to work."**
+
+   Then END the Add workflow — do NOT create a branch, template, or PR.
+
+### Step 5: Create the branch and file
 
 Run the following in `~/projects/RnD-Wiki`:
 
@@ -165,7 +226,7 @@ Run the following in `~/projects/RnD-Wiki`:
 
 Tell the user: **"Created a new branch and article file."**
 
-### Step 5: Fill the frontmatter
+### Step 6: Fill the frontmatter
 
 Edit the new article file. Fill in the YAML frontmatter:
 
@@ -186,7 +247,7 @@ Edit the new article file. Fill in the YAML frontmatter:
   - `vendor-doc` or `external-literature` if from external sources
 - `related`: (leave empty — can be filled during review)
 
-### Step 6: Write the article body
+### Step 7: Write the article body
 
 Ask the user:
 
@@ -203,7 +264,7 @@ Listen to the user's response and fill in the article sections. Follow the wiki'
 - Use tables for constants and specs
 - The summary line must be understandable by someone who is not a programmer
 
-### Step 7: Update the index
+### Step 8: Update the index
 
 Run:
 
@@ -213,7 +274,7 @@ cd ~/projects/RnD-Wiki && make index
 
 Tell the user: **"Updated the master index."**
 
-### Step 8: Commit
+### Step 9: Commit
 
 Stage and commit the new article and the updated index:
 
@@ -229,7 +290,7 @@ EOF
 )"
 ```
 
-### Step 9: Open a PR
+### Step 10: Open a PR
 
 Push the branch and create a PR:
 
@@ -290,6 +351,143 @@ Say:
 2. **Browse the index** — The master index at `~/projects/RnD-Wiki/INDEX.md` lists every article with its topic, status, and tags. You can open it in any text editor or on GitHub.
 
 **If you want to add new knowledge, use `/culture add`."**
+
+## Refresh
+
+> Periodic health check of the knowledge base. Finds duplicates, scope issues, misfilings, and gaps.
+
+### Setup — Load required tools
+
+Before any refresh work, load AskUserQuestion via ToolSearch:
+
+```
+ToolSearch({ query: "select:AskUserQuestion", max_results: 1 })
+```
+
+If it fails to load, stop: **"Failed to load required tools — retry `/culture refresh`."**
+
+### Step 1: Scan the knowledge base
+
+Read `~/projects/RnD-Wiki/INDEX.md` to get the full article list. Then read each article file to get the complete frontmatter and body content.
+
+Announce: **"Found X articles across Y domains. Running health checks..."**
+
+### Step 2: Run checks
+
+For each article (and across articles), run the following checks:
+
+| Check | Severity | What it catches |
+|---|---|---|
+| **NEAR-DUPLICATE** | HIGH | Two articles covering the same concept under different names — compare titles, summaries, tags, and body content for semantic overlap |
+| **CONTRADICTION** | HIGH | Two articles making conflicting claims about the same thing — e.g., different temperature ranges for the same process |
+| **SCOPE-CREEP** | MEDIUM | A single article covering 3+ distinct topics (look for unrelated H2 sections) that should be separate articles |
+| **MERGE-CANDIDATE** | MEDIUM | Two short articles (<200 words each) on tightly related topics that would be stronger as one article |
+| **MISCATEGORIZED** | MEDIUM | Article in the wrong domain folder based on its actual content, tags, and subject matter |
+| **ORPHAN** | LOW | Article with no inbound `related:` links from any other article — it exists but nothing points to it |
+| **STALE-DRAFT** | LOW | Article with `status: draft` and `created:` date more than 30 days ago — it was started but never reviewed |
+| **MISSING-CROSS-REF** | LOW | Article mentions a concept that has its own article in the wiki but doesn't link to it via the `related:` field |
+
+### Step 3: Report
+
+If no findings: say **"Knowledge base looks clean — no issues found."** and end.
+
+If there are findings, present them as a table:
+
+**"Found X issues across Y articles:"**
+
+```
+| # | Article | Domain | Check | Severity | Details |
+|---|---------|--------|-------|----------|---------|
+```
+
+Group findings by severity (HIGH first, then MEDIUM, then LOW).
+
+### Step 4: Preview proposed changes
+
+For each finding, propose a concrete action:
+
+- **Merge** (for NEAR-DUPLICATE, MERGE-CANDIDATE) — **"Combine `<slug-a>` and `<slug-b>` into a single article, keeping the most complete version of each section."**
+- **Split** (for SCOPE-CREEP) — **"Break `<slug>` into separate articles: `<new-slug-1>` (covering X) and `<new-slug-2>` (covering Y)."**
+- **Move** (for MISCATEGORIZED) — **"Move `<slug>` from `<current-domain>` to `<correct-domain>`."**
+- **Edit** (for CONTRADICTION) — **"Resolve the conflict between `<slug-a>` and `<slug-b>` — one claims X, the other claims Y. Check the sources and correct the wrong one."**
+- **Add links** (for MISSING-CROSS-REF) — **"Add `<related-slug>` to the `related:` field in `<slug>`."**
+- **Flag** (for ORPHAN, STALE-DRAFT) — **"Flag `<slug>` for attention — <reason>."**
+
+Show a summary count: **"Proposed: X merges, Y splits, Z moves, W edits, V link additions, U flags."**
+
+Then ask via AskUserQuestion:
+
+- **Apply all** — proceed with every proposed change (still announce each one as it happens)
+- **Go one by one** — walk through each finding individually and ask what to do
+- **Cancel** — stop without making any changes
+
+### Step 5: Act on findings
+
+#### If "Apply all"
+
+Process each proposed change in order. For each one, briefly announce what you're doing:
+- **"Merging `<slug-a>` + `<slug-b>`..."**
+- **"Splitting `<slug>` into `<new-slug-1>` and `<new-slug-2>`..."**
+- **"Moving `<slug>` from `<old-domain>` to `<new-domain>`..."**
+- **"Fixing contradiction in `<slug>`..."**
+- **"Adding cross-reference: `<slug>` → `<related-slug>`..."**
+- **"Flagging `<slug>` — <reason>"**
+
+#### If "Go one by one"
+
+For each finding, present the article name, the finding, and ask via AskUserQuestion:
+
+- **Fix** — apply the proposed change
+- **Defer** — skip for now, file as a GitHub issue on `Icelandic-Provisions/RnD-Wiki` with the label `kb-maintenance`
+- **Skip** — leave as-is, no action
+
+#### After all changes
+
+1. Run `make index` in `~/projects/RnD-Wiki` to update INDEX.md
+2. Create a branch and commit all changes:
+
+   ```bash
+   cd ~/projects/RnD-Wiki && git checkout -b "docs/refresh-$(date +%Y-%m-%d)"
+   cd ~/projects/RnD-Wiki && git add -A && git commit -m "$(cat << 'EOF'
+   docs: knowledge base refresh
+
+   Periodic audit of the knowledge base. Changes include:
+   <list of actions taken — merges, splits, moves, edits, cross-refs>
+
+   Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+   EOF
+   )"
+   ```
+
+3. Push and open a PR:
+
+   ```bash
+   cd ~/projects/RnD-Wiki && git push -u origin "docs/refresh-$(date +%Y-%m-%d)"
+   cd ~/projects/RnD-Wiki && gh pr create --title "docs: knowledge base refresh" --body "$(cat << 'EOF'
+   ## Knowledge Base Refresh
+
+   Periodic audit of the knowledge base.
+
+   ### Changes Made
+
+   <bulleted list of all actions taken>
+
+   ### Review Checklist
+
+   - [ ] Merged articles preserve all unique claims from both originals
+   - [ ] Split articles are self-contained and correctly cross-referenced
+   - [ ] Moved articles have correct `domain:` frontmatter
+   - [ ] Contradiction resolutions cite the authoritative source
+   - [ ] New cross-references are bidirectional where appropriate
+   EOF
+   )"
+   ```
+
+4. Tell the user:
+
+   **"Refresh complete: X articles audited, Y merged, Z split, W moved, V edited, U cross-refs added, T flagged, S skipped.**
+
+   **I've opened a PR with all the changes for review: <link to PR>"**
 
 ## Rules
 
