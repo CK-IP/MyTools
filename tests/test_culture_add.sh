@@ -172,7 +172,43 @@ else
   fail "Refresh section not preserved (missing 'Periodic health check')"
 fi
 
-# --- 22: Help text no longer says old review copy ---
+# --- 22: culture-worker.md contains MkDocs nav update step ---
+if grep -q "Update MkDocs nav" "$WORKER" 2>/dev/null; then
+  pass "culture-worker.md contains MkDocs nav update step"
+else
+  fail "culture-worker.md does not contain MkDocs nav update step"
+fi
+
+# --- 23: culture-worker.md git add includes mkdocs.yml ---
+if grep -q '\.mkdocs/mkdocs\.yml' "$WORKER" 2>/dev/null; then
+  pass "culture-worker.md git add includes .mkdocs/mkdocs.yml"
+else
+  fail "culture-worker.md git add does not include .mkdocs/mkdocs.yml"
+fi
+
+# --- 24: culture-worker.md has 8 numbered steps ---
+step_count=$(grep -cE '^### [0-9]+\.' "$WORKER" 2>/dev/null || true)
+if [ "$step_count" -eq 8 ]; then
+  pass "culture-worker.md has 8 numbered steps (got $step_count)"
+else
+  fail "culture-worker.md should have 8 numbered steps (got $step_count)"
+fi
+
+# --- 25: culture-worker.md nav step reads mkdocs.yml ---
+if grep -q 'mkdocs\.yml' "$WORKER" 2>/dev/null; then
+  pass "culture-worker.md nav step references mkdocs.yml"
+else
+  fail "culture-worker.md nav step does not reference mkdocs.yml"
+fi
+
+# --- 26: culture-worker.md nav step handles flat and nested domains ---
+if grep -qE 'For nested domains|processing/(uf|fermentation)' "$WORKER" 2>/dev/null; then
+  pass "culture-worker.md nav step handles nested domains"
+else
+  fail "culture-worker.md nav step does not handle nested domains"
+fi
+
+# --- 27: Help text no longer says old review copy ---
 if ! grep -q "Creates a draft and opens it for review" "$CULTURE" 2>/dev/null; then
   pass "Help text no longer says 'Creates a draft and opens it for review'"
 else
