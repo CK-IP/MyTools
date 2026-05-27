@@ -407,7 +407,7 @@ Then run `/fortify` on the integration branch. Read the verdict from the fortify
 - **BLOCK:** Do not proceed to merge. Tell the user: "Fortify BLOCK on integration
   branch: <finding summary>. Resolve before merging." Delete the integration branch and
   wait for user direction.
-- **ADVISORY:** Log the finding in the epic ship's log (Step 23). Continue to Step 18.
+- **ADVISORY:** Log the finding in the epic ship's log (Step 24). Continue to Step 18.
 - **CLEAR:** Continue to Step 18.
 
 Delete the integration branch after the check regardless of outcome:
@@ -454,11 +454,20 @@ Run the full test suite after each merge before continuing.
 
 `git push`
 
-### Step 22: Close Epic
+### Step 22: Clean up worker branches
+
+For each merged worker branch:
+
+```bash
+git push origin --delete "ship/<sub_issue>" 2>/dev/null || true
+git branch -d "ship/<sub_issue>" 2>/dev/null || true
+```
+
+### Step 23: Close Epic
 
 Spawn @board with: `done <epic_issue>`
 
-### Step 23: Write epic ship's log
+### Step 24: Write epic ship's log
 
 Save to `.handoffs/ship-log-epic-<issue>-<timestamp>.md`.
 

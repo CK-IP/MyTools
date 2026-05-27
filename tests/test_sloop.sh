@@ -107,6 +107,13 @@ else
   fail "contains leadsman — sloop should not use leadsman"
 fi
 
+# 18: contains remote branch deletion
+if grep -q 'git push origin --delete' "$SKILL" 2>/dev/null; then
+  pass "contains remote branch deletion"
+else
+  fail "does not contain remote branch deletion"
+fi
+
 # --- Hook file assertions ---
 
 # 14: hook file exists and is executable

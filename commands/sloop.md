@@ -442,6 +442,7 @@ gh issue close <issue> --comment "Landed in $(git rev-parse --short HEAD) via sl
 ### 4f. Worktree cleanup
 
 ```bash
+git push origin --delete "ship/<issue>" 2>/dev/null || true
 git worktree remove "$wt_path" 2>/dev/null || true
 git branch -d "ship/<issue>" 2>/dev/null || true
 ```

@@ -68,6 +68,21 @@ grep -q 'CONFLICT HIGH' "$TARGET" && pass "CONFLICT HIGH present" || fail "CONFL
 # 17. Contains "Contract tests failed after merging"
 grep -q 'Contract tests failed after merging' "$TARGET" && pass "Contract tests failed after merging present" || fail "Contract tests failed after merging missing"
 
+# 18. Contains remote branch cleanup
+grep -q 'git push origin --delete "ship/<sub_issue>"' "$TARGET" && pass "remote branch cleanup present" || fail "remote branch cleanup missing"
+
+# 19. Contains local branch cleanup for workers
+grep -q 'git branch -d "ship/<sub_issue>"' "$TARGET" && pass "local branch cleanup present" || fail "local branch cleanup missing"
+
+# 20. Step 22 is branch cleanup (renumbered from old 22)
+grep -qE '### Step 22.*[Cc]lean' "$TARGET" && pass "Step 22 is branch cleanup" || fail "Step 22 is not branch cleanup"
+
+# 21. Old Step 22 renumbered to Step 23
+grep -qE '### Step 23.*[Cc]lose' "$TARGET" && pass "Step 23 is Close Epic (renumbered)" || fail "Step 23 not Close Epic"
+
+# 22. Old Step 23 renumbered to Step 24
+grep -qE '### Step 24.*ship' "$TARGET" && pass "Step 24 is ship's log (renumbered)" || fail "Step 24 not ship's log"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 
