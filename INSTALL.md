@@ -81,6 +81,10 @@ ln -s "$(pwd)/commands/culture.md" ~/.claude/commands/culture.md
 rm -f ~/.claude/agents/explore-first.md
 ln -s "$(pwd)/agents/explore-first.md" ~/.claude/agents/explore-first.md
 
+# culture-worker — background wiki article publisher
+rm -f ~/.claude/agents/culture-worker.md
+ln -s "$(pwd)/agents/culture-worker.md" ~/.claude/agents/culture-worker.md
+
 # --- Hooks ---
 
 # codex-redirect — PreToolUse on Agent: routes /ship substeps to Codex CLI
@@ -111,8 +115,9 @@ ls -la ~/.claude/commands/refresh.md
 ls -la ~/.claude/commands/space.md
 ls -la ~/.claude/commands/culture.md
 
-# Agent
+# Agents
 ls -la ~/.claude/agents/explore-first.md
+ls -la ~/.claude/agents/culture-worker.md
 
 # Hooks
 ls -la ~/.claude/hooks/codex-redirect.sh
