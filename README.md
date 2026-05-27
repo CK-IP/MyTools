@@ -14,6 +14,7 @@ Custom Claude Code skills for structured development workflows — from quick fi
 | Epic brief schema | `/epic-brief-schema` | Reference template for writing `epic-brief.md` files used by `/fleet` |
 | Security & quality gate | `/fortify [issue]` | Automated security scan, coverage check, and static analysis on a branch — catches what LLM review misses |
 | Memory refresh | `/refresh` | Checks memory for staleness, broken refs, duplicates, and contradictions — previews a clean-up plan before making changes |
+| Knowledge base | `/culture <action>` | Interact with the RnD-Wiki — `setup` access, `add` articles, `search` for knowledge, or `refresh` stale entries |
 | Project setup | `/space [name]` | Sets up a new project workspace — folder structure, GitHub repo, task board, code map |
 
 These skills extend the base workflow from `cc-dotfiles` (the org's shared tooling). They don't replace it — `/ship`, `/skiff`, `/implement`, `/board` etc. still come from there.
