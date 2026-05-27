@@ -17,7 +17,7 @@ If no subcommand is provided, or the subcommand is not recognized, show:
 **"The `/culture` command helps you work with the team's knowledge base. Here's what you can do:**
 
 - **`/culture setup`** — One-time setup. Connects your projects to the knowledge base so every agent can find domain knowledge automatically.
-- **`/culture add`** — Capture something you learned during this session into a knowledge base article. Creates a draft and opens it for review.
+- **`/culture add`** — Capture something you learned during this session. Saves it to the knowledge base in the background — it's available immediately as a draft.
 - **`/culture search <topic>`** — Look up what's in the knowledge base. *(Coming soon)*
 - **`/culture refresh`** — Run a health check on the knowledge base. Finds duplicates, articles that should be split or merged, miscategorized articles, and more.
 
@@ -95,7 +95,7 @@ Say:
 
 ## Add
 
-> Capture knowledge from the current session into a new wiki article.
+> Capture knowledge from the current session into the wiki — runs in the background so you can keep working.
 
 ### Step 1: Get the topic
 
@@ -103,61 +103,76 @@ If a topic was provided as an argument (everything after `add`), use it.
 
 If no topic was provided, ask:
 
-**"What knowledge do you want to capture? Just describe the topic in a few words — for example, 'UF membrane cleaning procedure' or 'skyr fermentation temperature ranges'."**
+**"What knowledge do you want to capture? Just describe the topic in a few words."**
 
-### Step 2: Pick the domain
+### Step 2: Gather knowledge
 
-Show the available domains and ask:
+Ask the user:
 
-**"Which area does this belong to?**
+**"Tell me what you've learned about this topic — I'll write it up and save it to the wiki. You can be as detailed or brief as you want."**
 
-1. **Business** — EDI, logistics, finance tools
-2. **Equipment** — plant equipment inventories and specs
-3. **Formulation** — recipe science, dairy composition, blending
-4. **Processing** — UF, fermentation, HTST, CIP
-5. **Production** — mass balance, scheduling, capacity planning
-6. **Quality** — specifications, hold criteria, test methods
-7. **Software** — development patterns and conventions
-8. **Vendors** — vendor-specific technical documentation
+Listen to their response. Determine the source type based on context:
+- `project-file` if it came from reading code
+- `expert-knowledge` if the user shared it from experience
+- `vendor-doc` or `external-literature` if from external sources
 
-**Just tell me the number or name."**
+### Step 3: Auto-infer domain
 
-If the domain has subfolders (like `processing/uf`, `processing/fermentation`, `processing/htst`, `processing/cip`), check if the topic fits one and use the subfolder path.
+Infer the domain from the topic and knowledge content using this mapping:
 
-### Step 3: Generate the slug
+| Domain | Keywords / signals |
+|---|---|
+| business | EDI, logistics, finance, accounting, SAP, orders, invoicing |
+| equipment | plant equipment, specs, inventory, tanks, pumps, valves, hardware |
+| formulation | recipe, dairy composition, blending, ingredients, ratios, protein, fat |
+| processing | UF, fermentation, HTST, CIP, pasteurization, membrane, filtration |
+| processing/uf | UF membrane, ultrafiltration, permeate, retentate, flux |
+| processing/fermentation | fermentation, culture, starter, pH, incubation |
+| processing/htst | HTST, pasteurization, heat treatment, holding tube |
+| processing/cip | CIP, cleaning, sanitization, caustic, acid wash |
+| production | mass balance, scheduling, capacity, throughput, batch, yield |
+| quality | specifications, hold criteria, test methods, QC, release, shelf life |
+| software | development patterns, conventions, code, API, database, deployment |
+| vendors | vendor-specific, Tetra Pak, SPX, supplier, technical documentation |
 
-Convert the topic to a slug:
+Pick the best match. If the topic clearly fits a Processing subfolder, use the subfolder path.
+
+**Only ask the user if genuinely ambiguous** (matches two domains equally). In that case:
+
+**"This could fit under `<domain-a>` or `<domain-b>`. Which feels more right?"**
+
+Otherwise, proceed silently.
+
+### Step 4: Auto-generate slug and check for duplicates
+
+Generate the slug from the topic:
 - Lowercase
 - Replace spaces with hyphens
 - Remove special characters
 - Keep it descriptive but concise (3-6 words)
 
-Show the user: **"I'll call this article `<slug>`. The file will be at `articles/<domain>/<slug>.md`."**
-
-### Step 4: Check for related articles
-
-Before creating anything, scan the existing knowledge base for articles that might already cover this topic.
+**Full semantic duplicate scan:** Before dispatching the background worker, check for existing articles that cover the same topic:
 
 1. Read `~/projects/RnD-Wiki/INDEX.md`
-2. Scan the "By Domain" tables for articles with similar titles, overlapping tags, or semantically related summaries. Compare the new topic against every existing article's title, summary, and tags. Look for:
-   - Same or synonymous concepts (e.g., "UF membrane cleaning" vs "membrane CIP procedure")
+2. Scan ALL existing articles comparing the new topic against every article's title, summary, and tags. Look for:
+   - Same or synonymous concepts
    - Overlapping tags
    - Summaries that describe the same underlying knowledge
 
-3. **If NO related articles found:** proceed silently to Step 5.
+3. **If NO related articles found:** proceed to Step 5.
 
 4. **If related articles found**, show them to the user:
 
-   **"Before I create a new article, I found these existing articles that might be related:**
+   **"Before I save this, I found these existing articles that might be related:**
 
    - **`<slug-1>`** — <summary> *(status: <status>)*
    - **`<slug-2>`** — <summary> *(status: <status>)*
 
    **Is this genuinely a new topic, or should this knowledge go into one of these existing articles?"**
 
-5. **If the user says it's new:** proceed to Step 5 (branch creation).
+5. **If the user says it's new:** proceed to Step 5.
 
-6. **If the user says it belongs in an existing article:** still capture the knowledge — ask the same questions you would for a new article (summary, details, sources). Then file it as a GitHub issue:
+6. **If the user says it belongs in an existing article:** file it as a GitHub issue on the wiki:
 
    ```bash
    gh issue create --repo Icelandic-Provisions/RnD-Wiki \
@@ -181,162 +196,42 @@ Before creating anything, scan the existing knowledge base for articles that mig
    <source references from the current session>
 
    ---
-   *Filed automatically by `/culture add` — this knowledge was identified as belonging
-   to an existing article rather than a new one.*
+   *Filed automatically by `/culture add`.*
    EOF
    )"
    ```
 
    Then tell the user:
 
-   **"Got it — I've filed the knowledge as an issue on the wiki. Someone can merge it into the existing article during the next review. You're all set to get back to work."**
+   **"Got it — I've filed the knowledge as an issue on the wiki. It'll be merged into the existing article during the next review. Back to work!"**
 
-   Then END the Add workflow — do NOT create a branch, template, or PR.
+   Then END the Add workflow — do NOT proceed to Step 5.
 
-### Step 5: Create the branch and file
+### Step 5: Dispatch background worker
 
-Run the following in `~/projects/RnD-Wiki`:
+Spawn the `culture-worker` agent in the background:
 
-1. Make sure you're on main and up to date:
-   ```bash
-   cd ~/projects/RnD-Wiki && git checkout main && git pull
-   ```
-
-2. Check for slug collisions before creating anything:
-   ```bash
-   test -f ~/projects/RnD-Wiki/articles/<domain>/<slug>.md
-   ```
-
-   If the file already exists, tell the user:
-
-   **"There's already an article called `<slug>` in that domain. Want to pick a different name, or did you mean to update the existing one? (Updating an existing article is a different process — let me know and I'll walk you through it.)"**
-
-   Then STOP and wait for the user to choose a new slug or confirm they want to update. If updating, point them to the RnD-Wiki CONTRIBUTING.md process for updating validated articles. Do NOT create a branch until the slug is confirmed unique.
-
-3. Create a new branch:
-   ```bash
-   cd ~/projects/RnD-Wiki && git checkout -b "docs/<slug>"
-   ```
-
-4. Ensure the domain folder exists and copy the template:
-   ```bash
-   mkdir -p ~/projects/RnD-Wiki/articles/<domain>
-   cp ~/projects/RnD-Wiki/templates/article-template.md ~/projects/RnD-Wiki/articles/<domain>/<slug>.md
-   ```
-
-Tell the user: **"Created a new branch and article file."**
-
-### Step 6: Fill the frontmatter
-
-Edit the new article file. Fill in the YAML frontmatter:
-
-- `title`: The topic, in title case
-- `slug`: The generated slug
-- `summary`: Ask the user — **"In one sentence, what's the key takeaway someone should know about this topic?"**
-- `status`: `draft`
-- `tags`: Ask the user — **"Any tags for this? These help people find the article later. Here are some common ones: `uf-membranes`, `dairy-science`, `formulation`, `scheduling`, `mass-balance`, `equipment`, `cip`, `fermentation`, `htst`, `scoring`, `constants`, `tetra-pak`. You can use existing tags or make new ones (just use lowercase-with-hyphens)."**
-- `domain`: The domain chosen in Step 2
-- `created`: Today's date (YYYY-MM-DD)
-- `updated`: Today's date (YYYY-MM-DD)
-- `author`: `claude-code`
-- `reviewed-by`: (leave empty)
-- `review-date`: (leave empty)
-- `sources`: Fill based on where the knowledge came from in the current session. Use the appropriate source type:
-  - `project-file` if it came from reading code
-  - `expert-knowledge` if the user shared it from experience
-  - `vendor-doc` or `external-literature` if from external sources
-- `related`: (leave empty — can be filled during review)
-
-### Step 7: Write the article body
-
-Ask the user:
-
-**"Now let's capture the knowledge. Tell me what you've learned about this topic — I'll write it up in the article format. You can be as detailed or brief as you want. I'll organize it into sections:**
-
-- **What This Is — plain-language explanation**
-- **Details — the core knowledge (I'll use tables for any numbers or specs)**
-- **Where This Is Used — which projects or decisions this matters for**
-- **Open Questions — anything that still needs to be checked or confirmed"**
-
-Listen to the user's response and fill in the article sections. Follow the wiki's writing standards:
-- Plain language first — define jargon on first use
-- Every claim needs a source (fill the `sources:` field)
-- Use tables for constants and specs
-- The summary line must be understandable by someone who is not a programmer
-
-### Step 8: Update the index
-
-Run:
-
-```bash
-cd ~/projects/RnD-Wiki && make index
+```
+Agent({
+  description: "Publish wiki article: <slug>",
+  name: "culture-worker",
+  run_in_background: true,
+  prompt: "Topic: <topic>\nKnowledge: <knowledge content>\nDomain: <domain>\nSlug: <slug>\nSource type: <source_type>"
+})
 ```
 
-Tell the user: **"Updated the master index."**
-
-### Step 9: Commit
-
-Stage and commit the new article and the updated index:
-
-```bash
-cd ~/projects/RnD-Wiki && git add "articles/<domain>/<slug>.md" INDEX.md && git commit -m "$(cat << 'EOF'
-docs: add <slug> article (draft)
-
-New knowledge base article capturing <one-line summary of topic>.
-Domain: <domain>. Status: draft.
-
-Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
-EOF
-)"
-```
-
-### Step 10: Open a PR
-
-Push the branch and create a PR:
-
-```bash
-cd ~/projects/RnD-Wiki && git push -u origin "docs/<slug>"
-```
-
-Then create the PR using the repo's PR template format:
-
-```bash
-cd ~/projects/RnD-Wiki && gh pr create --title "docs: add <slug>" --body "$(cat << 'EOF'
-## Article Review
-
-**Article slug:** `<slug>`
-**Domain:** `<domain>`
-**Status change:** `draft` → `in-review`
-
-### What This Article Covers
-
-<Brief description of the knowledge captured>
-
-### Review Checklist
-
-- [ ] Summary line is accurate and understandable by a non-expert
-- [ ] All facts are supported by cited sources
-- [ ] Sources are accessible (file paths exist, references are real)
-- [ ] No unsourced claims
-- [ ] Tags use the controlled vocabulary where possible
-- [ ] Article is in the correct domain folder
-- [ ] Related articles are correctly cross-referenced
-- [ ] Constants and formulas match the cited source code or literature
-EOF
-)"
-```
+### Step 6: Confirm dispatch
 
 Tell the user:
 
-**"All done! Here's what I created:**
+**"Got it — I'm saving that to the knowledge base in the background. You'll get a notification when it's live. Back to what we were doing!"**
 
-- **Article:** `articles/<domain>/<slug>.md`
-- **Branch:** `docs/<slug>`
-- **PR:** <link to PR>
+### On worker completion
 
-**The article starts as a draft. A reviewer will check the facts and sources, then mark it as validated. Once validated, every project agent will treat it as confirmed knowledge.**
+When the background worker returns:
 
-**You can view the PR on GitHub to see the review checklist."**
+- **status = "created":** Tell the user: **"Article `<slug>` is now live in the knowledge base at `articles/<domain>/<slug>.md`. Your colleagues can see it immediately."**
+- **status = "error":** Tell the user: **"There was a problem saving to the wiki: <message>. You can try again with `/culture add`."**
 
 ## Search
 
