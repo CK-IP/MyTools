@@ -59,10 +59,6 @@ ln -s "$(pwd)/commands/epic-brief-schema.md" ~/.claude/commands/epic-brief-schem
 rm -f ~/.claude/commands/fortify.md
 ln -s "$(pwd)/commands/fortify.md" ~/.claude/commands/fortify.md
 
-# /sloop — standard-weight ship pipeline (between /skiff and /ship)
-rm -f ~/.claude/commands/sloop.md
-ln -s "$(pwd)/commands/sloop.md" ~/.claude/commands/sloop.md
-
 # /refresh — check memory for staleness, broken refs, duplicates, and contradictions
 rm -f ~/.claude/commands/refresh.md
 ln -s "$(pwd)/commands/refresh.md" ~/.claude/commands/refresh.md
@@ -110,7 +106,6 @@ ls -la ~/.claude/commands/idea.md
 ls -la ~/.claude/commands/fleet.md
 ls -la ~/.claude/commands/epic-brief-schema.md
 ls -la ~/.claude/commands/fortify.md
-ls -la ~/.claude/commands/sloop.md
 ls -la ~/.claude/commands/refresh.md
 ls -la ~/.claude/commands/space.md
 ls -la ~/.claude/commands/culture.md

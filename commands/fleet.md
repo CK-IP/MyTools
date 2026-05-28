@@ -495,7 +495,7 @@ Sections: Epic summary, worker results, QA findings, domain updates, merge order
 ## Cross-references
 
 - `commands/idea.md` — triage skill that routes to /fleet for XL
-- `commands/sloop.md` — standard-weight pipeline; available as worker pipeline
+- `cc-dotfiles: home/commands/sloop.md` — standard-weight pipeline; available as worker pipeline
 - `cc-dotfiles: home/commands/ship.md` — full pipeline; default worker pipeline
 - `cc-dotfiles: home/commands/skiff.md` — lightweight pipeline; excluded from /fleet (no branch isolation)
 - `commands/epic-brief-schema.md` — epic-brief template consumed at Step 1
