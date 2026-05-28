@@ -17,11 +17,15 @@ The native Claude Code agent teams feature handles split panes automatically whe
 
 ### Step 0: Orchestrator model check
 
-Before doing anything else, say:
+Before doing anything else, check your own environment line ("You are powered by the model named...") and confirm:
+1. You are running **opus** (any version: 4.6, 4.7, etc.)
+2. Your context window is **1M** (not 200K)
 
-> "For best results, the orchestrator (this session) should be running **opus**. If you're not already on opus, switch now — then re-run `/fleet <issue>`. Workers will run on sonnet; QA will run on opus automatically."
+If either check fails, say:
 
-Ask: **"Are you on opus? (yes to continue, no to switch first)"**
+> "The orchestrator needs opus with 1M context. Run `/model` and select the opus option that shows **1M context**, then re-run `/fleet <issue>`."
+
+Ask: **"I'm on [model name] with [context size]. Continue?"**
 
 Do not proceed until the user confirms yes.
 
@@ -146,6 +150,19 @@ Agent(
 ```
 You are the rolling QA reviewer for Epic #<epic_issue>: <epic_title>.
 
+## Step 1: Model confirmation (do this BEFORE any other work)
+
+Check your environment line ("You are powered by the model named...") and report
+your model and context window to the team lead:
+
+"QA ready. Model: [model name]. Context: [size]. Waiting for confirmation."
+
+Then STOP and wait for a message from the team lead. Do not proceed until you
+receive confirmation. The user may need to switch your model via /model to ensure
+you have 1M context.
+
+## Step 2: Begin QA work (only after confirmation)
+
 You will be notified via SendMessage as each worker completes. Review each worker
 immediately upon notification — do not wait for all workers to finish.
 
@@ -230,6 +247,19 @@ Agent(
 ```
 You are Worker <name> for Epic #<epic_issue>: <epic_title>.
 
+## Step 1: Model confirmation (do this BEFORE any other work)
+
+Check your environment line ("You are powered by the model named...") and report
+your model and context window to the team lead:
+
+"Worker <name> ready. Model: [model name]. Context: [size]. Waiting for confirmation."
+
+Then STOP and wait for a message from the team lead. Do not proceed until you
+receive confirmation. The user may need to switch your model via /model to ensure
+you have 1M context.
+
+## Step 2: Begin work (only after confirmation)
+
 Sub-issue: #<sub_issue>
 Files you own (exclusive write): <files_owned>
 Files you may read: <files_readonly>
@@ -288,6 +318,20 @@ Report back to the orchestrator:
 ```
 
 **All workers spawn in the same call — do not wait for one before spawning the next.**
+
+### Step 10a: Model confirmation gate
+
+Each teammate (QA + all workers) will report its model and context window, then wait.
+There is a known Claude Code bug where tmux teammates may get 200K context instead of 1M.
+
+Present the teammate reports to the user as they arrive:
+
+> "**Model check:** QA reports [model, context]. Worker-A reports [model, context]. ..."
+>
+> "Any teammate showing 200K needs a manual `/model` switch in its tmux pane — select the 1M variant. Let me know when ready and I'll tell them to proceed."
+
+Wait for the user to confirm all teammates are on the right model with 1M context.
+Then send each teammate a confirmation message: "Model confirmed. Proceed."
 
 ### Step 10b: Branch-clean check
 
@@ -489,7 +533,7 @@ Sections: Epic summary, worker results, QA findings, domain updates, merge order
 - **Never create tmux sessions or windows manually — the framework handles split panes.**
 - Workers do not merge, push, or close issues. Orchestrator handles all of this.
 - Orchestrator is the single writer for domain.md. Workers only propose.
-- **Model assignments:** Orchestrator = opus (manual — confirm at Step 0), QA = opus (auto), Workers = sonnet (auto).
+- **Model assignments:** Orchestrator = opus (Step 0), QA = opus (Step 9), Workers = sonnet (Step 10). All teammates must confirm 1M context at Step 10a before starting work — user manually switches via `/model` in tmux panes if needed.
 - On any CONFLICT: stop and explain in plain language before proceeding.
 
 ## Cross-references
