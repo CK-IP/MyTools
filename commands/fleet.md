@@ -73,17 +73,10 @@ PASS=0; FAIL=0
 pass() { echo "PASS: $1"; PASS=$((PASS+1)); }
 fail() { echo "FAIL: $1"; FAIL=$((FAIL+1)); }
 
-# One assert_* function per contract — generated from contracts.md
-# Example (replace with actual contracts):
-# assert_user_api() {
-#   grep -q 'def get_user' src/api/users.py || fail "get_user missing in users.py"
-#   grep -q 'def create_user' src/api/users.py || fail "create_user missing in users.py"
-#   pass "user_api contract satisfied"
-# }
-
-# Invoke each contract assertion (one call per assert_* function above):
-# assert_user_api
-# assert_<contract2>
+# One assert_* function per contract (from contracts.md interface specs); each greps for
+# the required symbols and calls pass/fail, then is invoked below. Example:
+#   assert_user_api() { grep -q 'def get_user' src/api/users.py || fail "get_user missing"; pass "user_api"; }
+# Invoke each: assert_user_api; assert_<contract2>; ...
 
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
@@ -255,27 +248,18 @@ If your pipeline is `/sloop`, this runs the standard-weight pipeline
 
 ## Rules — these override your pipeline's end-of-run defaults
 
-### If your pipeline is `/ship`:
+### End-of-run gate (pipeline-specific):
 
-1. End-of-run: When /ship presents end-of-run options (Stage 6e), always select
-   "Done — I'll handle it". Never merge, push, or close issues. The orchestrator
-   handles all merging.
-
-2. Domain write: At Stage 6d, do NOT write to domain.md. Note your proposed rules
-   and include them in your completion report to the orchestrator. The orchestrator
-   is the single writer for domain.md.
-
-### If your pipeline is `/sloop`:
-
-1. End-of-run: When /sloop presents the convergence gate (Stage 3d), select
-   "Commit only". Never push or close issues. The orchestrator handles all
-   merging.
-
-2. Domain write: At Stage 5 (Learn), do NOT write to domain.md. Note your proposed
-   rules and include them in your completion report to the orchestrator. The
-   orchestrator is the single writer for domain.md.
+- **/ship:** At end-of-run options (Stage 6e), select "Done — I'll handle it".
+- **/sloop:** At the convergence gate (Stage 3d), select "Commit only".
 
 ### All pipelines:
+
+1. Never merge, push, or close issues — the orchestrator handles all merging.
+
+2. Do NOT write to domain.md (the relevant stage is /ship Stage 6d or /sloop Stage 5).
+   Note your proposed rules in your completion report instead — the orchestrator is the
+   single writer for domain.md.
 
 3. File ownership: Only write to files in your files_owned list. Do not modify any
    other files, even if the plan suggests doing so.
