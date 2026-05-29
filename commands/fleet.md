@@ -208,6 +208,13 @@ Write your findings to .ship/epic-<epic_issue>/qa-<sub_issue>.md before sending
 your verdict.
 
 Wait for SendMessage from the orchestrator before reviewing each worker.
+
+## Shutdown
+
+You are the rolling reviewer — stay active across all workers; do not exit after
+clearing one. When the orchestrator sends a final dismissal message (e.g. "All workers
+merged — QA complete. You're dismissed; please shut down."), acknowledge briefly and
+end your turn.
 ```
 
 ### Step 10: Spawn all workers simultaneously
@@ -285,6 +292,17 @@ Report back to the orchestrator:
 - Branch: ship/<sub_issue>
 - Domain proposals: <list each proposed rule, or "none">
 - Advisories: <anything the orchestrator or QA should know>
+
+## Shutdown
+
+After you report completion, the orchestrator routes your branch to QA and then sends
+one of two messages. Wait for it — do not assume you are done:
+
+- **Dismissal** (e.g. "Cleared by QA — you're dismissed; please shut down."): your work
+  is complete and captured on your branch. Acknowledge briefly and **end your turn** —
+  do not keep the session open waiting for more work.
+- **Revision request** (a CONFLICT from QA): address it, re-report, then again wait for
+  dismissal.
 ```
 
 **All workers spawn in the same call — do not wait for one before spawning the next.**
@@ -298,6 +316,22 @@ git diff main --name-only  # on each worker's branch
 ```
 
 If any files appear that are NOT in that worker's `files_owned` list, stop that worker immediately via `SendMessage` before it does real work and alert the user: "Worker <name>'s branch contains files outside their ownership: <files>. This needs to be resolved before work begins."
+
+### Step 10c: Wave discipline (dependency-ordered builds)
+
+The default is to spawn all workers at once (Step 10). But when sub-issues have merge
+dependencies — a later sub-issue cannot begin until an earlier one lands — the
+orchestrator runs in **waves**: each wave is a batch of independent workers spawned
+together.
+
+In a waved build, apply per-worker shutdown (Step 13) **within each wave**: do not spawn
+the next wave until the current wave's workers have been QA-cleared AND shut down. This
+keeps finished panes from piling up alongside the next wave's active panes (the failure
+mode this guards against: Wave-1 workers sitting idle through Wave-2).
+
+Shutdown is decoupled from merge — a dismissed worker's `ship/<sub_issue>` branch
+persists, so you can free a wave's panes immediately on QA-clear regardless of when its
+branches merge (Step 20).
 
 ---
 
@@ -322,7 +356,9 @@ b. Run contract tests: `bash .ship/epic-<issue>/contract-tests.sh` on the worker
    re-running.
    _(Step 11b semantic check runs next — gates items c/d/e)_
 c. Use `TaskUpdate` to mark their task completed.
-d. Reply to the worker: "Done — I'll handle it from here."
+d. Reply to the worker: "Received — routing to QA review. Stand by for dismissal."
+   (Do NOT dismiss the worker yet — QA review is still pending and may surface a
+   CONFLICT requiring the worker to revise. Dismissal happens at Step 13 on CLEAR.)
 e. Send to QA via `SendMessage`:
    `SendMessage(to: "qa", message: "Worker <name> complete. Branch: ship/<sub_issue>.")`
 
@@ -368,6 +404,13 @@ QA sends `SendMessage` to orchestrator with CLEAR / CONFLICT / ADVISORY.
 
 - Use `TaskUpdate` to note QA cleared.
 - Reply to QA: "Acknowledged — awaiting next worker."
+- **Dismiss the cleared worker.** Send a graceful shutdown request via `SendMessage`:
+  `SendMessage(to: "worker-<name>", message: "Cleared by QA — work complete and captured on ship/<sub_issue>. You're dismissed; please shut down.")`
+  The worker acknowledges and ends its turn, closing its pane. Its `ship/<sub_issue>`
+  branch persists for the merge phase (Step 20) — **shutdown is decoupled from merge**.
+  Do not leave cleared workers idling. There is no force-kill in Claude Code agent teams;
+  shutdown is a request the teammate accepts. If a worker does not exit, note it for the
+  user — it is cleaned up by `TeamDelete` at Step 22b.
 
 ### Step 14: On CONFLICT
 
@@ -463,6 +506,20 @@ git push origin --delete "ship/<sub_issue>" 2>/dev/null || true
 git branch -d "ship/<sub_issue>" 2>/dev/null || true
 ```
 
+### Step 22b: Tear down the team
+
+After all worker branches are merged and cleaned up:
+
+- Confirm all workers have shut down (each was dismissed at Step 13 as it cleared).
+- Dismiss QA via `SendMessage`:
+  `SendMessage(to: "qa", message: "All workers merged — QA complete. You're dismissed; please shut down.")`
+- Once all teammates have shut down, call `TeamDelete(team_name: "epic-<issue>")` to tear
+  down the team and close any remaining panes.
+
+`TeamDelete` fails if any teammate is still active. On error, identify the still-running
+teammate, send it a shutdown request via `SendMessage`, wait for it to exit, then retry
+`TeamDelete`. A clean `/fleet` run ends with no orphaned idle panes.
+
 ### Step 23: Close Epic
 
 Spawn @board with: `done <epic_issue>`
@@ -488,6 +545,7 @@ Sections: Epic summary, worker results, QA findings, domain updates, merge order
 - **Always use `TeamCreate` + `Agent(team_name: ...)` — never `run_in_background: true` alone.**
 - **Never create tmux sessions or windows manually — the framework handles split panes.**
 - Workers do not merge, push, or close issues. Orchestrator handles all of this.
+- **Dismiss workers as they clear.** A QA-cleared worker is shut down immediately (Step 13) via a `SendMessage` shutdown request — its branch persists for the merge. Never leave cleared workers idling. The team is torn down with `TeamDelete` at Step 22b so a run ends with no orphaned panes.
 - Orchestrator is the single writer for domain.md. Workers only propose.
 - **Model assignments:** Orchestrator = opus (manual — confirm at Step 0), QA = opus (auto), Workers = sonnet (auto).
 - On any CONFLICT: stop and explain in plain language before proceeding.

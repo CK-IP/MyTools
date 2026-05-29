@@ -83,6 +83,21 @@ grep -qE '### Step 23.*[Cc]lose' "$TARGET" && pass "Step 23 is Close Epic (renum
 # 22. Old Step 23 renumbered to Step 24
 grep -qE '### Step 24.*ship' "$TARGET" && pass "Step 24 is ship's log (renumbered)" || fail "Step 24 not ship's log"
 
+# 23. Worker shutdown: TeamDelete present (end-of-run team teardown)
+grep -q 'TeamDelete' "$TARGET" && pass "TeamDelete present" || fail "TeamDelete missing"
+
+# 24. Shutdown language present (graceful shutdown request)
+grep -qiE 'shut down|shutdown' "$TARGET" && pass "shutdown language present" || fail "shutdown language missing"
+
+# 25. Step 22b exists (team teardown — does not renumber 22/23/24)
+grep -qE '### Step 22b' "$TARGET" && pass "Step 22b present" || fail "Step 22b missing"
+
+# 26. Wave discipline documented (Step 10c)
+grep -qiE 'Step 10c|[Ww]ave discipline' "$TARGET" && pass "wave discipline present" || fail "wave discipline missing"
+
+# 27. Worker dismissal on QA CLEAR present
+grep -qi 'dismiss' "$TARGET" && pass "worker dismissal present" || fail "worker dismissal missing"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 
