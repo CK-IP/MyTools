@@ -1,5 +1,6 @@
 ---
 name: explore-first
+description: Read-only research investigator — understands the true problem and finds the right solution before any code is changed
 model: claude-opus-4-7
 allowed-tools: Read, Glob, Grep
 ---

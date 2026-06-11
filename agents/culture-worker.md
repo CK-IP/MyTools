@@ -1,5 +1,6 @@
 ---
 name: culture-worker
+description: Wiki-worker — fire-and-forget background agent that publishes knowledge base articles to the RnD-Wiki
 model: claude-sonnet-4-6
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 ---
