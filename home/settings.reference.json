@@ -68,6 +68,16 @@
             "command": "bash ~/.claude/hooks/research-gate.sh"
           }
         ]
+      },
+      {
+        "_comment": "CK-Skills: local TDD guard — requires a failing sail test marker before source edits",
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/hooks/sail-tdd-guard.sh"
+          }
+        ]
       }
     ],
     "Stop": [

@@ -2,6 +2,8 @@
 
 Step-by-step instructions for setting up the skills in this repo on your machine.
 
+`sail/` is a local runner invoked as `python3 -m sail`; it is not symlinked.
+
 ---
 
 ## Prerequisites
@@ -90,6 +92,10 @@ ln -s "$(pwd)/hooks/codex-redirect.sh" ~/.claude/hooks/codex-redirect.sh
 # research-gate — PreToolUse on Edit|Write|Task: soft gate research checklist
 rm -f ~/.claude/hooks/research-gate.sh
 ln -s "$(pwd)/hooks/research-gate.sh" ~/.claude/hooks/research-gate.sh
+
+# sail-tdd-guard — PreToolUse on Edit|Write: local TDD marker guard
+rm -f ~/.claude/hooks/sail-tdd-guard.sh
+ln -s "$(pwd)/hooks/sail-tdd-guard.sh" ~/.claude/hooks/sail-tdd-guard.sh
 
 # --- Skills ---
 
