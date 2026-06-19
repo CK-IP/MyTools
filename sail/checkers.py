@@ -7,6 +7,17 @@ import re
 from dataclasses import dataclass
 from typing import List
 
+# bandit -r does NOT honor .gitignore, and CLI -x REPLACES (not appends to) bandit's built-in
+# default excludes. bandit matches -x entries as fnmatch globs against the full path (bare dir
+# names like ".git" do NOT prune nested dirs — verified on bandit 1.8.6), so use */<dir>/* glob
+# form. Restate the defaults in glob form and add .claude (nested git worktrees) and .sail (sail
+# run dirs, incl. the diff-mode baseline worktree) — else bandit scans nested checkouts the clean
+# diff baseline lacks → spurious "new" findings → false block.
+_BANDIT_EXCLUDE = (
+    "*/.svn/*,*/CVS/*,*/.bzr/*,*/.hg/*,*/.git/*,*/__pycache__/*,*/.tox/*,*/.eggs/*,*.egg,"
+    "*/.claude/*"
+)
+
 
 def _testpaths_from_ini(path, section):
     # Returns (section_present, testpaths) where testpaths is None when the testpaths KEY
@@ -149,7 +160,7 @@ class Checker:
             ]
             return argv
         if self.name == "bandit":
-            return ["bandit", "-r", target, "-f", "sarif", "-o", artifact_path]
+            return ["bandit", "-r", target, "-x", _BANDIT_EXCLUDE, "-f", "sarif", "-o", artifact_path]
         if self.name == "semgrep":
             return ["semgrep", "--sarif", "--output", artifact_path, target]
         if self.name == "pip-audit":

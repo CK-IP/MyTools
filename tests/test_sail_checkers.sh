@@ -235,10 +235,69 @@ with tempfile.TemporaryDirectory() as td:
     if positionals(cmd_ta) != [os.path.join(ta, "tests")]:
         raise SystemExit(f"FAIL: section present but no testpaths key must fall back to tests/: {cmd_ta!r}")
 
-print("PASS: sail.checkers pytest scope/classification/reason (#33, #35) verified")
+# (4) bandit gate must exclude nested worktree / sail-internal dirs (#44). bandit -r does
+#     NOT honor .gitignore, so without -x it scans .claude/worktrees and the .sail diff
+#     baseline checkout → spurious "new" findings vs the clean baseline → false block.
+bandit_chk = registry["bandit"]
+with tempfile.TemporaryDirectory() as _bt:
+    bcmd = bandit_chk.build_command(_bt, os.path.join(_bt, "bandit.sarif"))
+    if "-x" not in bcmd and "--exclude" not in bcmd:
+        raise SystemExit(f"FAIL: bandit build_command must pass -x/--exclude: {bcmd!r}")
+    _xval = bcmd[(bcmd.index("-x") if "-x" in bcmd else bcmd.index("--exclude")) + 1]
+    if ".claude" not in _xval:
+        raise SystemExit(f"FAIL: bandit --exclude must include .claude (nested worktrees), got {_xval!r}")
+    # RT-1: must NOT exclude .sail — the diff baseline worktree lives under .sail/runs/.../
+    # baseline-src, so excluding it would empty the baseline scan and reintroduce the false block.
+    if ".sail" in _xval:
+        raise SystemExit(f"FAIL: bandit --exclude must NOT include .sail (empties the diff baseline): {_xval!r}")
+
+print("PASS: sail.checkers pytest scope/classification/reason (#33, #35) + bandit exclude (#44) verified")
 PY
 then
   fail "sail.checkers pytest scope-correctness (#33) failed"
 fi
 
 echo "PASS: sail.checkers pytest scope-correctness (#33) verified"
+
+# (4e) end-to-end: bandit gate must not flag files inside nested .claude/ or .sail/ checkouts
+#      (#44). Guarded on bandit availability — hermetic skip where the tool is absent.
+if command -v bandit >/dev/null 2>&1; then
+  if ! python3 - << 'PY'
+import json, os, subprocess, tempfile
+import sail.checkers as checkers
+bandit_chk = {c.name: c for c in checkers.build_registry()}["bandit"]
+FLAG = "import subprocess\nsubprocess.Popen('id', shell=True)\n"  # B602: shell=True
+def scan(target):
+    out = os.path.join(target, "bandit.sarif")
+    subprocess.run(bandit_chk.build_command(target, out), capture_output=True, text=True)
+    results = json.load(open(out)).get("runs", [{}])[0].get("results", [])
+    return [r.get("locations", [{}])[0].get("physicalLocation", {}).get("artifactLocation", {}).get("uri", "") for r in results]
+
+# (a) nested .claude/worktrees is excluded; real-tree is still scanned.
+with tempfile.TemporaryDirectory() as td:
+    open(os.path.join(td, "bad.py"), "w").write(FLAG)                       # real-tree (must flag)
+    os.makedirs(os.path.join(td, ".claude/worktrees/wt"))                   # nested worktree (must NOT flag)
+    open(os.path.join(td, ".claude/worktrees/wt/bad.py"), "w").write(FLAG)
+    uris = scan(td)
+    if not [u for u in uris if "/.claude/" not in u]:
+        raise SystemExit(f"FAIL: bandit must still flag the real-tree bad.py; uris={uris}")
+    if [u for u in uris if "/.claude/" in u]:
+        raise SystemExit(f"FAIL: bandit must NOT flag files under nested .claude/: {uris}")
+
+# (b) RT-1 regression: the diff baseline worktree lives at <run_dir>/baseline-src under .sail/,
+# so a scan ROOTED inside a .sail/ path must STILL find its files (excluding .sail would empty
+# the baseline scan → all current findings look new → false block).
+with tempfile.TemporaryDirectory() as td:
+    bsrc = os.path.join(td, ".sail", "runs", "r", "baseline-src")
+    os.makedirs(bsrc)
+    open(os.path.join(bsrc, "bad.py"), "w").write(FLAG)
+    if not scan(bsrc):
+        raise SystemExit("FAIL: bandit must still scan a baseline tree rooted under .sail/ (RT-1)")
+print("PASS: bandit excludes nested .claude/ but still scans baseline trees under .sail/ (#44, RT-1)")
+PY
+  then
+    fail "sail.checkers bandit nested-exclusion (#44) failed"
+  fi
+else
+  echo "SKIP: bandit not installed — #44 end-to-end exclusion check skipped"
+fi
