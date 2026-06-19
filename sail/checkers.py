@@ -9,10 +9,14 @@ from typing import List
 
 
 def _testpaths_from_ini(path, section):
+    # Returns (section_present, testpaths) where testpaths is None when the testpaths KEY
+    # is absent (caller falls back), or a list (possibly empty for an explicit empty value).
     parser = configparser.ConfigParser()
     parser.read(path, encoding="utf-8")
     if not parser.has_section(section):
-        return False, []
+        return False, None
+    if not parser.has_option(section, "testpaths"):
+        return True, None
     raw = parser.get(section, "testpaths", fallback="")
     return True, raw.split()
 
@@ -26,7 +30,7 @@ def _testpaths_from_pyproject(path, _section):
         text = fh.read()
     header = re.search(r"(?m)^\[tool\.pytest\.ini_options\]\s*$", text)
     if not header:
-        return False, []
+        return False, None
     rest = text[header.end():]
     nxt = re.search(r"(?m)^\[", rest)
     body = rest[: nxt.start()] if nxt else rest
@@ -36,7 +40,7 @@ def _testpaths_from_pyproject(path, _section):
     str_match = re.search(r"""(?m)^\s*testpaths\s*=\s*["']([^"']+)["']\s*$""", body)
     if str_match:
         return True, [str_match.group(1)]
-    return True, []
+    return True, None
 
 
 def _resolve_pytest_paths(target):
@@ -53,7 +57,9 @@ def _resolve_pytest_paths(target):
         ("setup.cfg", "tool:pytest", _testpaths_from_ini, False),
     ]
     config_file = None
-    testpaths = []
+    # Tri-state: None = no testpaths key seen (fall back); [] = explicitly empty (honor:
+    # no positionals); non-empty list = configured paths (honor verbatim).
+    testpaths = None
     for filename, section, parser, dedicated in candidates:
         path = os.path.join(target, filename)
         if not os.path.isfile(path):
@@ -61,7 +67,7 @@ def _resolve_pytest_paths(target):
         try:
             present, parsed = parser(path, section)
         except Exception:
-            present, parsed = dedicated, []
+            present, parsed = dedicated, None
         if dedicated or present:
             config_file = path
             testpaths = parsed
@@ -71,7 +77,12 @@ def _resolve_pytest_paths(target):
         # path is surfaced by pytest (a real misconfiguration) rather than silently
         # widening the gate's scope back to tests/ or the whole target.
         paths = [entry if os.path.isabs(entry) else os.path.join(target, entry) for entry in testpaths]
+    elif testpaths == []:
+        # Explicitly-empty testpaths (key present, no entries): pass no positionals so pytest
+        # collects per its own config — do NOT widen back to tests/ or the whole target.
+        paths = []
     else:
+        # testpaths is None — the key was absent — fall back to tests/, else the target.
         tests_dir = os.path.join(target, "tests")
         paths = [tests_dir] if os.path.isdir(tests_dir) else [target]
     return paths, config_file

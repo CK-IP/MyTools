@@ -202,7 +202,40 @@ with tempfile.TemporaryDirectory() as td:
     if positionals(cmd_f) != [os.path.join(g, "renamed_suite")]:
         raise SystemExit(f"FAIL: explicitly-configured (even if missing) testpath must be honored verbatim, not widened: {cmd_f!r}")
 
-print("PASS: sail.checkers pytest scope/classification/reason (#33) verified")
+    # Target G: EXPLICIT empty testpaths in pyproject (testpaths = []) must be HONORED —
+    # NO path positionals (let pytest collect per its own config) — NOT widened back to
+    # tests/ even though a tests/ dir exists (#35).
+    te = os.path.join(td, "te")
+    os.makedirs(os.path.join(te, "tests"))
+    with open(os.path.join(te, "pyproject.toml"), "w") as fh:
+        fh.write('[tool.pytest.ini_options]\ntestpaths = []\n')
+    cmd_te = build(te)
+    if positionals(cmd_te) != []:
+        raise SystemExit(f"FAIL: explicit testpaths=[] must yield NO path positionals, not a tests/ fallback: {cmd_te!r}")
+    if os.path.join(te, "tests") in cmd_te:
+        raise SystemExit(f"FAIL: explicit empty testpaths must not fall back to tests/: {cmd_te!r}")
+
+    # Target H: EXPLICIT empty testpaths in pytest.ini (key present, empty value) → no
+    # positionals (#35).
+    ti = os.path.join(td, "ti")
+    os.makedirs(os.path.join(ti, "tests"))
+    with open(os.path.join(ti, "pytest.ini"), "w") as fh:
+        fh.write("[pytest]\ntestpaths =\n")
+    cmd_ti = build(ti)
+    if positionals(cmd_ti) != []:
+        raise SystemExit(f"FAIL: pytest.ini with an empty testpaths value must yield NO path positionals: {cmd_ti!r}")
+
+    # Target I: pytest section present but NO testpaths KEY → fall back to tests/ (the
+    # absent-key case must stay distinct from explicit-empty) (#35).
+    ta = os.path.join(td, "ta")
+    os.makedirs(os.path.join(ta, "tests"))
+    with open(os.path.join(ta, "pyproject.toml"), "w") as fh:
+        fh.write('[tool.pytest.ini_options]\naddopts = "-q"\n')
+    cmd_ta = build(ta)
+    if positionals(cmd_ta) != [os.path.join(ta, "tests")]:
+        raise SystemExit(f"FAIL: section present but no testpaths key must fall back to tests/: {cmd_ta!r}")
+
+print("PASS: sail.checkers pytest scope/classification/reason (#33, #35) verified")
 PY
 then
   fail "sail.checkers pytest scope-correctness (#33) failed"
