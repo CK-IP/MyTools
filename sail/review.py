@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -136,6 +137,17 @@ def _git_diff(target, diff_ref):
     return result.stdout
 
 
+def _sha256(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def diff_fingerprint(target, diff_ref):
+    # SHA-256 of the diff text for (target, diff_ref). The reuse gate compares this
+    # against the fingerprint stored in review.json so a moving ref (e.g. HEAD) whose
+    # content changed re-reviews instead of reusing a stale result (#45).
+    return _sha256(_git_diff(target, diff_ref))
+
+
 def _invoke(prompt):
     argv = _backend_argv()
     try:
@@ -151,8 +163,9 @@ def _invoke(prompt):
 
 def review(target, diff_ref, advisory=False):
     diff_text = _git_diff(target, diff_ref)
+    diff_hash = _sha256(diff_text)
     if not diff_text.strip():
-        return {"findings": [], "raw": "", "rc": 0, "parse_ok": True, "empty_diff": True}
+        return {"findings": [], "raw": "", "rc": 0, "parse_ok": True, "empty_diff": True, "diff_hash": diff_hash}
     rc, out, err = _invoke(build_prompt(diff_text))
     findings = parse_findings(out)
     return {
@@ -162,6 +175,7 @@ def review(target, diff_ref, advisory=False):
         "parse_ok": findings is not None,
         "empty_diff": False,
         "stderr": err,
+        "diff_hash": diff_hash,
     }
 
 
@@ -196,6 +210,7 @@ def run_review(target, diff_ref, run_dir=None, advisory=False):
                 "rc": result["rc"],
                 "counts": counts,
                 "findings": findings,
+                "diff_hash": result.get("diff_hash"),
             },
             fh,
             indent=2,

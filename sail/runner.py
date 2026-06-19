@@ -279,6 +279,11 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
         # A resume that changed --target/--diff must re-review, never reuse a stale result.
         scope_match = resumed and prior_target == target_root and prior_diff_ref == diff_ref
         prior = _completed_review(run_dir) if scope_match else None
+        if prior is not None and prior.get("diff_hash") != review_mod.diff_fingerprint(target_root, diff_ref):
+            # Same target+ref, but the diff CONTENT changed under a moving ref (e.g. HEAD): the
+            # recorded review is stale. Drop it so the run re-reviews the current diff (#45).
+            prior = None
+            decision_log.review_marker("prior review stale (diff content changed under same ref); re-reviewing")
         if prior is not None:
             # Resume of the same scope: reuse the completed review rather than re-invoking
             # the backend, but recompute blocking from its findings (the authoritative

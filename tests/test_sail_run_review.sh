@@ -207,4 +207,22 @@ if grep -qi "Traceback" "$WORK/t15.err"; then fail "T15: reuse path must not cra
 if grep -qi "backend unavailable" "$RD15/decision-log.md"; then fail "T15: must reuse (not re-attempt) — no fail-closed marker"; fi
 echo "PASS T15: blocking is recomputed from findings on reuse; zeroed counts cannot mask a HIGH (RT-3/RT-4 regression)"
 
+# --- T16: resume with SAME --diff HEAD but CHANGED working-tree content must re-review,
+# not reuse a review keyed only on the ref string (#45). ---
+TGT16="$WORK/target16"; mkdir -p "$TGT16"
+printf 'def k():\n    return 0\n' > "$TGT16/mod.py"
+git -C "$TGT16" init -q
+git -C "$TGT16" add -A
+git -C "$TGT16" -c user.email=t@t -c user.name=t commit -qm base
+printf 'def k():\n    return 1  # v1\n' > "$TGT16/mod.py"   # working-tree change v1
+RD16="$WORK/rd16"
+set +e; SAIL_REVIEW_CMD="bash $MOCK" MOCK_OUT="$CLEAN_JSON" python3 -m sail run --target "$TGT16" --diff HEAD --run-dir "$RD16" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "0" ] || fail "T16 setup: run1 (--diff HEAD) should exit 0, got $rc"
+python3 -c "import json,sys;d=json.load(open('$RD16/review.json'));sys.exit(0 if isinstance(d.get('diff_hash'),str) and len(d['diff_hash'])==64 else 1)" || fail "T16: review.json must record a 64-char diff_hash fingerprint"
+printf 'def k():\n    return 2  # v2 different\n' > "$TGT16/mod.py"   # changed content, SAME ref
+CALLED16="$WORK/called16"
+set +e; SAIL_REVIEW_CMD="bash $MOCK2" CALLED="$CALLED16" MOCK_OUT="$CLEAN_JSON" python3 -m sail run --target "$TGT16" --diff HEAD --run-dir "$RD16" >/dev/null 2>&1; rc=$?; set -e
+[ -f "$CALLED16" ] || fail "T16: resume with same ref but changed content must re-review, not reuse a stale review"
+echo "PASS T16: same-ref changed-content resume re-reviews (diff-content fingerprint, #45)"
+
 echo "PASS: sail run gates+review one-pass + resume-safety (#41, #42) verified"
