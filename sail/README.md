@@ -176,3 +176,30 @@ remains the default.
 `run-state.json` records each gate's `mode` (`whole-repo` / `baseline` / `diff`) and
 `new_findings_count`; the run's top-level `target` and `mode` are recorded too. `decision-log.md`
 gets a `- mode: <mode>` marker line. (Unix-focused: Windows path case-folding is not implemented.)
+
+## LLM-reviewer layer (`sail review`)
+
+The deterministic gates catch mechanical hygiene (lint/type/security/dep). They do **not** catch
+design/correctness/scope defects (the kind a human red-team finds). `sail review` adds that
+judgment layer: a **single** code-reviewer (an LLM, invoked via a CLI) that adversarially reviews
+the **diff-scoped** change and returns structured findings.
+
+```bash
+python3 -m sail review --target DIR --diff <git-ref> [--run-dir DIR] [--advisory]
+```
+
+- **Single-agent** by design (no multi-agent / dual-model panel — per the sail research, that is
+  unproven and costs 3–10× the tokens).
+- **Diff-scoped:** reviews only `git -C DIR diff <git-ref>`, never the whole repo.
+- **Backend:** defaults to `claude -p` (Anthropic headless). Override with the env var
+  **`SAIL_REVIEW_CMD`** (e.g. `codex exec ...`, or a mock for tests) — parsed with `shlex` and run
+  as an argv list (no shell); the prompt + diff are passed on **stdin**, never on a command line.
+  **Availability-gated:** if the backend is not installed, the review skips cleanly (exit 0).
+- **Findings** (`severity` ∈ CRITICAL/HIGH/MEDIUM/LOW, `category`, `file`, `line`, `issue`,
+  `recommendation`) are written to `review.json` in the run-dir and summarized in `decision-log.md`.
+- **Gate semantics:** exits **1** when any CRITICAL/HIGH finding is present (or when the backend
+  response is unusable on a non-empty diff — errors never silently pass); exits **0** under
+  `--advisory` (findings still recorded) or when there are no blocking findings.
+
+This is the judgment layer the deterministic backbone lacks — the piece that makes /sail a
+candidate **replacement** for `/ship`'s adversarial review, not just a fast hygiene complement.

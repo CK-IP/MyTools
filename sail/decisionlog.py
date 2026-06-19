@@ -95,3 +95,8 @@ class DecisionLog:
         self._ensure_header()
         suffix = f" (base={_sanitize_text(ref)})" if ref else ""
         self._append_line(f"- mode: {_sanitize_text(mode)}{suffix}")
+
+    def review_marker(self, summary):
+        os.makedirs(self.run_dir, exist_ok=True)
+        self._ensure_header()
+        self._append_line(f"- review: {_sanitize_text(summary)}")
