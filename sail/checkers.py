@@ -169,7 +169,7 @@ class Checker:
 
 
 def build_registry() -> list[Checker]:
-    return [
+    registry = [
         Checker("ruff", "ruff", "ruff.sarif"),
         Checker("mypy", "mypy", "mypy.junit.xml"),
         Checker("pytest", "pytest", "junit.xml"),
@@ -177,3 +177,13 @@ def build_registry() -> list[Checker]:
         Checker("semgrep", "semgrep", "semgrep.sarif"),
         Checker("pip-audit", "pip-audit", "pip-audit.json"),
     ]
+    # Opt-in allowlist (comma-separated checker names) to restrict the registry — e.g. fast
+    # hermetic test runs that only need ruff/pytest as background gates (#51). Unset/empty =
+    # all six (unchanged). Order follows the registry, not the allowlist. Unknown names are
+    # ignored (never crash); a fully-unknown allowlist yields an empty registry, which the
+    # runner handles (no gates) and the LLM-review arm is unaffected.
+    allow = os.environ.get("SAIL_CHECKERS")
+    if allow is not None and allow.strip():
+        names = {n.strip() for n in allow.split(",") if n.strip()}
+        registry = [checker for checker in registry if checker.name in names]
+    return registry

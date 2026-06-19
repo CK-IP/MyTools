@@ -301,3 +301,49 @@ PY
 else
   echo "SKIP: bandit not installed — #44 end-to-end exclusion check skipped"
 fi
+
+# --- Issue #51: SAIL_CHECKERS allowlist restricts build_registry (order preserved, unknown
+# names ignored, unset/empty = all six). Lets fast hermetic test runs skip slow scanners. ---
+if ! SAIL_CHECKERS="pytest,ruff" python3 - <<'PY' >"$LOG_FILE" 2>&1
+import os
+import sail.checkers as checkers
+
+# allowlist restricts AND preserves registry order (not allowlist order)
+got = [c.name for c in checkers.build_registry()]
+if got != ["ruff", "pytest"]:
+    raise SystemExit(f"FAIL: allowlist 'pytest,ruff' should restrict to registry-order ['ruff','pytest'], got {got!r}")
+
+# unknown names are ignored, never crash
+os.environ["SAIL_CHECKERS"] = "ruff,bogus,pytest"
+got = [c.name for c in checkers.build_registry()]
+if got != ["ruff", "pytest"]:
+    raise SystemExit(f"FAIL: unknown allowlist names must be ignored, got {got!r}")
+
+# surrounding whitespace tolerated
+os.environ["SAIL_CHECKERS"] = " ruff , pytest "
+got = [c.name for c in checkers.build_registry()]
+if got != ["ruff", "pytest"]:
+    raise SystemExit(f"FAIL: whitespace around allowlist names must be tolerated, got {got!r}")
+
+# empty string = all six (backward compatible)
+os.environ["SAIL_CHECKERS"] = ""
+if len(checkers.build_registry()) != 6:
+    raise SystemExit("FAIL: empty SAIL_CHECKERS must yield all six checkers")
+
+# whitespace-only = all six (treated as empty)
+os.environ["SAIL_CHECKERS"] = "   "
+if len(checkers.build_registry()) != 6:
+    raise SystemExit("FAIL: whitespace-only SAIL_CHECKERS must yield all six checkers")
+
+# unset = all six
+del os.environ["SAIL_CHECKERS"]
+if [c.name for c in checkers.build_registry()] != ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit"]:
+    raise SystemExit("FAIL: unset SAIL_CHECKERS must yield all six in registry order")
+
+print("PASS: SAIL_CHECKERS allowlist restricts the registry; unset/empty = all six (#51)")
+PY
+then
+  fail "sail.checkers SAIL_CHECKERS allowlist (#51) failed"
+fi
+
+echo "PASS: sail.checkers SAIL_CHECKERS allowlist (#51) verified"

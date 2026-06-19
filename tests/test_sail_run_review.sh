@@ -5,6 +5,10 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="$HOME/Library/Python/3.9/bin:$PATH"
+# #51: restrict the deterministic gate registry to the fast checkers this suite needs as
+# background — only T4 asserts a gate (ruff). Skips semgrep/pip-audit/bandit/mypy (~11s/pass,
+# run twice per --diff call) which test nothing about the LLM-review arm under test here.
+export SAIL_CHECKERS=ruff,pytest
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cd "$REPO_ROOT"
 
