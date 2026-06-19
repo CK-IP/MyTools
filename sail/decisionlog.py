@@ -80,6 +80,9 @@ class DecisionLog:
             return
 
         line = f"{self._entry_key(name, seq)} status={status} rc={record['rc']} artifact={artifact} decision={decision}"
+        reason = record.get("reason")
+        if reason is not None:
+            line += f" reason={_sanitize_text(reason)}"
         self._append_line(line)
 
     def resume_marker(self):

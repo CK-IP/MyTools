@@ -68,3 +68,144 @@ then
 fi
 
 echo "PASS: sail.checkers registry contract verified"
+
+# --- Issue #33: pytest gate scope-correctness + rc classification + reason ---
+# Pins the scope/config-honoring behavior: pytest must be scoped to the project's
+# configured testpaths (else tests/, else target), and rc=2 (collection/config error)
+# and rc=5 (no tests collected) must NOT be treated as blocking failures, with a
+# distinguishing reason recorded for the decision log.
+if ! python3 - <<'PY' >"$LOG_FILE" 2>&1
+import os
+import tempfile
+import sail.checkers as checkers
+
+registry = {c.name: c for c in checkers.build_registry()}
+pytest_chk = registry["pytest"]
+ruff_chk = registry["ruff"]
+
+# (1) rc classification — pytest-specific, non-blocking for rc in {2,5}.
+cases = {0: "passed", 1: "failed", 2: "skipped", 5: "skipped", 3: "failed", 4: "failed"}
+for rc, want in cases.items():
+    got = pytest_chk.classify(rc)
+    if got != want:
+        raise SystemExit(f"FAIL: pytest.classify({rc}) == {got!r}, expected {want!r}")
+
+# Generic checkers stay passed/failed (existing invariant preserved).
+if ruff_chk.classify(2) != "failed":
+    raise SystemExit("FAIL: non-pytest classify(2) must stay 'failed' (generic invariant)")
+if ruff_chk.classify(0) != "passed" or ruff_chk.classify(1) != "failed":
+    raise SystemExit("FAIL: non-pytest classify(0/1) invariant broken")
+
+# (2) reason(rc) — distinguishes rc=1 vs rc=2 vs rc=5 for the decision log.
+r1 = pytest_chk.reason(1) or ""
+r2 = pytest_chk.reason(2) or ""
+r5 = pytest_chk.reason(5) or ""
+if "test failures" not in r1.lower():
+    raise SystemExit(f"FAIL: pytest.reason(1) should mention test failures, got {r1!r}")
+if "collection" not in r2.lower() and "config" not in r2.lower():
+    raise SystemExit(f"FAIL: pytest.reason(2) should mention collection/config error, got {r2!r}")
+if "no test" not in r5.lower():
+    raise SystemExit(f"FAIL: pytest.reason(5) should mention no tests collected, got {r5!r}")
+if pytest_chk.reason(0) is not None:
+    raise SystemExit("FAIL: pytest.reason(0) should be None")
+if ruff_chk.reason(2) is not None:
+    raise SystemExit("FAIL: non-pytest reason(rc) should be None")
+
+# (2b) cwd(target) — the pytest gate must run from the project root so the project's
+#      own test execution model (relative fixture paths, conftest discovery) holds;
+#      other checkers receive the target as an argument and run from the default cwd.
+with tempfile.TemporaryDirectory() as _t:
+    if pytest_chk.cwd(_t) != _t:
+        raise SystemExit(f"FAIL: pytest.cwd(target) must be the target, got {pytest_chk.cwd(_t)!r}")
+    if ruff_chk.cwd(_t) is not None:
+        raise SystemExit(f"FAIL: non-pytest cwd(target) must be None, got {ruff_chk.cwd(_t)!r}")
+
+# (3) build_command scoping — honor configured testpaths; the positional test
+#     paths must be the resolved scope (never the whole tree when a config / tests
+#     dir exists); pin the target's config via -c + --rootdir.
+def build(target):
+    return pytest_chk.build_command(target, os.path.join(target, "junit.xml"))
+
+def positionals(cmd):
+    out = []
+    for tok in cmd[1:]:
+        if tok.startswith("-"):
+            break
+        out.append(tok)
+    return out
+
+with tempfile.TemporaryDirectory() as td:
+    # Target A: pyproject testpaths=["tests"], plus an out-of-scope engine/ tree.
+    a = os.path.join(td, "a")
+    os.makedirs(os.path.join(a, "tests"))
+    os.makedirs(os.path.join(a, "engine"))
+    with open(os.path.join(a, "pyproject.toml"), "w") as fh:
+        fh.write('[tool.pytest.ini_options]\ntestpaths = ["tests"]\n')
+    cmd = build(a)
+    if cmd[0] != "pytest":
+        raise SystemExit(f"FAIL: build_command[0] != 'pytest': {cmd!r}")
+    if positionals(cmd) != [os.path.join(a, "tests")]:
+        raise SystemExit(f"FAIL: positional test paths must be exactly the configured tests/ scope: {cmd!r}")
+    if os.path.join(a, "engine") in cmd:
+        raise SystemExit(f"FAIL: must NOT include the out-of-scope engine/ tree anywhere: {cmd!r}")
+    if "-c" not in cmd or os.path.join(a, "pyproject.toml") not in cmd:
+        raise SystemExit(f"FAIL: must pin target config via -c <pyproject.toml>: {cmd!r}")
+    if "--rootdir" not in cmd or a not in cmd:
+        raise SystemExit(f"FAIL: must pass --rootdir <target>: {cmd!r}")
+
+    # Target B: no config, but a tests/ dir → default to tests/ (positional).
+    b = os.path.join(td, "b")
+    os.makedirs(os.path.join(b, "tests"))
+    cmd_b = build(b)
+    if positionals(cmd_b) != [os.path.join(b, "tests")]:
+        raise SystemExit(f"FAIL: no-config target with tests/ must scope positionals to tests/: {cmd_b!r}")
+
+    # Target C: no config, no tests/ → fall back to the target itself (positional).
+    c = os.path.join(td, "c")
+    os.makedirs(c)
+    cmd_c = build(c)
+    if positionals(cmd_c) != [c]:
+        raise SystemExit(f"FAIL: bare target (no config/tests) must fall back to [target] positional: {cmd_c!r}")
+
+    # Target D: pyproject.toml WITHOUT a [tool.pytest.ini_options] section must NOT
+    # shadow a later tox.ini that DOES configure pytest (discovery precedence skip).
+    d = os.path.join(td, "d")
+    os.makedirs(os.path.join(d, "engine_tests"))
+    with open(os.path.join(d, "pyproject.toml"), "w") as fh:
+        fh.write("[build-system]\nrequires = [\"setuptools\"]\n")
+    with open(os.path.join(d, "tox.ini"), "w") as fh:
+        fh.write("[pytest]\ntestpaths = engine_tests\n")
+    cmd_d = build(d)
+    if positionals(cmd_d) != [os.path.join(d, "engine_tests")]:
+        raise SystemExit(f"FAIL: a pyproject without [tool.pytest.ini_options] must not shadow tox.ini [pytest]: {cmd_d!r}")
+    if "-c" not in cmd_d or os.path.join(d, "tox.ini") not in cmd_d:
+        raise SystemExit(f"FAIL: must pin the tox.ini that actually configures pytest: {cmd_d!r}")
+
+    # Target E: multi-line testpaths array in pyproject (the standard pytest-doc form).
+    e = os.path.join(td, "e")
+    os.makedirs(os.path.join(e, "suite_a"))
+    os.makedirs(os.path.join(e, "suite_b"))
+    with open(os.path.join(e, "pyproject.toml"), "w") as fh:
+        fh.write('[tool.pytest.ini_options]\ntestpaths = [\n    "suite_a",\n    "suite_b",\n]\n')
+    cmd_e = build(e)
+    if positionals(cmd_e) != [os.path.join(e, "suite_a"), os.path.join(e, "suite_b")]:
+        raise SystemExit(f"FAIL: multi-line testpaths array must be honored: {cmd_e!r}")
+
+    # Target F: an EXPLICITLY-configured testpath that does not exist must be passed
+    # verbatim (so pytest surfaces the misconfiguration), NOT silently widened to
+    # tests/ or the whole target.
+    g = os.path.join(td, "f")
+    os.makedirs(g)
+    with open(os.path.join(g, "pytest.ini"), "w") as fh:
+        fh.write("[pytest]\ntestpaths = renamed_suite\n")
+    cmd_f = build(g)
+    if positionals(cmd_f) != [os.path.join(g, "renamed_suite")]:
+        raise SystemExit(f"FAIL: explicitly-configured (even if missing) testpath must be honored verbatim, not widened: {cmd_f!r}")
+
+print("PASS: sail.checkers pytest scope/classification/reason (#33) verified")
+PY
+then
+  fail "sail.checkers pytest scope-correctness (#33) failed"
+fi
+
+echo "PASS: sail.checkers pytest scope-correctness (#33) verified"
