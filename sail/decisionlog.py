@@ -86,3 +86,8 @@ class DecisionLog:
         os.makedirs(self.run_dir, exist_ok=True)
         self._ensure_header()
         self._append_line(f"- ↺ resume {_utc_now_iso()}")
+
+    def review_marker(self, summary):
+        os.makedirs(self.run_dir, exist_ok=True)
+        self._ensure_header()
+        self._append_line(f"- review: {_sanitize_text(summary)}")

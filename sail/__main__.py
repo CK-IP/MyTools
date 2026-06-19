@@ -17,6 +17,12 @@ def main() -> int:
     test_parser = subparsers.add_parser("test")
     test_parser.add_argument("cmd", nargs=argparse.REMAINDER)
 
+    review_parser = subparsers.add_parser("review")
+    review_parser.add_argument("--target")
+    review_parser.add_argument("--diff", required=True)
+    review_parser.add_argument("--run-dir")
+    review_parser.add_argument("--advisory", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -26,6 +32,9 @@ def main() -> int:
         if cmd and cmd[0] == "--":
             cmd = cmd[1:]
         return run_tests(cmd)
+    if args.command == "review":
+        from sail.review import run_review
+        return run_review(args.target, args.diff, args.run_dir, args.advisory)
 
     return 1
 
