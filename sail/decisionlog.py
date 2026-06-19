@@ -86,3 +86,9 @@ class DecisionLog:
         os.makedirs(self.run_dir, exist_ok=True)
         self._ensure_header()
         self._append_line(f"- ↺ resume {_utc_now_iso()}")
+
+    def mode_marker(self, mode, ref=None):
+        os.makedirs(self.run_dir, exist_ok=True)
+        self._ensure_header()
+        suffix = f" (base={_sanitize_text(ref)})" if ref else ""
+        self._append_line(f"- mode: {_sanitize_text(mode)}{suffix}")
