@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 import uuid
 from datetime import datetime, timezone
 from glob import glob
 
+from sail import delta
 from sail.checkers import build_registry
 from sail.decisionlog import DecisionLog
 from sail.runstate import RunState, _utc_now_iso
@@ -66,7 +69,60 @@ def run_tests(cmd=None) -> int:
     return rc
 
 
-def run(run_dir=None, target=None, cov_fail_under=0, run_id=None):
+def _run_checker(checker, target, artifact_path):
+    # Run one checker, return its return code. Shared by the primary run and
+    # diff-mode baseline generation.
+    return subprocess.run(
+        checker.build_command(target, artifact_path),
+        cwd=checker.cwd(target),
+        capture_output=True, text=True,
+    ).returncode
+
+
+def _remove_worktree(target, path):
+    subprocess.run(
+        ["git", "-C", target, "worktree", "remove", "--force", path],
+        capture_output=True, text=True,
+    )
+    if os.path.exists(path):
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _generate_baseline(registry, target, diff_ref, run_dir):
+    # Detached worktree of diff_ref from target's repo; run the available checkers there;
+    # write artifacts into <run_dir>/baseline/. Returns (baseline_dir, baseline_root).
+    # Raises on an invalid diff_ref (never silently degrades to whole-repo).
+    baseline_dir = os.path.join(run_dir, "baseline")
+    baseline_src = os.path.join(run_dir, "baseline-src")
+    os.makedirs(baseline_dir, exist_ok=True)
+    subprocess.run(["git", "-C", target, "worktree", "prune"], capture_output=True, text=True)
+    _remove_worktree(target, baseline_src)
+    created = subprocess.run(
+        ["git", "-C", target, "worktree", "add", "--detach", baseline_src, diff_ref],
+        capture_output=True, text=True,
+    )
+    if created.returncode != 0:
+        raise ValueError(
+            "sail --diff: cannot create baseline worktree for ref "
+            f"{diff_ref!r}: {created.stderr.strip()}"
+        )
+    try:
+        for checker in registry:
+            if not checker.available():
+                continue
+            artifact_path = os.path.join(baseline_dir, checker.artifact)
+            if os.path.exists(artifact_path):
+                os.remove(artifact_path)
+            try:
+                _run_checker(checker, baseline_src, artifact_path)
+            except Exception:
+                pass  # failed baseline checker -> missing artifact -> treated as empty baseline
+        return baseline_dir, baseline_src
+    finally:
+        _remove_worktree(target, baseline_src)
+
+
+def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None, baseline_dir=None):
     registry = build_registry()
 
     if run_dir is None:
@@ -87,10 +143,30 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None):
 
     if target is None:
         target = "."
+    target_root = os.path.abspath(target)
+    state.data["target"] = target_root
+
+    mode = "diff" if diff_ref else "baseline" if baseline_dir else "whole-repo"
+    state.data["mode"] = mode
+    state.save()
 
     decision_log = DecisionLog(run_dir)
     if resumed:
         decision_log.resume_marker()
+
+    baseline_root = None
+    if mode == "diff":
+        decision_log.mode_marker(mode, diff_ref)
+        baseline_dir, baseline_root = _generate_baseline(registry, target_root, diff_ref, run_dir)
+    elif mode == "baseline":
+        if os.path.realpath(baseline_dir) == os.path.realpath(run_dir):
+            raise ValueError("sail --baseline: baseline dir must differ from --run-dir")
+        try:
+            with open(os.path.join(baseline_dir, "run-state.json"), encoding="utf-8") as fh:
+                baseline_root = json.load(fh).get("target")
+        except Exception:
+            baseline_root = None
+        decision_log.mode_marker(mode, baseline_dir)
 
     terminal_statuses = {"passed", "failed", "skipped"}
     gates_by_name = {gate["name"]: gate for gate in state.gates}
@@ -98,6 +174,7 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None):
 
     for checker in registry:
         gate = gates_by_name[checker.name]
+        gate["mode"] = mode
         status = gate.get("status")
 
         if status in terminal_statuses:
@@ -120,17 +197,43 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None):
             gate["rc"] = None
             gate["reason"] = f"tool-unavailable: {checker.tool}"
             gate["artifact"] = None
+            gate["new_findings_count"] = None
             gate["finished_at"] = _utc_now_iso()
             state.save()
             decision_log.append(gate, "continue")
             continue
 
-        result = subprocess.run(checker.build_command(target, artifact_path), cwd=checker.cwd(target), capture_output=True, text=True)
-        status = checker.classify(result.returncode)
-        gate["status"] = status
-        gate["rc"] = result.returncode
-        gate["reason"] = checker.reason(result.returncode)
+        if os.path.exists(artifact_path):
+            os.remove(artifact_path)
+        rc = _run_checker(checker, target_root, artifact_path)
+        gate["rc"] = rc
         gate["artifact"] = checker.artifact
+
+        if mode == "whole-repo":
+            status = checker.classify(rc)
+            gate["status"] = status
+            gate["reason"] = checker.reason(rc)
+            gate["new_findings_count"] = None
+        else:
+            kind = delta.KIND_BY_ARTIFACT.get(checker.artifact)
+            base_artifact = os.path.join(baseline_dir, checker.artifact)
+            new = (
+                delta.new_findings(artifact_path, base_artifact, kind, target_root, baseline_root)
+                if kind
+                else None
+            )
+            if new is None:
+                status = "failed"
+                gate["status"] = status
+                gate["new_findings_count"] = None
+                gate["reason"] = f"mode={mode} artifact=unreadable rc={rc}"
+            else:
+                n = len(new)
+                status = "failed" if n > 0 else "passed"
+                gate["status"] = status
+                gate["new_findings_count"] = n
+                gate["reason"] = f"mode={mode} new={n}"
+
         gate["finished_at"] = _utc_now_iso()
         state.save()
 

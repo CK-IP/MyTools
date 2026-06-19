@@ -130,3 +130,49 @@ The AC#8 target is a sail backbone that:
 - costs no more than a similar `/ship` run
 - leaves a complete decision log
 - proves kill-and-resume behavior in a real trial
+
+## Diff / baseline scoping mode
+
+By default `python3 -m sail run` reports **whole-repo** findings. On a large codebase this
+buries the change's actual contribution under thousands of pre-existing findings. Two opt-in
+modes report only the findings a change **introduced** (a finding-level delta, not a
+changed-file filter):
+
+```bash
+# Compare against a git ref: sail runs the checkers on a worktree of <ref>, then reports
+# only findings present now but absent at <ref>.
+python3 -m sail run --target DIR --diff <git-ref>
+
+# Compare against a previous run's artifacts (no re-run of the baseline):
+python3 -m sail run --target DIR --baseline <prior-run-dir>
+```
+
+`--diff` and `--baseline` are mutually exclusive. Whole-repo mode (no flag) is unchanged and
+remains the default.
+
+### How the delta works
+
+- Each finding is reduced to a **line-insensitive fingerprint**: SARIF (ruff/bandit/semgrep) →
+  `(repo-relative path, ruleId, message)`; JUnit (mypy/pytest) → `(classname, name)`; pip-audit →
+  `(package, vuln-id)`. Dropping line numbers means a pre-existing finding that merely shifted
+  lines is **not** reported as new.
+- The delta is a **multiset** comparison: the new count for a fingerprint is
+  `max(0, current_count − baseline_count)`, so a genuinely-added duplicate of an existing finding
+  is still surfaced.
+- SARIF `file://` URIs are normalized to repo-relative paths (the baseline ran in a different
+  worktree), so the same file matches across runs.
+
+### Gate semantics in diff/baseline mode
+
+- A gate **passes** when it introduces **zero** new findings (even if the whole repo has many
+  pre-existing ones); it **fails** (and blocks, if blocking) when it introduces new findings.
+- **Safety:** if the *current* artifact is missing or unparseable (a checker crashed), the gate is
+  marked `failed` — it is never silently treated as clean. A missing/unparseable *baseline* is
+  treated as empty, so all current findings count as new (errors over-report, never mask).
+- An invalid `--diff` ref fails loudly rather than silently degrading to whole-repo.
+
+### Audit trail
+
+`run-state.json` records each gate's `mode` (`whole-repo` / `baseline` / `diff`) and
+`new_findings_count`; the run's top-level `target` and `mode` are recorded too. `decision-log.md`
+gets a `- mode: <mode>` marker line. (Unix-focused: Windows path case-folding is not implemented.)

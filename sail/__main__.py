@@ -13,6 +13,8 @@ def main() -> int:
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--target")
     run_parser.add_argument("--run-dir")
+    run_parser.add_argument("--diff")
+    run_parser.add_argument("--baseline")
 
     test_parser = subparsers.add_parser("test")
     test_parser.add_argument("cmd", nargs=argparse.REMAINDER)
@@ -20,7 +22,9 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "run":
-        return run(args.run_dir, target=args.target)
+        if args.diff and args.baseline:
+            parser.error("--diff and --baseline are mutually exclusive")
+        return run(args.run_dir, target=args.target, diff_ref=args.diff, baseline_dir=args.baseline)
     if args.command == "test":
         cmd = list(getattr(args, "cmd", []))
         if cmd and cmd[0] == "--":
