@@ -177,6 +177,18 @@ remains the default.
 `new_findings_count`; the run's top-level `target` and `mode` are recorded too. `decision-log.md`
 gets a `- mode: <mode>` marker line. (Unix-focused: Windows path case-folding is not implemented.)
 
+## Planning layer (`sail plan`)
+
+`python3 -m sail plan` does one LLM pass over a spec on stdin and writes `plan.json` in the
+run-dir.
+
+- **Backend:** `SAIL_PLAN_CMD` supplies the planner command. If no backend is available, the
+  stage skips cleanly instead of attempting a plan.
+- **Exit semantics:** exits `0` for a clean, usable plan; exits `1` when the plan is blocking,
+  empty, or otherwise unusable.
+
+`/sail` is the front door: it auto-fires plan -> build -> review for one issue end to end.
+
 ## LLM-reviewer layer (`sail review`)
 
 The deterministic gates catch mechanical hygiene (lint/type/security/dep). They do **not** catch
