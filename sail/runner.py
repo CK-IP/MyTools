@@ -125,11 +125,11 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None):
             decision_log.append(gate, "continue")
             continue
 
-        result = subprocess.run(checker.build_command(target, artifact_path), capture_output=True, text=True)
+        result = subprocess.run(checker.build_command(target, artifact_path), cwd=checker.cwd(target), capture_output=True, text=True)
         status = checker.classify(result.returncode)
         gate["status"] = status
         gate["rc"] = result.returncode
-        gate["reason"] = None
+        gate["reason"] = checker.reason(result.returncode)
         gate["artifact"] = checker.artifact
         gate["finished_at"] = _utc_now_iso()
         state.save()
