@@ -33,15 +33,10 @@ PY
 
 cd "$REPO_ROOT"
 
-if python3 -m sail run --target "$TARGET" --run-dir "$RUN" >"$LOG_FILE" 2>&1; then
-  RC=0
-else
-  RC=$?
-fi
-
-if [ "$RC" -ne 0 ]; then
-  fail "python3 -m sail run --target \"$TARGET\" --run-dir \"$RUN\" exited $RC; expected 0 and a completed six-gate orchestration"
-fi
+# rc is environment-dependent (a gate may fail when its tool is installed); the
+# orchestration writes its full audit trail regardless. Orchestration COMPLETENESS
+# (six terminal gates + audit trail) is asserted below, not the exit code.
+python3 -m sail run --target "$TARGET" --run-dir "$RUN" >"$LOG_FILE" 2>&1 || true
 
 [ -f "$STATE_FILE" ] || fail "run-state.json was not created at $STATE_FILE"
 [ -f "$DECISION_LOG" ] || fail "decision-log.md was not created at $DECISION_LOG"
@@ -70,28 +65,46 @@ if [gate.get("name") for gate in gates] != expected_names:
     )
     raise SystemExit(1)
 
+import shutil
+
 terminal_statuses = {"passed", "failed", "skipped"}
+# The gate's tool name matches its registry name for all six checkers.
 for gate in gates:
+    name = gate.get("name")
     status = gate.get("status")
     if status not in terminal_statuses:
         print(
-            f"FAIL: gate {gate.get('name')!r} has non-terminal status {status!r}",
+            f"FAIL: gate {name!r} has non-terminal status {status!r}",
             file=sys.stderr,
         )
         raise SystemExit(1)
-    if status != "skipped":
-        print(
-            f"FAIL: gate {gate.get('name')!r} has status {status!r}, expected 'skipped' in this environment",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-    reason = gate.get("reason") or ""
-    if "tool-unavailable" not in reason:
-        print(
-            f"FAIL: gate {gate.get('name')!r} reason {reason!r} does not contain 'tool-unavailable'",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
+    available = shutil.which(name) is not None
+    if available:
+        # Tool installed -> the gate actually ran: terminal pass/fail with rc recorded,
+        # never a clean skip.
+        if status == "skipped":
+            print(
+                f"FAIL: gate {name!r} tool is installed but the gate was skipped",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        if gate.get("rc") is None:
+            print(f"FAIL: gate {name!r} ran but rc is None", file=sys.stderr)
+            raise SystemExit(1)
+    else:
+        # Tool absent -> availability-gated clean skip with a tool-unavailable reason.
+        if status != "skipped":
+            print(
+                f"FAIL: gate {name!r} tool absent but status {status!r} != 'skipped'",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        if "tool-unavailable" not in (gate.get("reason") or ""):
+            print(
+                f"FAIL: gate {name!r} skip reason missing 'tool-unavailable'",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
 
 with open(log_path, "r", encoding="utf-8") as fh:
     lines = fh.read().splitlines()
