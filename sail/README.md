@@ -203,3 +203,23 @@ python3 -m sail review --target DIR --diff <git-ref> [--run-dir DIR] [--advisory
 
 This is the judgment layer the deterministic backbone lacks — the piece that makes /sail a
 candidate **replacement** for `/ship`'s adversarial review, not just a fast hygiene complement.
+
+### One-pass mode: `sail run --diff` does gates + review
+
+`sail run --diff <ref>` is the drop-in `/ship` replacement entry point: it runs the deterministic
+gates (diff-scoped) **and then** the blocking LLM review over the same diff, into the **same**
+run-dir and `decision-log.md`, with a single combined exit code.
+
+```bash
+python3 -m sail run --target DIR --diff <git-ref>              # gates + blocking review, one pass
+python3 -m sail run --target DIR --diff <git-ref> --no-review  # gates only (fast path, opt out of review)
+```
+
+- **Auto-on with `--diff` only.** Review activates exactly when there is a change scope to review.
+  Whole-repo runs (no `--diff`) and `--baseline` mode never trigger it (there is no git ref to review).
+- **Blocking & combined:** the run exits **1** if any blocking gate failed **or** the review blocked
+  (CRITICAL/HIGH findings, or an unusable backend response); exits **0** only when both are clean.
+- **No backend → fail closed.** Unlike standalone `sail review` (which skips cleanly), a review
+  *requested* via `sail run --diff` that has no backend **fails the run** (exit 1) and logs the
+  reason to `decision-log.md` — a green result never hides that the review didn't run. Install
+  `claude` / set `SAIL_REVIEW_CMD`, or pass `--no-review` to deliberately run gates only.

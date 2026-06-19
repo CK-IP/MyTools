@@ -41,7 +41,12 @@ def backend_available():
     if not argv:
         return False
     prog = argv[0]
-    return shutil.which(prog) is not None or os.path.exists(prog)
+    if shutil.which(prog) is not None:
+        return True
+    # An explicit path must be an executable file — a non-executable file or a
+    # directory is not a runnable backend. Without this, subprocess.run() crashes
+    # with a traceback instead of the caller's clean fail-closed / skip path.
+    return os.path.isfile(prog) and os.access(prog, os.X_OK)
 
 
 def build_prompt(diff_text):
@@ -133,7 +138,14 @@ def _git_diff(target, diff_ref):
 
 def _invoke(prompt):
     argv = _backend_argv()
-    result = subprocess.run(argv, input=prompt, capture_output=True, text=True)
+    try:
+        result = subprocess.run(argv, input=prompt, capture_output=True, text=True)
+    except OSError as exc:
+        # Backend passed the availability preflight but could not actually be executed
+        # (bad shebang, missing interpreter, noexec mount, removed after the probe).
+        # Signal an unusable backend (non-zero rc) so callers fail closed via the
+        # backend_error path instead of crashing with a traceback.
+        return 127, "", f"backend exec failed: {exc}"
     return result.returncode, result.stdout, result.stderr
 
 

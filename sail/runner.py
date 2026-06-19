@@ -122,7 +122,7 @@ def _generate_baseline(registry, target, diff_ref, run_dir):
         _remove_worktree(target, baseline_src)
 
 
-def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None, baseline_dir=None):
+def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None, baseline_dir=None, review=True):
     registry = build_registry()
 
     if run_dir is None:
@@ -245,4 +245,22 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
         for checker in registry
         for gate in [gates_by_name[checker.name]]
     )
-    return 1 if blocking_failed else 0
+
+    review_rc = 0
+    if review and mode == "diff":
+        from sail import review as review_mod
+        if review_mod.backend_available():
+            review_rc = review_mod.run_review(target_root, diff_ref, run_dir=run_dir, advisory=False)
+        else:
+            # never-mask: review was requested but no backend can run it — fail closed,
+            # don't let the change pass as if it had been reviewed.
+            decision_log.review_marker(
+                "ERROR: review backend unavailable — failed closed (use --no-review for gates-only)"
+            )
+            print(
+                "sail run: review backend unavailable — failing closed "
+                "(install `claude`/set SAIL_REVIEW_CMD, or pass --no-review for gates-only)"
+            )
+            review_rc = 1
+
+    return 1 if (blocking_failed or review_rc) else 0
