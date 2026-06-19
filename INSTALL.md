@@ -73,6 +73,10 @@ ln -s "$(pwd)/commands/space.md" ~/.claude/commands/space.md
 rm -f ~/.claude/commands/culture.md
 ln -s "$(pwd)/commands/culture.md" ~/.claude/commands/culture.md
 
+# /surf — autonomous board-working skill (drives /sail per issue)
+rm -f ~/.claude/commands/surf.md
+ln -s "$(pwd)/commands/surf.md" ~/.claude/commands/surf.md
+
 # --- Agents ---
 
 # explore-first — read-only research investigator (no edit tools)
@@ -115,6 +119,7 @@ ls -la ~/.claude/commands/fortify.md
 ls -la ~/.claude/commands/refresh.md
 ls -la ~/.claude/commands/space.md
 ls -la ~/.claude/commands/culture.md
+ls -la ~/.claude/commands/surf.md
 
 # Agents
 ls -la ~/.claude/agents/explore-first.md
