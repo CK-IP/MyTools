@@ -116,4 +116,95 @@ set +e; SAIL_REVIEW_CMD="$BAD" python3 -m sail run --target "$TGT" --diff HEAD -
 if grep -qi "Traceback\|FileNotFoundError\|PermissionError" "$WORK/t9.err"; then fail "T9: exec failure must be caught, not crash with a traceback"; fi
 echo "PASS T9: exec-time backend failure fails closed cleanly (RT-2 regression)"
 
-echo "PASS: sail run gates+review one-pass (#41) verified"
+# ── #42: resume-safety — `sail run --diff` must not blindly re-run the review on resume ──
+# Call-sentinel mock: touches $CALLED when invoked, so a test can assert whether the
+# backend was re-run. "Resume" = a second `sail run --diff --run-dir RD` against the same RD
+# (run-state.json already present → the runner treats it as a resume).
+MOCK2="$WORK/mock_llm_sentinel.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'cat >/dev/null' '[ -n "${CALLED:-}" ] && touch "$CALLED"' 'printf "%s" "${MOCK_OUT:-}"' 'exit ${MOCK_RC:-0}' > "$MOCK2"
+chmod +x "$MOCK2"
+
+# --- T10: prior review COMPLETED + clean → resume reuses it, does NOT re-invoke the backend ---
+RD10="$WORK/rd10"
+set +e; SAIL_REVIEW_CMD="bash $MOCK" MOCK_OUT="$CLEAN_JSON" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD10" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "0" ] || fail "T10 setup: run1 clean review should exit 0, got $rc"
+python3 -c "import json,sys;d=json.load(open('$RD10/review.json'));sys.exit(0 if d.get('status')=='completed' else 1)" || fail "T10 setup: run1 review.json not completed"
+fmarkers_before=$(grep -c "findings (" "$RD10/decision-log.md" || true)
+CALLED10="$WORK/called10"
+set +e; SAIL_REVIEW_CMD="bash $MOCK2" CALLED="$CALLED10" MOCK_OUT="$HIGH_JSON" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD10" >/dev/null 2>&1; rc=$?; set -e
+[ ! -f "$CALLED10" ] || fail "T10: resume of a completed review must NOT re-invoke the backend"
+[ "$rc" = "0" ] || fail "T10: resume of a clean completed review should exit 0, got $rc"
+python3 -c "import json,sys;d=json.load(open('$RD10/review.json'));sys.exit(0 if d.get('status')=='completed' and not any(f.get('severity')=='HIGH' for f in d.get('findings',[])) else 1)" || fail "T10: review.json must be unchanged (still clean completed)"
+fmarkers_after=$(grep -c "findings (" "$RD10/decision-log.md" || true)
+[ "$fmarkers_before" = "$fmarkers_after" ] || fail "T10: resume duplicated the review findings marker ($fmarkers_before -> $fmarkers_after)"
+grep -qi "reused prior completed review" "$RD10/decision-log.md" || fail "T10: resume must record a distinct reused-review marker"
+echo "PASS T10: resume of a completed clean review reuses it (no backend re-call, no duplicate marker)"
+
+# --- T11: prior review ERRORED → resume RE-RUNS it (never reuse a non-result) ---
+RD11="$WORK/rd11"
+set +e; SAIL_REVIEW_CMD="bash $MOCK" MOCK_OUT="not json" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD11" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "1" ] || fail "T11 setup: run1 unparseable review should exit 1, got $rc"
+python3 -c "import json,sys;d=json.load(open('$RD11/review.json'));sys.exit(0 if d.get('status')=='error' else 1)" || fail "T11 setup: run1 review.json not error"
+CALLED11="$WORK/called11"
+set +e; SAIL_REVIEW_CMD="bash $MOCK2" CALLED="$CALLED11" MOCK_OUT="$CLEAN_JSON" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD11" >/dev/null 2>&1; rc=$?; set -e
+[ -f "$CALLED11" ] || fail "T11: resume of an ERRORED review MUST re-invoke the backend"
+[ "$rc" = "0" ] || fail "T11: re-run clean review should exit 0, got $rc"
+python3 -c "import json,sys;d=json.load(open('$RD11/review.json'));sys.exit(0 if d.get('status')=='completed' else 1)" || fail "T11: review.json should now be completed after re-run"
+echo "PASS T11: resume of an errored review re-runs the backend (never-mask preserved)"
+
+# --- T12: prior review COMPLETED + blocking → resume still exits 1 without re-invoking (backend gone) ---
+RD12="$WORK/rd12"
+set +e; SAIL_REVIEW_CMD="bash $MOCK" MOCK_OUT="$HIGH_JSON" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD12" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "1" ] || fail "T12 setup: run1 blocking review should exit 1, got $rc"
+set +e; SAIL_REVIEW_CMD="/nonexistent/llm-xyz" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD12" 2>"$WORK/t12.err"; rc=$?; set -e
+[ "$rc" = "1" ] || fail "T12: resume of a blocking completed review must still exit 1, got $rc"
+if grep -qi "Traceback" "$WORK/t12.err"; then fail "T12: reuse path must not crash"; fi
+if grep -qi "backend unavailable" "$RD12/decision-log.md"; then fail "T12: reuse path must not emit a fail-closed marker (review was reused, not re-attempted)"; fi
+echo "PASS T12: resume preserves a prior blocking review's exit code without re-invoking the backend"
+
+# --- T13: a "completed" review.json with a missing/garbled findings list must re-run on resume,
+# not reuse/crash (RT-1 regression — never reuse a non-result; findings is the required field). ---
+RD13="$WORK/rd13"
+set +e; SAIL_REVIEW_CMD="bash $MOCK" MOCK_OUT="$CLEAN_JSON" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD13" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "0" ] || fail "T13 setup: run1 clean review should exit 0, got $rc"
+# Corrupt the artifact: keep status "completed" but drop the findings list (garbled shape).
+python3 -c "import json;p='$RD13/review.json';d=json.load(open(p));d.pop('findings',None);json.dump(d,open(p,'w'))"
+CALLED13="$WORK/called13"
+set +e; SAIL_REVIEW_CMD="bash $MOCK2" CALLED="$CALLED13" MOCK_OUT="$CLEAN_JSON" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD13" 2>"$WORK/t13.err"; rc=$?; set -e
+[ -f "$CALLED13" ] || fail "T13: a completed review with no findings list MUST re-run (not reuse)"
+if grep -qi "Traceback" "$WORK/t13.err"; then fail "T13: malformed artifact must not crash the run"; fi
+echo "PASS T13: malformed completed-review artifact re-runs cleanly on resume (RT-1 regression)"
+
+# --- T14: a resume that CHANGED --diff must re-review, not reuse the prior-scope review
+# (RT-2 regression — reuse is gated on matching target+diff). ---
+TGT14="$WORK/target14"; mkdir -p "$TGT14"
+printf 'def h():\n    return 0\n' > "$TGT14/mod.py"
+git -C "$TGT14" init -q
+git -C "$TGT14" add -A
+git -C "$TGT14" -c user.email=t@t -c user.name=t commit -qm c1
+printf 'def h():\n    return 1\n' > "$TGT14/mod.py"; git -C "$TGT14" add -A
+git -C "$TGT14" -c user.email=t@t -c user.name=t commit -qm c2
+printf 'def h():\n    return 2  # wt\n' > "$TGT14/mod.py"   # working-tree change
+RD14="$WORK/rd14"
+set +e; SAIL_REVIEW_CMD="bash $MOCK" MOCK_OUT="$CLEAN_JSON" python3 -m sail run --target "$TGT14" --diff HEAD --run-dir "$RD14" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "0" ] || fail "T14 setup: run1 (--diff HEAD) should exit 0, got $rc"
+CALLED14="$WORK/called14"
+set +e; SAIL_REVIEW_CMD="bash $MOCK2" CALLED="$CALLED14" MOCK_OUT="$CLEAN_JSON" python3 -m sail run --target "$TGT14" --diff HEAD~1 --run-dir "$RD14" >/dev/null 2>&1; rc=$?; set -e
+[ -f "$CALLED14" ] || fail "T14: a resume with a CHANGED --diff must re-review, not reuse a stale-scope review"
+echo "PASS T14: changed-diff resume re-reviews instead of reusing a stale-scope review (RT-2 regression)"
+
+# --- T15: blocking is recomputed from findings, not the counts cache. A completed artifact with
+# clean (zeroed) counts but a real HIGH finding must still BLOCK on resume — counts can't mask it
+# (RT-3/RT-4 regression). Backend is gone to prove the reuse path (not a re-run) blocks. ---
+RD15="$WORK/rd15"
+set +e; SAIL_REVIEW_CMD="bash $MOCK" MOCK_OUT="$CLEAN_JSON" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD15" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "0" ] || fail "T15 setup: run1 clean review should exit 0, got $rc"
+# Inconsistent artifact: counts say clean, but findings carries a real HIGH (e.g. hand-edited).
+python3 -c "import json;p='$RD15/review.json';d=json.load(open(p));d['findings']=[{'severity':'HIGH','issue':'x'}];d['counts']={'CRITICAL':0,'HIGH':0,'MEDIUM':0,'LOW':0};json.dump(d,open(p,'w'))"
+set +e; SAIL_REVIEW_CMD="/nonexistent/llm-xyz" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD15" 2>"$WORK/t15.err"; rc=$?; set -e
+[ "$rc" = "1" ] || fail "T15: a reused review with a HIGH finding must still block (expected 1), got $rc"
+if grep -qi "Traceback" "$WORK/t15.err"; then fail "T15: reuse path must not crash"; fi
+if grep -qi "backend unavailable" "$RD15/decision-log.md"; then fail "T15: must reuse (not re-attempt) — no fail-closed marker"; fi
+echo "PASS T15: blocking is recomputed from findings on reuse; zeroed counts cannot mask a HIGH (RT-3/RT-4 regression)"
+
+echo "PASS: sail run gates+review one-pass + resume-safety (#41, #42) verified"

@@ -122,6 +122,26 @@ def _generate_baseline(registry, target, diff_ref, run_dir):
         _remove_worktree(target, baseline_src)
 
 
+def _completed_review(run_dir):
+    # Return the prior review.json dict iff a review actually COMPLETED for this run-dir
+    # (status "completed"); else None. A missing/errored/unparseable/partial artifact
+    # returns None so a resumed run re-runs the review rather than reusing a non-result.
+    path = os.path.join(run_dir, "review.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    # Reuse only a well-formed completed result: status "completed" AND a findings LIST.
+    # Blocking is recomputed from `findings` (the authoritative signal run_review itself
+    # uses) — never from the derived `counts` cache — so a stale/garbled counts value can
+    # never downgrade a blocking review on reuse. A malformed artifact (missing/non-list
+    # findings) returns None so the review re-runs fresh.
+    if not (isinstance(data, dict) and data.get("status") == "completed"):
+        return None
+    return data if isinstance(data.get("findings"), list) else None
+
+
 def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None, baseline_dir=None, review=True):
     registry = build_registry()
 
@@ -141,6 +161,11 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
             state.data["run_id"] = run_id
         state.save()
 
+    # Capture the prior run's review scope (target + diff) before we overwrite it below, so a
+    # resumed run that changed --target/--diff does NOT reuse a stale review (see review block).
+    prior_target = state.data.get("target")
+    prior_diff_ref = state.data.get("diff_ref")
+
     if target is None:
         target = "."
     target_root = os.path.abspath(target)
@@ -148,6 +173,7 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
 
     mode = "diff" if diff_ref else "baseline" if baseline_dir else "whole-repo"
     state.data["mode"] = mode
+    state.data["diff_ref"] = diff_ref
     state.save()
 
     decision_log = DecisionLog(run_dir)
@@ -249,18 +275,29 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
     review_rc = 0
     if review and mode == "diff":
         from sail import review as review_mod
-        if review_mod.backend_available():
-            review_rc = review_mod.run_review(target_root, diff_ref, run_dir=run_dir, advisory=False)
+        # Reuse a prior review only on a genuine resume of the SAME scope (target + diff).
+        # A resume that changed --target/--diff must re-review, never reuse a stale result.
+        scope_match = resumed and prior_target == target_root and prior_diff_ref == diff_ref
+        prior = _completed_review(run_dir) if scope_match else None
+        if prior is not None:
+            # Resume of the same scope: reuse the completed review rather than re-invoking
+            # the backend, but recompute blocking from its findings (the authoritative
+            # signal) so a prior blocking review still blocks the resumed run.
+            review_rc = 1 if review_mod.has_blocking(prior["findings"]) else 0
+            decision_log.review_marker("reused prior completed review (resumed)")
         else:
-            # never-mask: review was requested but no backend can run it — fail closed,
-            # don't let the change pass as if it had been reviewed.
-            decision_log.review_marker(
-                "ERROR: review backend unavailable — failed closed (use --no-review for gates-only)"
-            )
-            print(
-                "sail run: review backend unavailable — failing closed "
-                "(install `claude`/set SAIL_REVIEW_CMD, or pass --no-review for gates-only)"
-            )
-            review_rc = 1
+            if review_mod.backend_available():
+                review_rc = review_mod.run_review(target_root, diff_ref, run_dir=run_dir, advisory=False)
+            else:
+                # never-mask: review was requested but no backend can run it — fail closed,
+                # don't let the change pass as if it had been reviewed.
+                decision_log.review_marker(
+                    "ERROR: review backend unavailable — failed closed (use --no-review for gates-only)"
+                )
+                print(
+                    "sail run: review backend unavailable — failing closed "
+                    "(install `claude`/set SAIL_REVIEW_CMD, or pass --no-review for gates-only)"
+                )
+                review_rc = 1
 
     return 1 if (blocking_failed or review_rc) else 0
