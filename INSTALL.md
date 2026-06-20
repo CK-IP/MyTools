@@ -39,6 +39,8 @@ cd ~/projects/CK-Skills
 
 Run the following from inside the repo root. This creates symlinks so Claude Code picks up everything automatically.
 
+> **Post-merge only:** run these symlink commands after the branch has merged to `main` — never during an in-progress ship/sloop/skiff run (the target files don't exist at the main-repo path until merge).
+
 ```bash
 # Ensure directories exist
 mkdir -p ~/.claude/commands ~/.claude/agents ~/.claude/hooks ~/.claude/skills
@@ -60,6 +62,10 @@ ln -s "$(pwd)/commands/epic-brief-schema.md" ~/.claude/commands/epic-brief-schem
 # /fortify — automated security, coverage, and static analysis review
 rm -f ~/.claude/commands/fortify.md
 ln -s "$(pwd)/commands/fortify.md" ~/.claude/commands/fortify.md
+
+# /sail — plan, build, and review one issue end-to-end
+rm -f ~/.claude/commands/sail.md
+ln -s "$(pwd)/commands/sail.md" ~/.claude/commands/sail.md
 
 # /refresh — check memory for staleness, broken refs, duplicates, and contradictions
 rm -f ~/.claude/commands/refresh.md

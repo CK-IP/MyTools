@@ -58,6 +58,11 @@ class DecisionLog:
             lines = lines + [HEADER]
         return lines
 
+    def _append_marker(self, marker: str) -> None:
+        os.makedirs(self.run_dir, exist_ok=True)
+        self._ensure_header()
+        self._append_line(marker)
+
     def _entry_key(self, name, seq) -> str:
         return f"[gate={_sanitize_text(name)} seq={seq}]"
 
@@ -86,17 +91,14 @@ class DecisionLog:
         self._append_line(line)
 
     def resume_marker(self):
-        os.makedirs(self.run_dir, exist_ok=True)
-        self._ensure_header()
-        self._append_line(f"- ↺ resume {_utc_now_iso()}")
+        self._append_marker(f"- ↺ resume {_utc_now_iso()}")
 
     def mode_marker(self, mode, ref=None):
-        os.makedirs(self.run_dir, exist_ok=True)
-        self._ensure_header()
         suffix = f" (base={_sanitize_text(ref)})" if ref else ""
-        self._append_line(f"- mode: {_sanitize_text(mode)}{suffix}")
+        self._append_marker(f"- mode: {_sanitize_text(mode)}{suffix}")
 
     def review_marker(self, summary):
-        os.makedirs(self.run_dir, exist_ok=True)
-        self._ensure_header()
-        self._append_line(f"- review: {_sanitize_text(summary)}")
+        self._append_marker(f"- review: {_sanitize_text(summary)}")
+
+    def plan_marker(self, summary):
+        self._append_marker(f"- plan: {_sanitize_text(summary)}")

@@ -26,6 +26,11 @@ def main() -> int:
     review_parser.add_argument("--run-dir")
     review_parser.add_argument("--advisory", action="store_true")
 
+    plan_parser = subparsers.add_parser("plan")
+    plan_parser.add_argument("--target")
+    plan_parser.add_argument("--run-dir")
+    plan_parser.add_argument("--advisory", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -40,6 +45,9 @@ def main() -> int:
     if args.command == "review":
         from sail.review import run_review
         return run_review(args.target, args.diff, args.run_dir, args.advisory)
+    if args.command == "plan":
+        from sail.plan import run_plan
+        return run_plan(args.target or ".", args.run_dir, args.advisory)
 
     return 1
 
