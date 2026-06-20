@@ -197,11 +197,11 @@ judgment layer: a **single** code-reviewer (an LLM, invoked via a CLI) that adve
 the **diff-scoped** change and returns structured findings.
 
 ```bash
-python3 -m sail review --target DIR --diff <git-ref> [--run-dir DIR] [--advisory]
+python3 -m sail review --target DIR --diff <git-ref> [--run-dir DIR] [--advisory] [--dual-lens]
 ```
 
-- **Single-agent** by design (no multi-agent / dual-model panel — per the sail research, that is
-  unproven and costs 3–10× the tokens).
+- **Single-agent by default** (no multi-agent / dual-model panel — per the sail research, that is
+  unproven and costs 3–10× the tokens). A risk-gated second lens is opt-in via `--dual-lens` (below).
 - **Diff-scoped:** reviews only `git -C DIR diff <git-ref>`, never the whole repo.
 - **Backend:** defaults to `claude -p` (Anthropic headless). Override with the env var
   **`SAIL_REVIEW_CMD`** (e.g. `codex exec ...`, or a mock for tests) — parsed with `shlex` and run
@@ -216,6 +216,52 @@ python3 -m sail review --target DIR --diff <git-ref> [--run-dir DIR] [--advisory
 This is the judgment layer the deterministic backbone lacks — the piece that makes /sail a
 candidate **replacement** for `/ship`'s adversarial review, not just a fast hygiene complement.
 
+### Plan↔review traceability spine (#47)
+
+When the review's run-dir also holds a `plan.json` (written by `sail plan` into a **shared session
+run-dir** — see the `/sail` driver), `sail review` reads its `acceptance_criteria` and verifies each
+against the diff in the **same single LLM pass** (no second invocation). Results land in
+`review.json` under `plan_verification`:
+
+- `status: "verified"` — each AC recorded `met` / `unmet` / `unknown` (with one-line evidence). An
+  **unmet** AC blocks the gate (exit 1) — the define-at-plan → verify-at-review spine has teeth.
+- `status: "no-plan"` — no `plan.json` in the run-dir; verification is skipped and **non-blocking**
+  (the spine is additive — gates-only review is unaffected).
+- `status: "error"` — `plan.json` exists but is unparseable/truncated; **fails closed** (exit 1).
+  A corrupt plan is never silently downgraded to no-plan.
+
+### Per-finding resolution log (#47)
+
+Each finding in `review.json` carries a **content-derived stable `id`** (`lens1-<hash>` /
+`lens2-<hash>` — stable across reorderings and the dual-lens union) plus any backend-supplied
+`disposition` / `rationale`. Across the driver's convergence loop, the disposition of each finding
+(`addressed` / `deferred` / `rejected` + a one-line rationale) is appended to `decision-log.md` via
+`DecisionLog.finding_resolution(id, disposition, rationale)` — a compact, auditable resolution trail
+(no /fortify-style report ceremony).
+
+### `--dual-lens` risk-gated escalation (#47)
+
+Default review is **single-lens** (industry norm; the convergence loop is the quality mechanism).
+For a high-stakes diff — or any time you want a cross-family second opinion — pass `--dual-lens` and
+point `SAIL_REVIEW_CMD2` at a second backend:
+
+```bash
+SAIL_REVIEW_CMD2="codex exec -m gpt-5.4-mini" \
+  python3 -m sail review --target DIR --diff <git-ref> --dual-lens
+```
+
+Both lenses review independently; findings are unioned (each tagged `lens1`/`lens2`), `review.json`
+records `lenses: ["lens1","lens2"]`, and the gate blocks if **either** lens blocks or returns an
+unusable response (never-mask, per lens). `--dual-lens` with no `SAIL_REVIEW_CMD2` degrades cleanly
+to single-lens (logged, not a hard error). The same flag is available on `sail run --diff`.
+
+### Calibration (operator validation — deferred)
+
+The #47 calibration AC — *looped `/sail` vs `/ship` parity on #32/#33* — is an operator validation
+step requiring a live review backend + the merged #32/#33 artifacts, not a hermetic test. Run it once
+those are available and record the parity result in the ship's log (mirrors the #32 AC#7/#8 runbook
+precedent).
+
 ### One-pass mode: `sail run --diff` does gates + review
 
 `sail run --diff <ref>` is the drop-in `/ship` replacement entry point: it runs the deterministic
@@ -225,6 +271,7 @@ run-dir and `decision-log.md`, with a single combined exit code.
 ```bash
 python3 -m sail run --target DIR --diff <git-ref>              # gates + blocking review, one pass
 python3 -m sail run --target DIR --diff <git-ref> --no-review  # gates only (fast path, opt out of review)
+python3 -m sail run --target DIR --diff <git-ref> --dual-lens  # gates + dual-lens review (needs SAIL_REVIEW_CMD2)
 ```
 
 - **Auto-on with `--diff` only.** Review activates exactly when there is a change scope to review.

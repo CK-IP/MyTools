@@ -104,4 +104,31 @@ if [ "$(grep -c '^#' "$DECISION_LOG")" -ne 1 ]; then
   fail "fresh instance duplicated the markdown header"
 fi
 
+# --- #47 Step 2: per-finding resolution log ---
+if ! RUN_DIR="$RUN_DIR" python3 - <<'PY' >"$LOG_FILE" 2>&1
+import os
+from sail.decisionlog import DecisionLog
+run_dir = os.environ["RUN_DIR"]
+log = DecisionLog(run_dir)
+log.finding_resolution("lens1-deadbeef", "addressed", "fixed the off-by-one")
+log.finding_resolution("lens1-cafef00d", "deferred", "tracked as follow-up\nwith a newline")
+log.finding_resolution("lens2-12345678", "rejected", "false positive")
+PY
+then
+  fail "finding_resolution raised"
+fi
+
+if [ "$(grep -c -- '^- resolution: ' "$DECISION_LOG")" -ne 3 ]; then
+  fail "expected 3 resolution lines"
+fi
+grep -qF -- '- resolution: [lens1-deadbeef] addressed — fixed the off-by-one' "$DECISION_LOG" \
+  || fail "addressed resolution line not recorded verbatim"
+# sanitization: embedded newline must collapse to a single line
+if [ "$(grep -c 'tracked as follow-up' "$DECISION_LOG")" -ne 1 ]; then
+  fail "newline in rationale was not sanitized to one line"
+fi
+grep -qE -- '^- resolution: \[lens2-12345678\] rejected — false positive$' "$DECISION_LOG" \
+  || fail "rejected resolution line malformed"
+echo "PASS: per-finding resolution log (#47 step 2) verified"
+
 echo "PASS: decision log append/idempotent/append-only contract verified"
