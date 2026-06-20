@@ -68,6 +68,19 @@ if [gate.get("name") for gate in gates] != expected_names:
 import shutil
 
 terminal_statuses = {"passed", "failed", "skipped"}
+# pytest is the one checker that legitimately skips while installed: on a target
+# with no tests it exits rc=5 ("no tests collected"), and checkers.Checker.classify
+# maps rc 2/5 -> "skipped" (non-blocking, per #33/#35). So "installed tool never
+# skips" is false for pytest on this no-test target. Allow ONLY the exact
+# (rc, reason) pairs that Checker.reason() emits for that legitimate case — a
+# whitelist, not a blanket exemption, so a genuine "installed tool silently
+# skipped for no reason" regression (wrong rc, or rc 2/5 with an unexpected /
+# tool-unavailable reason) is still caught. This keeps the test hermetic: pytest
+# being on PATH or not no longer changes the verdict.
+legit_pytest_skips = {
+    (5, "no tests collected (rc=5)"),
+    (2, "collection/config error (rc=2) — not a test failure"),
+}
 # The gate's tool name matches its registry name for all six checkers.
 for gate in gates:
     name = gate.get("name")
@@ -81,8 +94,12 @@ for gate in gates:
     available = shutil.which(name) is not None
     if available:
         # Tool installed -> the gate actually ran: terminal pass/fail with rc recorded,
-        # never a clean skip.
+        # never a clean skip -- EXCEPT pytest's legitimate no-tests/collection skip.
         if status == "skipped":
+            if name == "pytest" and (gate.get("rc"), gate.get("reason")) in legit_pytest_skips:
+                # Legitimate pytest no-tests/collection skip on the no-test target.
+                # rc is recorded by construction (it is part of the whitelisted pair).
+                continue
             print(
                 f"FAIL: gate {name!r} tool is installed but the gate was skipped",
                 file=sys.stderr,
