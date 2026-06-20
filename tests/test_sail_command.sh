@@ -40,4 +40,16 @@ assert_grep 'run-dir|run dir|session' "uses a shared session run-dir"
 assert_grep 'build' "hands off to build"
 assert_grep 'sail run --diff' "references the review stage"
 
+# --- #47 contract: the three seams are now LIVE Stage-3 behavior, not deferred ---
+assert_grep 'plan_verification|acceptance.criteria.*plan\.json|plan.json.*acceptance' "review reads plan.json acceptance criteria (verification spine)"
+assert_grep 'unmet.*block|block.*unmet' "an unmet AC blocks"
+assert_grep 'dual-lens' "documents the dual-lens escalation flag"
+assert_grep 'SAIL_REVIEW_CMD2' "names the second-lens backend env var"
+assert_grep 'disposition|addressed.*deferred.*rejected|resolution' "records a per-finding resolution disposition"
+assert_grep 'calibration' "documents the calibration validation step"
+# guard against regression to 'not built here' deferral language for #47
+if grep -qiE 'not built here' "$SKILL" 2>/dev/null; then
+  fail "#47 must be live, not a deferred seam ('not built here' still present)"
+fi
+
 echo "PASS: sail command contract verified"

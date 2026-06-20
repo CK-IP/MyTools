@@ -102,3 +102,13 @@ class DecisionLog:
 
     def plan_marker(self, summary):
         self._append_marker(f"- plan: {_sanitize_text(summary)}")
+
+    def finding_resolution(self, finding_id, disposition, rationale):
+        # Per-finding resolution log (#47): records the driver's disposition of one review
+        # finding across the convergence loop. disposition is expected to be one of
+        # addressed|deferred|rejected, but is recorded verbatim (sanitized) — never crashes
+        # on an unexpected value.
+        self._append_marker(
+            f"- resolution: [{_sanitize_text(finding_id)}] "
+            f"{_sanitize_text(disposition)} — {_sanitize_text(rationale)}"
+        )

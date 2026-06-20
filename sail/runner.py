@@ -156,7 +156,7 @@ def _completed_review(run_dir):
     return data if isinstance(data.get("findings"), list) else None
 
 
-def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None, baseline_dir=None, review=True):
+def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None, baseline_dir=None, review=True, dual_lens=False):
     registry = build_registry()
 
     if run_dir is None:
@@ -302,15 +302,36 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
             # recorded review is stale. Drop it so the run re-reviews the current diff (#45).
             prior = None
             decision_log.review_marker("prior review stale (diff content changed under same ref); re-reviewing")
+        if prior is not None and prior.get("plan_hash") != review_mod.plan_fingerprint(run_dir):
+            # HIGH-1 (Gate F): the plan's acceptance criteria changed in the shared run-dir since
+            # the cached review. A stale review would skip the new ACs — drop it and re-review
+            # (mirrors the #45 diff-content reuse gate, applied to the plan->review spine).
+            prior = None
+            decision_log.review_marker("prior review stale (plan acceptance criteria changed); re-reviewing")
+        if prior is not None and review_mod.load_plan_acs(run_dir)[1] == "malformed":
+            # HIGH-4 (Gate F): plan.json is now malformed. The fingerprint can't distinguish a
+            # malformed plan from absent/no-AC (both hash []), so a stale completed review could
+            # be reused instead of failing closed. Refuse reuse → re-review fails closed (RT-2).
+            prior = None
+            decision_log.review_marker("prior review stale (plan.json now malformed); re-reviewing (fail-closed)")
+        if prior is not None and dual_lens and "lens2" not in (prior.get("lenses") or []):
+            # HIGH-3 (Gate F): a --dual-lens resume must not reuse a single-lens cached review —
+            # lens2 would never run. Invalidate when the requested mode needs a lens the cache lacks.
+            prior = None
+            decision_log.review_marker("prior review stale (--dual-lens requested but cache is single-lens); re-reviewing")
         if prior is not None:
-            # Resume of the same scope: reuse the completed review rather than re-invoking
-            # the backend, but recompute blocking from its findings (the authoritative
-            # signal) so a prior blocking review still blocks the resumed run.
-            review_rc = 1 if review_mod.has_blocking(prior["findings"]) else 0
+            # Resume of the same scope: reuse the completed review rather than re-invoking the
+            # backend, but recompute blocking from its findings AND its recorded plan_verification
+            # (an unmet AC still blocks on reuse) so a prior blocking review still blocks.
+            prior_unmet = any(
+                ac.get("status") == "unmet"
+                for ac in prior.get("plan_verification", {}).get("acceptance_criteria", [])
+            )
+            review_rc = 1 if (review_mod.has_blocking(prior["findings"]) or prior_unmet) else 0
             decision_log.review_marker("reused prior completed review (resumed)")
         else:
             if review_mod.backend_available():
-                review_rc = review_mod.run_review(target_root, diff_ref, run_dir=run_dir, advisory=False)
+                review_rc = review_mod.run_review(target_root, diff_ref, run_dir=run_dir, advisory=False, dual_lens=dual_lens)
             else:
                 # never-mask: review was requested but no backend can run it — fail closed,
                 # don't let the change pass as if it had been reviewed.

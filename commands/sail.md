@@ -49,14 +49,21 @@ Run the existing one-pass gate + review over the change, into the **same** sessi
 python3 -m sail run --target . --diff <base-ref> --run-dir "$SESSION_DIR"
 ```
 
-This runs the deterministic gates (ruff, mypy, pytest, bandit, semgrep, pip-audit — diff-scoped) **and** the blocking single-lens LLM review in one pass. A non-zero exit means a gate failed or the review found CRITICAL/HIGH findings — fix and re-run until clean (the review's own convergence).
+This runs the deterministic gates (ruff, mypy, pytest, bandit, semgrep, pip-audit — diff-scoped) **and** the blocking single-lens LLM review in one pass.
 
-## Seams for later work (#47 — not built here)
+**Plan↔review traceability spine (#47).** Because Stage 0 put `plan.json` in this same run-dir, the review stage reads its `acceptance_criteria` and records per-criterion `met / unmet / unknown` in `review.json`'s `plan_verification` block (the define-at-plan → verify-at-review spine). An **unmet** AC blocks (the spine has teeth); an absent plan is non-blocking (`no-plan`); a malformed `plan.json` **fails closed** (`status: error`, blocks) — it is never silently treated as no-plan.
 
-The shared session run-dir + `plan.json` contract is the discoverability hook for #47:
+**Bounded convergence loop (review stage; max 3 rounds — driver-owned).** A non-zero exit means a gate failed, the review found CRITICAL/HIGH findings, or an AC is unmet. Mirror the plan stage's loop: fix the surfaced findings, **record a per-finding disposition each round** (`addressed` / `deferred` / `rejected` + a one-line rationale, keyed by the finding's stable `id` from `review.json`), and re-run `sail run --diff` — up to **3 rounds**. If still blocking after 3 rounds, present `review.json`'s findings + `plan_verification` and ask the user: continue / abort / proceed-advisory. The single-invocation exit code is unchanged; the driver owns the re-run-after-fix loop.
 
-- **Acceptance-criteria verification** — the review stage reads the plan's `acceptance_criteria` from `plan.json` and records pass/fail per criterion (define-at-plan → verify-at-review traceability spine).
-- **`--dual-lens` escalation** — an optional second-lens (e.g. codex) review pass, risk-gated, for high-stakes diffs. Default stays single-lens (industry norm; convergence is the quality mechanism).
-- **Per-finding resolution log** — disposition (addressed / deferred / rejected) + rationale per finding.
+**`--dual-lens` risk-gated escalation (#47).** Default review is **single-lens** (industry norm; convergence is the quality mechanism). For a high-stakes diff — or when you simply want a cross-family second opinion — pass `--dual-lens` and set `SAIL_REVIEW_CMD2` to a second backend (e.g. a codex CLI):
 
-These are documented seams only — `/sail` today delivers the plan → build → review spine.
+```bash
+SAIL_REVIEW_CMD2="codex exec -m gpt-5.4-mini" \
+  python3 -m sail run --target . --diff <base-ref> --run-dir "$SESSION_DIR" --dual-lens
+```
+
+Both lenses review independently; their findings are unioned (each tagged `lens1`/`lens2` in `review.json`) and the gate blocks if **either** lens blocks or errors. `--dual-lens` with no `SAIL_REVIEW_CMD2` degrades cleanly to single-lens (logged, not an error).
+
+## Calibration (operator validation — deferred to a live run)
+
+The calibration acceptance criterion — *run looped `/sail` against issues `/ship` already handled (#32/#33 have full artifacts) and confirm the loop surfaces what `/ship`'s multi-round + dual-lens surfaced* — is an **operator validation step**, not a hermetic test: it needs a live LLM review backend (`SAIL_REVIEW_CMD` / `SAIL_REVIEW_CMD2`) and the merged #32/#33 artifacts. Run it once those are available and record the parity result in the ship's log (mirrors the #32 AC#7/#8 trial-runbook precedent). The build above delivers items 1–4 (plan-verification, resolution log, dual-lens, convergence) with hermetic tests; calibration is the live-run demonstration on top.

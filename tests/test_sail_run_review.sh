@@ -229,4 +229,48 @@ set +e; SAIL_REVIEW_CMD="bash $MOCK2" CALLED="$CALLED16" MOCK_OUT="$CLEAN_JSON" 
 [ -f "$CALLED16" ] || fail "T16: resume with same ref but changed content must re-review, not reuse a stale review"
 echo "PASS T16: same-ref changed-content resume re-reviews (diff-content fingerprint, #45)"
 
-echo "PASS: sail run gates+review one-pass + resume-safety (#41, #42) verified"
+# ── #47 HIGH-1: plan-hash reuse gate — a CHANGED plan.json must force a fresh review ──
+# (mirrors the #45 diff-content reuse gate, applied to the plan->review spine.)
+PLAN_AC1='{"status":"completed","approach":"x","acceptance_criteria":["AC one"],"risks":[],"scope":{"in":[],"out":[]},"summary":"s"}'
+PLAN_AC2='{"status":"completed","approach":"x","acceptance_criteria":["AC one","AC two NEW"],"risks":[],"scope":{"in":[],"out":[]},"summary":"s"}'
+AC1_MET='{"findings":[],"summary":"ok","ac_results":[{"criterion":"AC one","status":"met","evidence":"a"}]}'
+RD17="$WORK/rd17"; mkdir -p "$RD17"; printf '%s' "$PLAN_AC1" > "$RD17/plan.json"
+# First run: clean review against plan with one AC (all met) → exit 0, review.json completed.
+set +e; SAIL_REVIEW_CMD="bash $MOCK" MOCK_OUT="$AC1_MET" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD17" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "0" ] || fail "T17 setup: first plan-AC run should be clean (exit 0), got $rc"
+# Change the plan's ACs in the shared run-dir, then resume: the sentinel backend MUST be re-invoked
+# (stale review may have skipped the new AC).
+printf '%s' "$PLAN_AC2" > "$RD17/plan.json"
+CALLED17="$WORK/called17"
+set +e; SAIL_REVIEW_CMD="bash $MOCK2" CALLED="$CALLED17" MOCK_OUT="$AC1_MET" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD17" >/dev/null 2>&1; rc=$?; set -e
+[ -f "$CALLED17" ] || fail "T17: changed plan.json ACs must force a fresh review (backend not re-invoked)"
+grep -qi "plan acceptance criteria changed" "$RD17/decision-log.md" || fail "T17: missing plan-stale re-review marker"
+echo "PASS T17: changed plan ACs force a fresh review (plan-hash reuse gate, #47 HIGH-1)"
+
+# ── #47 HIGH-4: a plan.json that becomes MALFORMED on resume must refuse reuse (fail closed) ──
+RD18="$WORK/rd18"; mkdir -p "$RD18"; printf '%s' "$PLAN_AC1" > "$RD18/plan.json"
+set +e; SAIL_REVIEW_CMD="bash $MOCK" MOCK_OUT="$AC1_MET" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD18" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "0" ] || fail "T18 setup: first run should be clean, got $rc"
+printf '%s' '{"status":"completed","acceptance_criteria":[trunc' > "$RD18/plan.json"   # corrupt the plan
+CALLED18="$WORK/called18"
+set +e; SAIL_REVIEW_CMD="bash $MOCK2" CALLED="$CALLED18" MOCK_OUT="$AC1_MET" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD18" >/dev/null 2>&1; rc=$?; set -e
+[ -f "$CALLED18" ] || fail "T18: malformed plan on resume must refuse reuse (re-review)"
+[ "$rc" = "1" ] || fail "T18: malformed plan on resume must fail closed (expected 1), got $rc"
+echo "PASS T18: malformed plan on resume refuses reuse + fails closed (#47 HIGH-4)"
+
+# ── #47 HIGH-3: a --dual-lens resume must NOT reuse a single-lens cached review ──
+RD19="$WORK/rd19"; mkdir -p "$RD19"; printf '%s' "$PLAN_AC1" > "$RD19/plan.json"
+# First: single-lens clean run → review.json has lenses:["lens1"].
+set +e; SAIL_REVIEW_CMD="bash $MOCK" MOCK_OUT="$AC1_MET" python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD19" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "0" ] || fail "T19 setup: first single-lens run should be clean, got $rc"
+# Resume WITH --dual-lens → must re-invoke (lens2 was never run in the cache).
+CALLED19="$WORK/called19"
+set +e
+SAIL_REVIEW_CMD="bash $MOCK2" CALLED="$CALLED19" MOCK_OUT="$AC1_MET" \
+  SAIL_REVIEW_CMD2="bash $MOCK" \
+  python3 -m sail run --target "$TGT" --diff HEAD --run-dir "$RD19" --dual-lens >/dev/null 2>&1; rc=$?
+set -e
+[ -f "$CALLED19" ] || fail "T19: --dual-lens resume must NOT reuse a single-lens cache (re-review required)"
+echo "PASS T19: --dual-lens resume re-reviews a single-lens cache (#47 HIGH-3)"
+
+echo "PASS: sail run gates+review one-pass + resume-safety (#41, #42) + plan-hash/mode reuse (#47) verified"

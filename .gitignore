@@ -4,6 +4,7 @@
 .handoffs/
 .sail/
 .surf/
+.coverage
 
 .ship/review/
 .ship/state/
