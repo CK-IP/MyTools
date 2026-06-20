@@ -88,6 +88,20 @@ def _remove_worktree(target, path):
         shutil.rmtree(path, ignore_errors=True)
 
 
+def _sweep_stale_baseline_src(target):
+    # Diff-mode only: reap any <target>/.sail/runs/*/baseline-src checkouts before the
+    # current-tree gate scan. bandit -r ignores .gitignore, so a stale baseline-src left
+    # by an interrupted prior diff run would be scanned as part of the current tree; its
+    # files are absent from the clean baseline (checked out at diff_ref) → register as
+    # "new" → spurious block (#49). baseline-src is short-lived by design (created and
+    # removed within one _generate_baseline call), so any present at scan time is an
+    # abandoned remnant. _remove_worktree deregisters the git worktree AND rmtrees the dir.
+    # The current run's own baseline artifacts are already captured under <run_dir>/baseline/
+    # before this runs, so reaping baseline-src checkouts cannot empty the baseline (no RT-1).
+    for path in glob(os.path.join(target, ".sail", "runs", "*", "baseline-src")):
+        _remove_worktree(target, path)
+
+
 def _generate_baseline(registry, target, diff_ref, run_dir):
     # Detached worktree of diff_ref from target's repo; run the available checkers there;
     # write artifacts into <run_dir>/baseline/. Returns (baseline_dir, baseline_root).
@@ -184,6 +198,10 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
     if mode == "diff":
         decision_log.mode_marker(mode, diff_ref)
         baseline_dir, baseline_root = _generate_baseline(registry, target_root, diff_ref, run_dir)
+        # Reap any stale .sail/runs/*/baseline-src remnants now that the baseline artifacts
+        # are captured — before the current-tree scan, so bandit (which ignores .gitignore)
+        # cannot count their files as "new" findings vs the clean baseline (#49).
+        _sweep_stale_baseline_src(target_root)
     elif mode == "baseline":
         if os.path.realpath(baseline_dir) == os.path.realpath(run_dir):
             raise ValueError("sail --baseline: baseline dir must differ from --run-dir")
