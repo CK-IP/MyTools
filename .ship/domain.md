@@ -52,6 +52,11 @@ The sail host runs Python 3.9: no stdlib `tomllib` (3.11+) and no `match` statem
 
 *Source: #48 RT-9 + live verification (the original hermetic e2e used a non-triggering fixture).*
 
+### Helper scripts and the prose specs they serve must agree on an explicit file contract
+When a shell helper greps/reads state files that a prose command spec writes (e.g. `config/surf-resume.sh` reading `.surf/` journal markers that `commands/surf.md` produces), the spec MUST define the **exact durable markers** the helper depends on, and the helper's functional test MUST be driven from the spec's real prescribed format — never a bespoke fixture invented for the test. A grep-assertion suite over the spec can pass green while the helper greps for tokens the spec never writes (false negative) or tokens it writes incidentally every run (false positive) — a hand-made test fixture hides the disagreement. Prefer one authoritative signal (e.g. a done-marker) over content-heuristic greps.
+
+*Source: #53 full-branch RT — surf-resume.sh grepped `in flight`/`picked #`/`resume` journal tokens surf.md never wrote; the wrapper test masked it with a hand-made fixture.*
+
 ## Structure
 - `commands/` — personal Claude skill files (markdown)
 - `tests/` — shell test scripts verifying repo structure
