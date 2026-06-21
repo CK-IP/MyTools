@@ -32,6 +32,7 @@ def main() -> int:
     plan_parser.add_argument("--target")
     plan_parser.add_argument("--run-dir")
     plan_parser.add_argument("--advisory", action="store_true")
+    plan_parser.add_argument("--plan-adversary", action="store_true")
 
     args = parser.parse_args()
 
@@ -49,7 +50,7 @@ def main() -> int:
         return run_review(args.target, args.diff, args.run_dir, args.advisory, dual_lens=args.dual_lens)
     if args.command == "plan":
         from sail.plan import run_plan
-        return run_plan(args.target or ".", args.run_dir, args.advisory)
+        return run_plan(args.target or ".", args.run_dir, args.advisory, plan_adversary=args.plan_adversary)
 
     return 1
 
