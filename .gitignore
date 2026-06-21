@@ -1,6 +1,7 @@
 .DS_Store
 .claude/worktrees/
-.ship/
+.ship/*
+!.ship/domain.md
 .handoffs/
 .sail/
 .surf/

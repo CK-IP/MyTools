@@ -472,8 +472,10 @@ import json, os, subprocess, tempfile
 import sail.checkers as checkers
 shellcheck_chk = {c.name: c for c in checkers.build_registry()}["shellcheck"]
 with tempfile.TemporaryDirectory() as td:
-    # Unquoted $var → SC2086, a default shellcheck finding.
-    open(os.path.join(td, "bad.sh"), "w").write("#!/bin/sh\nvar=x\necho $var\n")
+    # Unquoted positional $1 → SC2086, a default shellcheck finding. (NOTE: `var=x; echo $var`
+    # does NOT trigger SC2086 — shellcheck knows a single-word literal is splitting-safe; a
+    # positional/unconstrained expansion is needed for a guaranteed finding. See .ship/domain.md.)
+    open(os.path.join(td, "bad.sh"), "w").write("#!/bin/sh\nls $1\n")
     out = os.path.join(td, "shellcheck.json")
     res = subprocess.run(shellcheck_chk.build_command(td, out), capture_output=True, text=True)
     # shellcheck -f json writes findings to STDOUT (no file flag); the runner persists it via
@@ -579,7 +581,14 @@ if command -v gitleaks >/dev/null 2>&1; then
 import json, os, subprocess, tempfile
 import sail.checkers as checkers
 gitleaks_chk = {c.name: c for c in checkers.build_registry()}["gitleaks"]
-SECRET = 'aws_key = "AKIAIOSFODNN7EXAMPLE"\nsecret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"\n'
+# Use a non-example secret: gitleaks allowlists the canonical AWS docs key AKIAIOSFODNN7EXAMPLE
+# as a known fake, so it is NOT flagged. A slack-bot-token has high entropy and IS detected by the
+# default ruleset (verified live, gitleaks 8.30). See .ship/domain.md.
+# NOTE: the token is ASSEMBLED from fragments so the contiguous literal never appears in this source
+# file — otherwise GitHub push-protection (secret scanning) blocks the push. gitleaks scans the
+# temp fixture written at runtime, which holds the full concatenated token.
+_TOK = "xoxb-1234567890-" + "1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"
+SECRET = 'slack_token = "' + _TOK + '"\n'
 def scan(target):
     out = os.path.join(target, "gitleaks.sarif")
     subprocess.run(gitleaks_chk.build_command(target, out), capture_output=True, text=True)

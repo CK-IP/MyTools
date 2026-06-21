@@ -174,26 +174,39 @@ If you already have your own global rules, read `home/CLAUDE.md` for ideas you m
 
 ---
 
-## Step 3: Install recommended review tools (optional)
+## Step 3: Install review-gate tools
 
-`/fortify` works with whatever tools you have installed. More tools installed = more coverage.
+Both `/fortify` AND the `/sail` deterministic gates run external review tools. Each tool is
+**availability-gated** — a gate whose tool is missing is silently skipped — so the more you
+install, the more coverage you get. **Install these so the gates actually run** (without them the
+checks pass vacuously):
 
 ```bash
-# Core (recommended for all projects)
-brew install semgrep gitleaks
+# Secrets + static analysis (powers sail's gitleaks/semgrep gates and /fortify)
+brew install gitleaks semgrep
+
+# Shell-script linting (powers sail's shellcheck gate — this repo is shell-heavy)
+brew install shellcheck
 
 # Python projects (CLI tools — use pipx to avoid venv conflicts on modern macOS/Linux)
-for pkg in pip-audit bandit radon pylint; do pipx install "$pkg"; done
-# coverage is best installed in your project venv: pip install coverage
+for pkg in pip-audit bandit radon pylint ruff mypy; do pipx install "$pkg"; done
+# coverage/pytest are best installed in your project venv: pip install coverage pytest
 
 # Node projects — npm audit is built-in (no install needed)
 # jest --coverage is built-in if you use jest
-
-# Shell scripts
-brew install shellcheck
 ```
 
-You can skip this step and install tools later — `/fortify` gracefully skips any tool that is not installed.
+**`gitleaks` and `shellcheck` specifically** power the sail hygiene gates added in #48 (secret
+scanning + shell linting). The sail runner skips them cleanly if absent, so the gates are dormant
+until these are installed — install them so secret/shell regressions are actually caught.
+
+Verify:
+
+```bash
+gitleaks version && shellcheck --version | head -2
+```
+
+You can install tools later — `/fortify` and `/sail` gracefully skip any tool that is not installed.
 
 ---
 
