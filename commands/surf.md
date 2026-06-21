@@ -140,9 +140,13 @@ Ask, via `AskUserQuestion` and follow-ups, and record:
 1. **Mission** — one or two sentences: what is this run for? (e.g. "Clear the bug backlog on
    the sandbox repo before the demo.")
 2. **Issue selection** — the whole board or a subset (resolved in Step 5).
-3. **Dependency graph** — which issues are independent and which form dependency chains
-   (issue B can't build until issue A lands). Record the chains explicitly; the per-issue
-   loop and the dependent-issue handling both read this.
+3. **Ordering guidance (optional)** — any dependencies, sequencing constraints, or priorities
+   the user already knows — especially **domain-knowledge ordering only the user can supply**
+   (e.g. "the demo needs #50 working first", "#44 must land before #45"). This is *guidance*,
+   **not the authoritative dependency graph**: in **Step 5b** `/surf` analyzes the selected
+   issues and derives the dependency graph + recommended build order itself, then reconciles
+   this guidance against its analysis (flagging conflicts — see Step 5b). Record whatever the
+   user provides; an empty answer is fine.
 4. **Decision authority** — what may `/surf` decide on its own, and what must always come back
    to the user? (e.g. "Decide naming and refactors; always ask before changing the public
    API.") In supervised mode this sets which questions wait on the deadline; in autonomous
@@ -164,9 +168,52 @@ project board is in use, `gh project item-list`. Present them as a readable list
 title, and any dependency note from the charter).
 
 Then let the user pick interactively — **the whole board or a subset** — via `AskUserQuestion`
-(this is an interactive selection prompt, never a flag). Record the resulting ordered work
-list in the charter, respecting the dependency graph from Step 4 (a parent always sequences
-before its dependents).
+(this is an interactive selection prompt, never a flag). Record the selected **issue set** in
+the charter. The *order* is not fixed here — **Step 5b** analyzes those issues and proposes the
+build sequence for approval.
+
+---
+
+## Build-order analysis
+
+### Step 5b: Analyze the board and propose a build sequence
+
+Before the run starts, `/surf` derives the build order **itself** rather than taking it on
+faith from the user — Chris is a non-programmer and can't reliably know the safe or optimal
+order. For the selected issues:
+
+1. **Analyze.** Read each selected issue via `gh issue view <n> --json title,body,labels` (and
+   any project-board fields). Extract:
+   - **Dependencies** — explicit **cross-references** like "depends on #44", "blocked by #X",
+     "after #Y", native sub-issue parent/child links, and shared-file / shared-area hints in
+     the bodies.
+   - **Risk** — how hard the issue is to undo (irreversible migrations, shared-history touches)
+     and how likely it is to block others.
+   - **Value** — how much the issue unblocks (a parent many depend on) or delivers.
+2. **Reconcile with the user's guidance (Step 4 #3).** Layer the Step-4 ordering guidance on
+   top of the analysis. The user's **domain-knowledge ordering wins where it doesn't break a
+   hard dependency**. **On conflict** — where the user's guidance contradicts an analysed
+   dependency (e.g. the user says "do #50 first" but #50 depends on un-built #48) — **do NOT
+   silently reorder: flag the conflict and ask** via `AskUserQuestion`, showing both the user's
+   stated order and what the analysis found, and let the user decide. Record the resolution in
+   the decision-log (Step 12).
+3. **Propose the recommended build order.** Present it as a table for approval — the four
+   columns are fixed:
+
+   | Issue | Topic | Dependencies | Why this position |
+   |-------|-------|--------------|-------------------|
+   | #44   | …     | none         | builds first — 3 issues depend on it; low risk |
+   | #45   | …     | #44          | needs #44's API; sequenced after its parent |
+   | …     | …     | …            | … |
+
+   **Parent-before-dependent is non-negotiable** in the proposed order (a parent always
+   sequences before its dependents); **risk and value break ties** among otherwise-independent
+   issues — lower-risk, higher-unblocking issues first.
+4. **Get approval, then record.** Get a "yes, go" on the order (or apply the user's edits and
+   re-present). Write the approved **ordered work list** — plus the per-issue dependency notes —
+   to the charter. This recorded order is the single source the per-issue loop (Step 7) and
+   dependent-issue handling (Step 10) read; re-anchoring at the top of every issue reads it from
+   the charter, so the analysis is done **once, up front**, not re-derived mid-run.
 
 ---
 
@@ -327,7 +374,8 @@ than 0 as park.
 
 ### Step 10: Building on top of other issues
 
-The dependency graph from the charter drives ordering. For a dependent issue:
+The dependency graph — derived by the Step 5b analysis, reconciled with the user's Step-4
+guidance, and recorded in the charter — drives ordering. For a dependent issue:
 
 - **Parent already auto-merged → build on fresh `main`.** This is the happy path: the parent's
   work is on `main`, so the dependent issue branches from `main` and `python3 -m sail run --diff

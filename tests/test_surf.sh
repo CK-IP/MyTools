@@ -104,6 +104,18 @@ grep -qi 'append-only' "$TARGET" && pass "append-only journal pinned" || fail "a
 # A7. Stacked-parent merge guard (FIX 4) pinned
 grep -qiE 'before auto-merging|verify .*parent.*merged|park the dependent' "$TARGET" && pass "stacked-parent merge guard pinned" || fail "stacked-parent merge guard missing"
 
+# A8. Auto-sequencing (#71) — /surf analyzes the board and proposes a build order
+grep -qiE 'Step 5b|analyze the board' "$TARGET" && pass "Step 5b analysis step present" || fail "Step 5b analysis step missing"
+grep -qiE 'cross-reference|depends on #|blocked by' "$TARGET" && pass "reads bodies/labels/cross-references" || fail "cross-reference analysis missing"
+grep -qiE 'recommended build (order|sequence)|propose the (sequence|build order)' "$TARGET" && pass "proposes a recommended build order" || fail "proposed build order missing"
+grep -qiE 'flag the conflict|silently reorder' "$TARGET" && pass "conflict flag-and-ask present" || fail "conflict flag-and-ask missing"
+grep -qiE 'ordering guidance|not the authoritative' "$TARGET" && pass "Step-4 input demoted to guidance" || fail "guidance-layer demotion missing"
+grep -qiE 'parent always sequences before its dependents|parent-before-dependent' "$TARGET" && pass "parent-before-dependent preserved" || fail "parent-before-dependent missing"
+# A8 (RT-1): pin the load-bearing protocol, not just the keyword
+grep -qF 'Issue | Topic | Dependencies | Why this position' "$TARGET" && pass "proposed-order table has the 4 fixed columns" || fail "4-column table header missing"
+grep -qiE 'get approval, then record' "$TARGET" && pass "approval-before-record ordering pinned" || fail "approval-before-record ordering missing"
+grep -qiE 'record the resolution' "$TARGET" && pass "conflict resolution recorded in decision-log" || fail "decision-log conflict-resolution missing"
+
 # --- Resume (#53) ---
 
 # R1. Resume section / Step 15 exists
