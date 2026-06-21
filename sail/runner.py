@@ -140,11 +140,28 @@ def _generate_baseline(registry, target, diff_ref, run_dir):
         ["git", "-C", target, "worktree", "add", "--detach", baseline_src, diff_ref],
         capture_output=True, text=True,
     )
+    use_clone = False
     if created.returncode != 0:
-        raise ValueError(
-            "sail --diff: cannot create baseline worktree for ref "
-            f"{diff_ref!r}: {created.stderr.strip()}"
+        use_clone = True
+        shutil.rmtree(baseline_src, ignore_errors=True)
+        cloned = subprocess.run(
+            ["git", "clone", "--no-checkout", target, baseline_src],
+            capture_output=True, text=True,
         )
+        if cloned.returncode != 0:
+            raise ValueError(
+                "sail --diff: cannot create baseline checkout for ref "
+                f"{diff_ref!r}: {cloned.stderr.strip()}"
+            )
+        checked_out = subprocess.run(
+            ["git", "-C", baseline_src, "checkout", "--detach", diff_ref],
+            capture_output=True, text=True,
+        )
+        if checked_out.returncode != 0:
+            raise ValueError(
+                "sail --diff: cannot checkout baseline ref "
+                f"{diff_ref!r}: {checked_out.stderr.strip()}"
+            )
     baseline_ctx = CheckerContext(diff_ref=diff_ref, mode="diff", target_root=os.path.abspath(baseline_src))
     try:
         for checker in registry:
@@ -163,7 +180,10 @@ def _generate_baseline(registry, target, diff_ref, run_dir):
                 pass  # failed baseline checker -> missing artifact -> treated as empty baseline
         return baseline_dir, baseline_src
     finally:
-        _remove_worktree(target, baseline_src)
+        if use_clone:
+            shutil.rmtree(baseline_src, ignore_errors=True)
+        else:
+            _remove_worktree(target, baseline_src)
 
 
 def _completed_review(run_dir):
@@ -186,7 +206,7 @@ def _completed_review(run_dir):
     return data if isinstance(data.get("findings"), list) else None
 
 
-def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None, baseline_dir=None, review=True, dual_lens=False):
+def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None, baseline_dir=None, review=True, dual_lens=False, round=1):
     registry = build_registry()
 
     if run_dir is None:
@@ -378,42 +398,44 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
         # Reuse a prior review only on a genuine resume of the SAME scope (target + diff).
         # A resume that changed --target/--diff must re-review, never reuse a stale result.
         scope_match = resumed and prior_target == target_root and prior_diff_ref == diff_ref
-        prior = _completed_review(run_dir) if scope_match else None
-        if prior is not None and prior.get("diff_hash") != review_mod.diff_fingerprint(target_root, diff_ref):
+        reuse_candidate = _completed_review(run_dir) if scope_match else None
+        if round > 1:
+            reuse_candidate = None
+        if reuse_candidate is not None and reuse_candidate.get("diff_hash") != review_mod.diff_fingerprint(target_root, diff_ref):
             # Same target+ref, but the diff CONTENT changed under a moving ref (e.g. HEAD): the
             # recorded review is stale. Drop it so the run re-reviews the current diff (#45).
-            prior = None
+            reuse_candidate = None
             decision_log.review_marker("prior review stale (diff content changed under same ref); re-reviewing")
-        if prior is not None and prior.get("plan_hash") != review_mod.plan_fingerprint(run_dir):
+        if reuse_candidate is not None and reuse_candidate.get("plan_hash") != review_mod.plan_fingerprint(run_dir):
             # HIGH-1 (Gate F): the plan's acceptance criteria changed in the shared run-dir since
             # the cached review. A stale review would skip the new ACs — drop it and re-review
             # (mirrors the #45 diff-content reuse gate, applied to the plan->review spine).
-            prior = None
+            reuse_candidate = None
             decision_log.review_marker("prior review stale (plan acceptance criteria changed); re-reviewing")
-        if prior is not None and review_mod.load_plan_acs(run_dir)[1] == "malformed":
+        if reuse_candidate is not None and review_mod.load_plan_acs(run_dir)[1] == "malformed":
             # HIGH-4 (Gate F): plan.json is now malformed. The fingerprint can't distinguish a
             # malformed plan from absent/no-AC (both hash []), so a stale completed review could
             # be reused instead of failing closed. Refuse reuse → re-review fails closed (RT-2).
-            prior = None
+            reuse_candidate = None
             decision_log.review_marker("prior review stale (plan.json now malformed); re-reviewing (fail-closed)")
-        if prior is not None and dual_lens and "lens2" not in (prior.get("lenses") or []):
+        if reuse_candidate is not None and dual_lens and "lens2" not in (reuse_candidate.get("lenses") or []):
             # HIGH-3 (Gate F): a --dual-lens resume must not reuse a single-lens cached review —
             # lens2 would never run. Invalidate when the requested mode needs a lens the cache lacks.
-            prior = None
+            reuse_candidate = None
             decision_log.review_marker("prior review stale (--dual-lens requested but cache is single-lens); re-reviewing")
-        if prior is not None:
+        if reuse_candidate is not None:
             # Resume of the same scope: reuse the completed review rather than re-invoking the
             # backend, but recompute blocking from its findings AND its recorded plan_verification
             # (an unmet AC still blocks on reuse) so a prior blocking review still blocks.
             prior_unmet = any(
                 ac.get("status") == "unmet"
-                for ac in prior.get("plan_verification", {}).get("acceptance_criteria", [])
+                for ac in reuse_candidate.get("plan_verification", {}).get("acceptance_criteria", [])
             )
-            review_rc = 1 if (review_mod.has_blocking(prior["findings"]) or prior_unmet) else 0
+            review_rc = 1 if (review_mod.has_blocking(reuse_candidate["findings"]) or prior_unmet) else 0
             decision_log.review_marker("reused prior completed review (resumed)")
         else:
-            if review_mod.backend_available():
-                review_rc = review_mod.run_review(target_root, diff_ref, run_dir=run_dir, advisory=False, dual_lens=dual_lens)
+            if review_mod.active_review_available(round):
+                review_rc = review_mod.run_review(target_root, diff_ref, run_dir=run_dir, advisory=False, dual_lens=dual_lens, round=round)
             else:
                 # never-mask: review was requested but no backend can run it — fail closed,
                 # don't let the change pass as if it had been reviewed.

@@ -55,7 +55,7 @@ With a clean `plan.json` as the agreed baseline, build the change test-first: wr
 Run the existing one-pass gate + review over the change, into the **same** session run-dir:
 
 ```bash
-python3 -m sail run --target . --diff <base-ref> --run-dir "$SESSION_DIR"
+python3 -m sail run --target . --diff <base-ref> --run-dir "$SESSION_DIR" --round N
 ```
 
 This runs the deterministic gates (ruff, mypy, pytest, bandit, semgrep, pip-audit — diff-scoped) **and** the blocking single-lens LLM review in one pass.
@@ -63,6 +63,10 @@ This runs the deterministic gates (ruff, mypy, pytest, bandit, semgrep, pip-audi
 **Plan↔review traceability spine (#47).** Because Stage 0 put `plan.json` in this same run-dir, the review stage reads its `acceptance_criteria` and records per-criterion `met / unmet / unknown` in `review.json`'s `plan_verification` block (the define-at-plan → verify-at-review spine). An **unmet** AC blocks (the spine has teeth); an absent plan is non-blocking (`no-plan`); a malformed `plan.json` **fails closed** (`status: error`, blocks) — it is never silently treated as no-plan.
 
 **Bounded convergence loop (review stage; max 3 rounds — driver-owned).** A non-zero exit means a gate failed, the review found CRITICAL/HIGH findings, or an AC is unmet. Mirror the plan stage's loop: fix the surfaced findings, **record a per-finding disposition each round** (`addressed` / `deferred` / `rejected` + a one-line rationale, keyed by the finding's stable `id` from `review.json`), and re-run `sail run --diff` — up to **3 rounds**. If still blocking after 3 rounds, present `review.json`'s findings + `plan_verification` and ask the user: continue / abort / proceed-advisory. The single-invocation exit code is unchanged; the driver owns the re-run-after-fix loop.
+
+**`--round` multi-round discipline.** The driver increments `--round N` on each re-run, starting at 1. Round `N > 1` feeds the reviewer the prior round's findings + resolutions from the shared run-dir and tells it to review only the inter-round diff, so carried items stay stable instead of being re-litigated.
+
+**Per-round model escalation.** Keep early rounds on the cheaper `SAIL_REVIEW_CMD` backend. On later rounds, set `SAIL_REVIEW_CMD_ESCALATED` to a stronger backend and optionally `SAIL_REVIEW_ESCALATE_ROUND` (default 3) to switch over once the round threshold is reached. The active backend is selected per round, so round 1 stays light and later rounds can escalate cleanly.
 
 **`--dual-lens` risk-gated escalation (#47).** Default review is **single-lens** (industry norm; convergence is the quality mechanism). For a high-stakes diff — or when you simply want a cross-family second opinion — pass `--dual-lens` and set `SAIL_REVIEW_CMD2` to a second backend (e.g. a codex CLI):
 

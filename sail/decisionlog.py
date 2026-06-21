@@ -112,3 +112,28 @@ class DecisionLog:
             f"- resolution: [{_sanitize_text(finding_id)}] "
             f"{_sanitize_text(disposition)} — {_sanitize_text(rationale)}"
         )
+
+    def read_resolutions(self):
+        # Read the resolution trail back into a dict keyed by finding id. Later markers
+        # override earlier ones so the last recorded disposition wins.
+        out = {}
+        for line in self._read_lines():
+            prefix = "- resolution: ["
+            if not line.startswith(prefix):
+                continue
+            end = line.find("]", len(prefix))
+            if end == -1:
+                continue
+            finding_id = line[len(prefix):end]
+            remainder = line[end + 1 :]
+            if not remainder.startswith(" "):
+                continue
+            remainder = remainder[1:]
+            sep = " — "
+            split_at = remainder.find(sep)
+            if split_at == -1:
+                continue
+            disposition = remainder[:split_at]
+            rationale = remainder[split_at + len(sep) :]
+            out[finding_id] = {"disposition": disposition, "rationale": rationale}
+        return out

@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import uuid
 from datetime import datetime, timezone
+import tempfile
 
 from sail.decisionlog import DecisionLog
 
@@ -49,6 +50,18 @@ diff alone ("unknown"). Add this key to the SAME JSON object:
 {acs}
 === END ACCEPTANCE CRITERIA ==="""
 
+MULTI_ROUND_PROMPT = """
+
+=== PRIOR-ROUND ===
+{prior_findings}
+=== END PRIOR-ROUND ===
+
+This is a follow-up review round. Review ONLY the changes since the prior round.
+Re-flag a prior finding ONLY if its recorded resolution is INCORRECT (the fix is wrong / introduces a new defect) — not merely incomplete.
+Flag genuinely NEW issues.
+Continue the existing finding-id scheme; keep prior ids stable for carried findings.
+Do not re-review resolved findings from scratch."""
+
 
 def _backend_argv():
     env = os.environ.get("SAIL_REVIEW_CMD")
@@ -61,6 +74,13 @@ def _second_lens_argv():
     # The optional second review lens (--dual-lens, #47). Only SAIL_REVIEW_CMD2 — there is
     # no built-in default, so dual-lens is opt-in and never auto-enables a second backend.
     env = os.environ.get("SAIL_REVIEW_CMD2")
+    if env:
+        return shlex.split(env)
+    return None
+
+
+def _escalated_argv():
+    env = os.environ.get("SAIL_REVIEW_CMD_ESCALATED")
     if env:
         return shlex.split(env)
     return None
@@ -86,8 +106,52 @@ def second_lens_available():
     return _argv_runnable(_second_lens_argv())
 
 
-def build_prompt(diff_text, acs=None):
+def escalate_round():
+    env = os.environ.get("SAIL_REVIEW_ESCALATE_ROUND")
+    if not env:
+        return 3
+    try:
+        return int(env)
+    except (TypeError, ValueError):
+        return 3
+
+
+def escalated_available():
+    return _argv_runnable(_escalated_argv())
+
+
+def select_review_argv(round):
+    escalated_argv = _escalated_argv()
+    if round >= escalate_round() and _argv_runnable(escalated_argv):
+        return escalated_argv
+    return _backend_argv()
+
+
+def active_review_available(round):
+    return _argv_runnable(select_review_argv(round))
+
+
+def build_prompt(diff_text, acs=None, prior=None):
     prompt = REVIEW_PROMPT.format(diff=diff_text)
+    if prior:
+        def _prior_value(value):
+            return "null" if value is None else str(value)
+
+        prior_block = "\n".join(
+            (
+                f"[{finding.get('id', '')}] {finding.get('severity', '')} "
+                f"({_prior_value(finding.get('file'))}:{_prior_value(finding.get('line'))}) — "
+                f"{finding.get('issue', '')}  resolution: {finding.get('disposition', '')} — "
+                f"{finding.get('rationale', '')}"
+            )
+            for finding in prior
+            if isinstance(finding, dict)
+        )
+        prompt = prompt.replace(
+            "\n\n=== DIFF ===\n",
+            MULTI_ROUND_PROMPT.format(prior_findings=prior_block) + "\n\n=== DIFF ===\n",
+            1,
+        )
     if acs:
         acs_block = "\n".join(f"- {ac}" for ac in acs)
         prompt += AC_PROMPT.format(acs=acs_block)
@@ -121,6 +185,26 @@ def load_plan_acs(run_dir):
         return None, "ok"
     acs = [str(ac) for ac in raw if isinstance(ac, (str, int, float)) and str(ac).strip()]
     return (acs or None), "ok"
+
+
+def load_prior_findings(run_dir, target, diff_ref):
+    # Scope-gated reuse helper: return the stored findings only when review.json matches
+    # the exact target + diff_ref pair for this call. Never raises; bad or mismatched input
+    # is treated as "no prior findings".
+    path = os.path.join(run_dir, "review.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    if data.get("target") != target or data.get("diff_ref") != diff_ref:
+        return []
+    if data.get("status") != "completed":
+        return []
+    findings = data.get("findings")
+    return findings if isinstance(findings, list) else []
 
 
 def _finding_id(finding, lens="lens1"):
@@ -308,13 +392,13 @@ def _invoke(prompt, argv=None):
     return result.returncode, result.stdout, result.stderr
 
 
-def review(target, diff_ref, advisory=False, acs=None, lens="lens1", argv=None):
+def review(target, diff_ref, advisory=False, acs=None, lens="lens1", argv=None, prior=None):
     diff_text = _git_diff(target, diff_ref)
     diff_hash = _sha256(diff_text)
     if not diff_text.strip():
         return {"findings": [], "raw": "", "rc": 0, "parse_ok": True, "empty_diff": True,
                 "diff_hash": diff_hash, "ac_results": None}
-    rc, out, err = _invoke(build_prompt(diff_text, acs=acs), argv=argv)
+    rc, out, err = _invoke(build_prompt(diff_text, acs=acs, prior=prior), argv=argv)
     findings = parse_findings(out)
     if findings is not None:
         for finding in findings:
@@ -335,9 +419,10 @@ def review(target, diff_ref, advisory=False, acs=None, lens="lens1", argv=None):
     }
 
 
-def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False):
+def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, round=1):
     if target is None:
         target = "."
+    target = os.path.abspath(target or ".")
     if run_dir is None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         run_dir = os.path.join(os.getcwd(), ".sail", "runs", f"review-{stamp}-{uuid.uuid4().hex[:8]}")
@@ -345,7 +430,17 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False):
     log = DecisionLog(run_dir)
     artifact_path = os.path.join(run_dir, "review.json")
 
-    if not backend_available():
+    escalated_argv = _escalated_argv()
+    active_argv = select_review_argv(round)
+    if active_argv == escalated_argv and round >= escalate_round():
+        log.review_marker(f"escalated review backend (round {round})")
+    elif round >= escalate_round() and escalated_argv and not _argv_runnable(escalated_argv):
+        log.review_marker(
+            f"escalation requested (round {round}) but SAIL_REVIEW_CMD_ESCALATED not runnable — "
+            "using default backend"
+        )
+
+    if not _argv_runnable(active_argv):
         with open(artifact_path, "w", encoding="utf-8") as fh:
             json.dump({"status": "skipped", "reason": "no LLM backend available"}, fh, indent=2)
         log.review_marker("skipped: no LLM backend available")
@@ -355,7 +450,23 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False):
     # Plan->review spine (#47): load the plan's acceptance criteria from the shared run-dir.
     acs, plan_status = load_plan_acs(run_dir)
 
-    result = review(target, diff_ref, advisory=advisory, acs=acs, lens="lens1")
+    prior_context = None
+    if round > 1:
+        prior_context = []
+        resolutions = log.read_resolutions()
+        for finding in load_prior_findings(run_dir, target, diff_ref):
+            if not isinstance(finding, dict):
+                continue
+            prior_finding = dict(finding)
+            finding_id = prior_finding.get("id")
+            if finding_id in resolutions:
+                prior_finding.update(resolutions[finding_id])
+            else:
+                prior_finding.setdefault("disposition", "")
+                prior_finding.setdefault("rationale", "")
+            prior_context.append(prior_finding)
+
+    result = review(target, diff_ref, advisory=advisory, acs=acs, lens="lens1", argv=active_argv, prior=prior_context)
     findings = list(result["findings"])
     ac_results_by_lens = [result.get("ac_results")]
     # Backend error = a non-empty diff whose review is unusable: bad exit code OR unparseable.
@@ -371,7 +482,7 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False):
     if dual_lens and not result.get("empty_diff"):
         if second_lens_available():
             result2 = review(target, diff_ref, advisory=advisory, acs=acs,
-                             lens="lens2", argv=_second_lens_argv())
+                             lens="lens2", argv=_second_lens_argv(), prior=prior_context)
             findings.extend(result2["findings"])
             ac_results_by_lens.append(result2.get("ac_results"))
             lenses.append("lens2")
@@ -400,22 +511,33 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False):
         if ac.get("status") == "unmet"
     ]
 
-    with open(artifact_path, "w", encoding="utf-8") as fh:
-        json.dump(
-            {
-                "status": "error" if (backend_error or plan_error) else "completed",
-                "parse_ok": result["parse_ok"],
-                "rc": result["rc"],
-                "counts": counts,
-                "findings": findings,
-                "diff_hash": result.get("diff_hash"),
-                "plan_hash": _sha256(json.dumps(acs or [], sort_keys=True)),
-                "plan_verification": plan_verification,
-                "lenses": lenses,
-            },
-            fh,
-            indent=2,
-        )
+    review_data = {
+        "status": "error" if (backend_error or plan_error) else "completed",
+        "parse_ok": result["parse_ok"],
+        "rc": result["rc"],
+        "counts": counts,
+        "findings": findings,
+        "diff_hash": result.get("diff_hash"),
+        "plan_hash": _sha256(json.dumps(acs or [], sort_keys=True)),
+        "plan_verification": plan_verification,
+        "lenses": lenses,
+        "target": target,
+        "diff_ref": diff_ref,
+    }
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=run_dir) as fh:
+            tmp_path = fh.name
+            json.dump(review_data, fh, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, artifact_path)
+    finally:
+        if tmp_path is not None and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
     marker = (
         f"{len(findings)} findings ({counts['CRITICAL']} CRITICAL, {counts['HIGH']} HIGH, "
         f"{counts['MEDIUM']} MEDIUM, {counts['LOW']} LOW)"
