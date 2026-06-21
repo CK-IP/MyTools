@@ -216,16 +216,25 @@ brew install gitleaks semgrep
 brew install shellcheck
 
 # Python projects (CLI tools — use pipx to avoid venv conflicts on modern macOS/Linux)
-for pkg in pip-audit bandit radon pylint ruff mypy; do pipx install "$pkg"; done
+for pkg in pip-audit bandit radon pylint ruff mypy diff-cover; do pipx install "$pkg"; done
 # coverage/pytest are best installed in your project venv: pip install coverage pytest
 
-# Node projects — npm audit is built-in (no install needed)
+# Node projects — npm audit is built-in with npm (no install needed); powers sail's npm-audit gate
 # jest --coverage is built-in if you use jest
 ```
 
 **`gitleaks` and `shellcheck` specifically** power the sail hygiene gates added in #48 (secret
 scanning + shell linting). The sail runner skips them cleanly if absent, so the gates are dormant
 until these are installed — install them so secret/shell regressions are actually caught.
+
+**`diff-cover` and `npm`** power the two sail gates added in #52 (see `docs/fortify-sail-parity.md`):
+- **`npm-audit`** (Node dependency vulns) — needs `npm` on PATH. No-Node repos pass cleanly via an
+  empty-JSON sentinel (target-aware manifest detection), so this gate is a clean no-op where
+  there's no `package.json`+`package-lock.json` at the target root.
+- **`diff-coverage`** (line-level coverage of changed lines) — needs `diff-cover` (`pipx install
+  diff-cover`) AND the pytest gate's `coverage.xml`. Advisory by default; set
+  `diff-coverage-threshold: N` on its own line in `.ship/domain.md` to make it blocking. Absent
+  `diff-cover` or `coverage.xml` → the gate emits a clean sentinel (never a false-block).
 
 Verify:
 
