@@ -47,7 +47,7 @@ import sys
 
 state_path = sys.argv[1]
 log_path = sys.argv[2]
-expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks"]
+expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage"]
 
 with open(state_path, "r", encoding="utf-8") as fh:
     data = json.load(fh)
@@ -66,6 +66,11 @@ if [gate.get("name") for gate in gates] != expected_names:
     raise SystemExit(1)
 
 import shutil
+import sail.checkers as _checkers
+
+# Most checkers' tool binary == their registry name, but #52 adds npm-audit (tool=npm) and
+# diff-coverage (tool=diff-cover) where they differ — resolve availability via the real tool.
+_tool_by_name = {c.name: c.tool for c in _checkers.build_registry()}
 
 terminal_statuses = {"passed", "failed", "skipped"}
 # pytest is the one checker that legitimately skips while installed: on a target
@@ -91,7 +96,19 @@ for gate in gates:
             file=sys.stderr,
         )
         raise SystemExit(1)
-    available = shutil.which(name) is not None
+    # diff-coverage is a DIFF-ONLY gate (#52): in this whole-repo run it is always skipped with
+    # a "diff-only gate" reason — regardless of whether diff-cover is installed. Accept that
+    # legitimate skip explicitly (mirrors the pytest legit-skip whitelist) before the
+    # tool-availability invariant below.
+    if name == "diff-coverage":
+        if status != "skipped":
+            print(f"FAIL: diff-coverage must be skipped in whole-repo mode, got {status!r}", file=sys.stderr)
+            raise SystemExit(1)
+        if "diff-only" not in (gate.get("reason") or ""):
+            print(f"FAIL: diff-coverage whole-repo skip must record a diff-only reason, got {gate.get('reason')!r}", file=sys.stderr)
+            raise SystemExit(1)
+        continue
+    available = shutil.which(_tool_by_name.get(name, name)) is not None
     if available:
         # Tool installed -> the gate actually ran: terminal pass/fail with rc recorded,
         # never a clean skip -- EXCEPT pytest's legitimate no-tests/collection skip.
@@ -135,9 +152,9 @@ if len(header_lines) != 1:
     raise SystemExit(1)
 
 seq_lines = [line for line in lines if "seq=" in line]
-if len(seq_lines) != 8:
+if len(seq_lines) != 10:
     print(
-        f"FAIL: decision-log.md expected 8 outcome lines with seq=, got {len(seq_lines)}",
+        f"FAIL: decision-log.md expected 10 outcome lines with seq=, got {len(seq_lines)}",
         file=sys.stderr,
     )
     raise SystemExit(1)

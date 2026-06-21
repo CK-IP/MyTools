@@ -16,7 +16,14 @@ KIND_BY_ARTIFACT = {
     "pip-audit.json": "pipaudit",
     "shellcheck.json": "shellcheck",
     "gitleaks.sarif": "sarif",
+    "npm-audit.json": "npmaudit",
+    "diff-coverage.json": "diffcoverage",
 }
+
+# Artifacts whose gate is meaningful ONLY in diff mode (coverage of CHANGED lines vs a
+# compare ref). The runner skips these in whole-repo mode and during baseline generation.
+DIFF_ONLY_ARTIFACTS = {"diff-coverage.json"}
+
 
 
 def _rel(uri_or_path, root):
@@ -98,11 +105,69 @@ def _shellcheck_records(path, root):
     return out
 
 
+def _npmaudit_records(path, root):
+    # `npm audit --json` v2 schema: top-level "vulnerabilities" map keyed by module name; each
+    # entry's "via" list holds either advisory objects ({"source": <id>, ...}) or strings (a
+    # transitive ref to another vulnerable module). Fingerprint = (module, advisory-id) so a
+    # pre-existing advisory is suppressed across baseline/current in diff mode. Tolerant of the
+    # empty/absent shapes the sentinel emits: {} and {"vulnerabilities": {}} both yield [] (a
+    # CLEAN no-Node pass), NOT None — None is reserved for an unparseable artifact (error).
+    try:
+        doc = _load_json(path)
+    except (OSError, ValueError):
+        return None  # corrupt/missing artifact => fail closed (caller maps None -> failed).
+    if isinstance(doc, dict) and doc.get("error") is not None:
+        # `npm audit --json` emits {"error": {...}} on a config/lockfile error (e.g. ENOLOCK).
+        # That is NOT a clean audit — fail closed rather than parse it as zero vulnerabilities.
+        return None
+    out = []
+    vulns = (doc or {}).get("vulnerabilities") or {}
+    for module, info in vulns.items():
+        name = (info or {}).get("name") or module
+        for via in (info or {}).get("via") or []:
+            if isinstance(via, dict):
+                src = via.get("source")
+                aid = "" if src is None else str(src)
+            else:
+                # a string "via" is a transitive pointer to another module — fingerprint by it
+                # so the same transitive relationship is stable across runs.
+                aid = str(via)
+            out.append({"fp": (name, aid), "record": {"module": name, "advisory": aid}})
+    return out
+
+
+def diffcoverage_records(path, threshold):
+    # diff-cover --json-report schema: {"total_percent_covered": F, "src_stats": {file:
+    # {"violation_lines": [int, ...]}}}. Emit ONE finding per uncovered changed line — but
+    # ONLY when total changed-line coverage < threshold. threshold None (advisory mode) =>
+    # always [] (the gate never blocks). At/above threshold => [] (advisory pass). The line
+    # is the unit of work, so the fingerprint is (file, line). Returns None only on an
+    # unparseable/missing artifact (error signal), via _records below.
+    if threshold is None:
+        return []
+    try:
+        doc = _load_json(path)
+    except (OSError, ValueError):
+        return None  # corrupt/missing report => fail closed (runner maps None -> failed).
+    total = (doc or {}).get("total_percent_covered")
+    try:
+        if total is not None and float(total) >= float(threshold):
+            return []
+    except (TypeError, ValueError):
+        pass
+    out = []
+    for f, stats in ((doc or {}).get("src_stats") or {}).items():
+        for line in (stats or {}).get("violation_lines") or []:
+            out.append({"fp": (f, line), "record": {"file": f, "line": line}})
+    return out
+
+
 _EXTRACTORS = {
     "sarif": _sarif_records,
     "junit": _junit_records,
     "pipaudit": _pipaudit_records,
     "shellcheck": _shellcheck_records,
+    "npmaudit": _npmaudit_records,
 }
 
 
