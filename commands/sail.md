@@ -55,10 +55,10 @@ With a clean `plan.json` as the agreed baseline, build the change test-first: wr
 Run the existing one-pass gate + review over the change, into the **same** session run-dir:
 
 ```bash
-python3 -m sail run --target . --diff <base-ref> --run-dir "$SESSION_DIR" --round N
+python3 -m sail run --target . --diff <base-ref> --run-dir "$SESSION_DIR" --round N --tidiness
 ```
 
-This runs the deterministic gates (ruff, mypy, pytest, bandit, semgrep, pip-audit — diff-scoped) **and** the blocking single-lens LLM review in one pass.
+This runs the deterministic gates (ruff, mypy, pytest, bandit, semgrep, pip-audit — diff-scoped) **and** the blocking single-lens LLM review in one pass. The `--tidiness` flag adds the advisory tidiness/simplify lens (below).
 
 **Plan↔review traceability spine (#47).** Because Stage 0 put `plan.json` in this same run-dir, the review stage reads its `acceptance_criteria` and records per-criterion `met / unmet / unknown` in `review.json`'s `plan_verification` block (the define-at-plan → verify-at-review spine). An **unmet** AC blocks (the spine has teeth); an absent plan is non-blocking (`no-plan`); a malformed `plan.json` **fails closed** (`status: error`, blocks) — it is never silently treated as no-plan.
 
@@ -76,6 +76,18 @@ SAIL_REVIEW_CMD2="codex exec -m gpt-5.4-mini" \
 ```
 
 Both lenses review independently; their findings are unioned (each tagged `lens1`/`lens2` in `review.json`) and the gate blocks if **either** lens blocks or errors. `--dual-lens` with no `SAIL_REVIEW_CMD2` degrades cleanly to single-lens (logged, not an error).
+
+**`--tidiness` advisory cleanup lens (#63).** `/sail` deliberately dropped `/ship`'s simplify step — that omission let non-blocking *messiness* (a redundant line, an `N=9` that should be `N=8`, dead locals) ship even when the correctness review converged at "0 high-severity". Tidiness *is* code quality, and a non-coder adds ~zero value judging it — so it must be a **machine** lens. `--tidiness` adds a **separate, advisory** pass that ports Anthropic's `/code-review` + `/simplify` intent (reuse/de-duplication, simplification, dead code, naming, efficiency, altitude). It is kept **strictly separate** from the correctness review and the cross-family `--dual-lens` (codex = different *bugs*; tidiness = *cleanup*), so it never dilutes the adversarial bug-finding craft. The front door passes `--tidiness` by default (above) to close the gap.
+
+- **Non-blocking by construction.** Tidiness findings are recorded under their own `tidiness` key in `review.json` (each tagged `lens: "tidiness"`); they never enter the blocking `findings`/`counts` and never change the exit code. They surface for the driver/human to apply — cleanups are not convergence blockers.
+- **Efficient by two knobs.** Point the lens at a cheaper/lower-effort model with `SAIL_TIDINESS_CMD` (falls back to the default review backend when unset), and/or run it only on larger diffs with `SAIL_TIDINESS_MIN_LINES` (default `0` = any non-empty diff; set higher to skip small diffs). Either knob keeps the extra pass cheap.
+- **Degrades cleanly.** An empty diff, a size-gated skip, a missing backend, or an unusable response all record `"status": "skipped"` in the `tidiness` block — never a hard error, never a blocked run.
+
+```bash
+SAIL_TIDINESS_CMD="codex exec -m gpt-5.4-mini -c model_reasoning_effort=low" \
+SAIL_TIDINESS_MIN_LINES=40 \
+  python3 -m sail run --target . --diff <base-ref> --run-dir "$SESSION_DIR" --round N --tidiness
+```
 
 ## Calibration (operator validation — deferred to a live run)
 
