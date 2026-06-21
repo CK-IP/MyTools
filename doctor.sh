@@ -24,6 +24,7 @@ warn=0
 green()  { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 yellow() { printf '  \033[33m⚠\033[0m %s\n' "$1"; warn=$((warn + 1)); }
 red()    { printf '  \033[31m✗\033[0m %s\n' "$1"; bad=$((bad + 1)); }
+info()   { printf '  \033[2m·\033[0m %s\n' "$1"; }
 
 printf '\nCK-Skills setup check — repo: %s\n\n' "$REPO_ROOT"
 
@@ -69,6 +70,31 @@ echo "Gate tools (sail deterministic gates + /fortify — availability-gated, sk
 for t in gitleaks shellcheck semgrep ruff mypy pytest bandit pip-audit; do
   if command -v "$t" >/dev/null 2>&1; then green "$t"; else yellow "$t not installed — its gate is skipped"; fi
 done
+
+echo ""
+echo "Background agents + /surf readiness (informational — never blocks):"
+if [ "$(uname -s)" = "Darwin" ]; then
+  for la in com.crg.daemon com.crg.refresh-reminder com.surf.resume; do
+    if launchctl list 2>/dev/null | grep -q "$la"; then
+      green "$la loaded"
+    else
+      info "$la not loaded — optional (run install.sh or INSTALL.md Step 7)"
+    fi
+  done
+else
+  info "LaunchAgents are macOS-only — skipped"
+fi
+if ( cd "$REPO_ROOT" && python3 -m sail run --help ) >/dev/null 2>&1; then
+  green "/surf engine (python3 -m sail run) works"
+else
+  yellow "/surf engine (python3 -m sail run) not runnable — /surf will not work"
+fi
+if [ -f "$SETTINGS" ] && grep -q "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" "$SETTINGS"; then
+  green "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS set (/surf heavy-issue teammates)"
+else
+  yellow "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS not in settings.json — /surf supervised teammates disabled"
+fi
+info "autonomous /surf needs 'claude --dangerously-bypass-permissions' (a launch flag — can't be auto-detected)"
 
 echo ""
 if [ "$bad" -gt 0 ]; then
