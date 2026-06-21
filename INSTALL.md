@@ -215,9 +215,10 @@ brew install gitleaks semgrep
 # Shell-script linting (powers sail's shellcheck gate — this repo is shell-heavy)
 brew install shellcheck
 
-# Python projects (CLI tools — use pipx to avoid venv conflicts on modern macOS/Linux)
-for pkg in pip-audit bandit radon pylint ruff mypy diff-cover; do pipx install "$pkg"; done
+# Python sail-gate CLI tools (use pipx to avoid venv conflicts on modern macOS/Linux)
+for pkg in ruff mypy pip-audit bandit diff-cover; do pipx install "$pkg"; done
 # coverage/pytest are best installed in your project venv: pip install coverage pytest
+# /fortify analysis extras (optional — NOT sail gates): pipx install radon pylint
 
 # Node projects — npm audit is built-in with npm (no install needed); powers sail's npm-audit gate
 # jest --coverage is built-in if you use jest

@@ -35,17 +35,21 @@ if [ "$INSTALL_TOOLS" -eq 1 ]; then
   printf '\n[2/4] Installing review-gate tools ...\n'
   if command -v brew >/dev/null 2>&1; then
     brew install gitleaks shellcheck semgrep || echo "  WARN: some brew packages failed — install manually (INSTALL.md Step 3)."
-    command -v pipx >/dev/null 2>&1 || { brew install pipx && pipx ensurepath; } || true
+    command -v pipx >/dev/null 2>&1 || brew install pipx || true
   else
     echo "  WARN: Homebrew not found — install gitleaks/shellcheck/semgrep manually (INSTALL.md Step 3)."
   fi
   if command -v pipx >/dev/null 2>&1; then
-    for pkg in ruff mypy pip-audit bandit; do
+    for pkg in ruff mypy pip-audit bandit diff-cover; do
       pipx install "$pkg" >/dev/null 2>&1 || pipx upgrade "$pkg" >/dev/null 2>&1 || echo "  WARN: pipx could not install $pkg"
     done
-    echo "  installed Python CLI tools via pipx (ruff, mypy, pip-audit, bandit)"
+    echo "  installed Python CLI tools via pipx (ruff, mypy, pip-audit, bandit, diff-cover)"
+    # Always ensure pipx's bin dir is on PATH (idempotent) — not only on fresh brew-install.
+    # Without this, the non-login shell /sail and /fortify run in may not see these tools.
+    pipx ensurepath >/dev/null 2>&1 || true
+    echo "  (you may need to open a new shell or 'source' your rc for these tools to appear on PATH)"
   else
-    echo "  WARN: pipx unavailable — install ruff/mypy/pip-audit/bandit manually."
+    echo "  WARN: pipx unavailable — install ruff/mypy/pip-audit/bandit/diff-cover manually."
   fi
   echo "  (pytest + coverage are best installed per-project: pip install pytest coverage)"
 else
