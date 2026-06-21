@@ -158,6 +158,14 @@ grep -qiE 'quiet signal|goes quiet|silenc' "$TARGET" && pass "scheduler quiet-si
 # R13. Live-session marker (.surf/active) referenced
 grep -qF '.surf/active' "$TARGET" && pass ".surf/active live-session marker present" || fail ".surf/active missing"
 
+# --- Tombstone-on-fresh (#72) ---
+
+# A9. A superseded/dead charter is laid to rest (done-marker) before a fresh run starts
+grep -qi 'tombstone' "$TARGET" && pass "tombstone-on-fresh language present" || fail "tombstone-on-fresh language missing"
+grep -qiE 'done: superseded' "$TARGET" && pass "tombstone journal line (done: superseded) pinned" || fail "tombstone journal line missing"
+grep -qi 'externally exhausted' "$TARGET" && pass "externally-exhausted trigger present" || fail "externally-exhausted trigger missing"
+grep -qiE 'lay the old charter to rest' "$TARGET" && pass "tombstone instruction (lay the old charter to rest) present" || fail "tombstone lay-to-rest instruction missing"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 

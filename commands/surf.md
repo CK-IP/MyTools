@@ -43,8 +43,16 @@ When that is the case, **offer to resume instead of re-running run-mode + charte
   user pick one interactively via `AskUserQuestion`.
 - **Resume reuses the run mode recorded in the chosen charter** — Step 4 already wrote the mode
   there, so resume does **not** re-ask Step 0. It jumps straight to **Resume (Step 15)**.
-- If there is no in-progress charter, or the user chooses a fresh run, fall through to Step 0
-  below as normal.
+- **Before a fresh run, tombstone the superseded charter.** If the user chooses a fresh run over
+  resuming a detected in-progress charter — **or** if a detected charter's board is found **already
+  externally exhausted** (its issues all merged/closed by other work and `main` has moved past it, so
+  there is nothing left to resume) — **lay the old charter to rest before starting**: write its
+  done-marker `.surf/<charter>-done` **and** append a `- done: superseded <ISO>` line to its journal
+  (the same done-marker Step 14 writes and `config/surf-resume.sh` reads). Without this, a superseded
+  charter with no done-marker is a phantom in-progress run: the Step 16 scheduler's
+  "newest charter present AND no done-marker → work remains" gate would keep trying to resume the dead
+  run forever. Tombstone it, then fall through to Step 0.
+- If there is no in-progress charter at all, fall through to Step 0 below as normal.
 
 ### Step 0: Choose the run mode
 
@@ -581,9 +589,10 @@ session can't wake itself, so the trigger is **external**.
   Otherwise it exits immediately.
 - **"Work remains" = charter present AND no done-marker.** The gate is deliberately broad: if the
   newest `.surf/charter-*.md` exists and there is **no** done-marker (no `.surf/<charter>-done` file
-  and no `- done: board exhausted` journal line), the scheduler treats the board as unfinished. The
-  **done-marker is the single authoritative quiet signal** — it is how a finished run (written at
-  Wrap-up, Step 14) or an abandoned one (written by self-healing resume, Step 15) silences the
+  and no `- done:` journal line — written as `board exhausted` or `superseded`), the scheduler treats
+  the board as unfinished. The **done-marker is the single authoritative quiet signal** — it is how a
+  finished run (written at Wrap-up, Step 14), an abandoned one (written by self-healing resume,
+  Step 15), or a superseded one (tombstoned when a fresh run starts over it, Step 0-pre) silences the
   scheduler. To stop a mid-board run that you do **not** want resumed, either `touch` the done-marker
   (`.surf/<charter>-done`) or bootout the LaunchAgent. (The broad gate is why the live-session marker
   above matters: without it the scheduler could relaunch on top of a running session.)
