@@ -28,12 +28,21 @@ SPEC=$(gh issue view <issue>) || { echo "sail: gh failed to fetch issue <issue> 
 python3 -m sail plan --target . --run-dir "$SESSION_DIR" <<< "$SPEC"
 ```
 
-`sail plan` does ONE LLM pass and writes `plan.json` (approach, acceptance criteria, test plan, a lightweight design/security risk check, and scope). Its exit code is the convergence signal:
+`sail plan` does ONE LLM pass and writes `plan.json` (approach, acceptance criteria, test plan, a lightweight design/security risk check, and scope). The pass also runs a **free consistency self-check (#58):** for every user-facing instruction or remediation the change introduces, the plan must name the exact action in the change that fulfills it — a promise with no matching delivered action (an unresolvable remediation loop, an unreconciled file/list) is recorded as a blocking risk. This catches the broken promise→action failure class at plan-time, in the same single pass (no extra agent). Its exit code is the convergence signal:
 
 - **exit 0** — no blocking (CRITICAL/HIGH) risks → the plan is clean, proceed.
 - **exit 1** — blocking risks present (or an unusable backend on a non-empty spec, or an empty spec) → revise and re-run.
 
 **Bounded convergence loop (single lens, max 3 rounds):** while `sail plan` exits 1, present the plan + its blocking risks to the user, revise the spec/approach, and re-run — up to **3 rounds**. If still blocking after 3 rounds, present `plan.json` and its risks and ask the user: continue / abort / proceed-advisory (`--advisory`). Do not loop unbounded.
+
+**`--plan-adversary` risk-gated escalation (#58).** Default plan is **single-pass** (the self-check above is free; most plans stay 1-pass — no uniform weight). When the change is **plan-risky** — it touches user-facing instructions/remediation, or reconciles multiple files/lists — `/sail` escalates to a **one-shot adversarial plan pass**: an independent second pass over the same spec with adversarial framing (it re-derives the gaps a careless author would miss; like `--dual-lens`'s second lens, it reviews independently rather than grading the first pass's output). The auto-trigger fires only on the strong #55 failure shape — a remediation/instruction signal **and** a file/list-reconciliation signal co-occurring, or an unambiguous failure phrase — so ordinary specs ("run the tests", "improve the error message") stay single-pass. Escalation fires when `--plan-adversary` is passed **or** the auto-trigger heuristic (`is_plan_risky`) detects a plan-risky spec, mirroring the review stage's `--dual-lens` escalation:
+
+```bash
+SAIL_PLAN_CMD2="codex exec -m gpt-5.4-mini" \
+  python3 -m sail plan --target . --run-dir "$SESSION_DIR" --plan-adversary <<< "$SPEC"
+```
+
+The adversary runs as a second independent backend (`SAIL_PLAN_CMD2`); its **explicitly CRITICAL/HIGH risks union into the plan gate** (each tagged `lens: adversary` in `plan.json`), and the gate fails closed (and writes `status: error` to `plan.json`, matching the exit code) if the adversary backend errors. The adversary is skipped when the author plan is already blocking (the gate is already red). `--plan-adversary`/auto-trigger with no `SAIL_PLAN_CMD2` degrades cleanly to single-pass (logged, not an error) — exactly as `--dual-lens` degrades with no `SAIL_REVIEW_CMD2`.
 
 **Fail closed on a skipped plan:** before proceeding to build, read `plan.json`. If `status == "skipped"` (no LLM backend was available), do **not** silently proceed — halt with: "no LLM backend — the plan stage did not validate; install `claude` or set `SAIL_PLAN_CMD`, then re-run." This mirrors how `sail run --diff` fails closed when a requested review has no backend.
 

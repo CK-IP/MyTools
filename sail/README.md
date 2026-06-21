@@ -186,6 +186,19 @@ run-dir.
   stage skips cleanly instead of attempting a plan.
 - **Exit semantics:** exits `0` for a clean, usable plan; exits `1` when the plan is blocking,
   empty, or otherwise unusable.
+- **Consistency self-check (#58):** the single plan pass also requires the author to name the
+  exact action that fulfills every user-facing instruction/remediation the change adds — a
+  promise with no matching delivered action (an unresolvable loop) becomes a blocking risk.
+  Free; no extra agent.
+- **`--plan-adversary` risk-gated escalation (#58):** for a plan-risky spec, `/sail` escalates to
+  a one-shot adversarial plan pass — an independent second pass over the same spec via a second
+  backend `SAIL_PLAN_CMD2` (like `--dual-lens`'s second lens), unioning its **explicitly**
+  CRITICAL/HIGH risks into the gate (tagged `lens: adversary`). Fires on `--plan-adversary` **or**
+  the `is_plan_risky` auto-trigger — which requires the strong #55 failure shape (a remediation
+  signal **and** a reconciliation signal co-occurring, or an unambiguous failure phrase), so
+  ordinary specs stay single-pass (no uniform weight). Skipped when the author plan is already
+  blocking. An adversary backend error fails closed (exit 1 **and** `plan.json` `status: error`).
+  No `SAIL_PLAN_CMD2` degrades cleanly to single-pass.
 
 `/sail` is the front door: it auto-fires plan -> build -> review for one issue end to end.
 

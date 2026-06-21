@@ -156,4 +156,158 @@ set +e; SAIL_PLAN_CMD="bash $MOCK" MOCK_OUT='{"risks":[],"approach":null}' run_p
 assert_plan_status "$RD9/plan.json" error || fail "T9: plan.json status should be error for null approach"
 echo "PASS T9: null approach → exit 1, status error"
 
+# --- T10 (#58 AC#1): the plan prompt requires a consistency self-check — for every
+# user-facing instruction/remediation the change adds, name the exact action that fulfills it ---
+python3 - <<'PY' || fail "T10: plan prompt missing the consistency self-check"
+from sail.plan import build_prompt
+p = build_prompt("some spec").lower()
+# the prompt must demand promise->action consistency (the broken promise->action failure class)
+ok = (
+    ("instruction" in p or "remediation" in p)
+    and "action" in p
+    and "consistency" in p
+)
+raise SystemExit(0 if ok else 1)
+PY
+echo "PASS T10: plan prompt includes consistency self-check (AC#1)"
+
+# --- T11 (#58 AC#2): the escalation heuristic flags a plan-risky spec
+# (user-facing remediation / reconciling multiple files+lists) as risky ---
+python3 - <<'PY' || fail "T11: risky spec not detected by is_plan_risky"
+from sail.plan import is_plan_risky
+risky = (
+    "doctor.sh tells the user to Run ./install.sh to remediate, but install.sh "
+    "cannot install one tool counted in the tool list — reconcile the two files."
+)
+raise SystemExit(0 if is_plan_risky(risky) else 1)
+PY
+echo "PASS T11: is_plan_risky flags a remediation/reconciliation spec (AC#2)"
+
+# --- T12 (#58 AC#4): non-risky specs are NOT flagged risky → stay single-pass. Includes
+# specs that mention BROAD terms in isolation (a single remediation OR reconcile signal, or
+# common prose like "run the tests" / "error message" / "consistent with") — these must NOT
+# escalate, or AC#4 ("no uniform weight") is nullified (review R1 HIGH, both lenses). ---
+python3 - <<'PY' || fail "T12: a non-risky spec was wrongly flagged risky"
+from sail.plan import is_plan_risky
+non_risky = [
+    "Rename the variable foo to bar in helper.py and update its docstring.",
+    "Run the test suite after the refactor and improve the error message.",
+    "Keep the README consistent with the code style.",
+    "Add a remediation message telling the user what went wrong.",  # single remediation signal
+    "Reconcile the rounding in the price calculation.",             # single reconcile signal
+]
+bad = [s for s in non_risky if is_plan_risky(s)]
+if bad:
+    print("wrongly flagged risky:", bad)
+    raise SystemExit(1)
+PY
+echo "PASS T12: is_plan_risky leaves ordinary/single-signal specs single-pass (AC#4)"
+
+# --- T12b (#58 AC#2): the heuristic fires only on CO-OCCURRENCE (a remediation signal AND a
+# reconcile signal) or an unambiguous failure phrase — the #55 "unresolvable loop" shape ---
+python3 - <<'PY' || fail "T12b: co-occurrence/unambiguous heuristic regressed"
+from sail.plan import is_plan_risky
+co_occurrence = "doctor.sh tells the user to run ./install.sh to remediate, but it cannot reconcile the two files."
+unambiguous = "There is an unresolvable loop between the doctor message and what install delivers."
+if not is_plan_risky(co_occurrence):
+    print("co-occurrence spec should be risky"); raise SystemExit(1)
+if not is_plan_risky(unambiguous):
+    print("unambiguous-phrase spec should be risky"); raise SystemExit(1)
+PY
+echo "PASS T12b: is_plan_risky fires on co-occurrence + unambiguous shapes (AC#2)"
+
+# --- T13 (#58 AC#2): risky spec + --plan-adversary + a second backend that returns a
+# blocking adversarial risk → escalates, unions the adversary risk, blocks (exit 1) ---
+RD13="$WORK/rd13"
+# Adversary mock: emits a HIGH-risk plan critique; first (author) backend emits clean plan.
+# The mock body must contain LITERAL ${ADV_OUT}/${ADV_RC} (expanded at mock-runtime, not now),
+# so the single quotes are intentional — same pattern as the $MOCK author backend above.
+ADV_MOCK="$WORK/adv_mock.sh"
+# shellcheck disable=SC2016
+printf '%s\n' '#!/usr/bin/env bash' 'cat >/dev/null' 'printf "%s" "${ADV_OUT:-}"' 'exit ${ADV_RC:-0}' > "$ADV_MOCK"
+chmod +x "$ADV_MOCK"
+RISKY_SPEC='doctor.sh says "Run ./install.sh" to remediate a missing tool, but install.sh cannot install that tool — reconcile the tool list across both files.'
+# The adversary emits the REDUCED documented shape {"risks":[...],"summary":...} (build_adversary_prompt),
+# not the full author schema — pin that actual contract here (review R1 LOW lens1).
+ADV_HIGH='{"risks":[{"severity":"HIGH","area":"design","issue":"unresolvable loop: doctor promises install.sh fixes a tool it cannot install","mitigation":"reconcile both files"}],"summary":"broken promise"}'
+ADV_CLEAN='{"risks":[],"summary":"no adversarial findings"}'
+set +e
+printf '%s' "$RISKY_SPEC" | SAIL_PLAN_CMD="bash $MOCK" MOCK_OUT="$CLEAN_JSON" \
+  SAIL_PLAN_CMD2="bash $ADV_MOCK" ADV_OUT="$ADV_HIGH" \
+  python3 -m sail plan --target "$TARGET" --run-dir "$RD13" --plan-adversary >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" = "1" ] || fail "T13: --plan-adversary with a blocking adversarial risk must exit 1, got $rc"
+assert_has_high_risk "$RD13/plan.json" || fail "T13: adversarial HIGH risk must be unioned into plan.json"
+echo "PASS T13: --plan-adversary unions a blocking adversarial risk → exit 1 (AC#2)"
+
+# --- T14 (#58 AC#4): a CLEAN author plan + a CLEAN adversary still passes (exit 0) — the
+# adversary runs but adds nothing blocking when there is nothing to find ---
+RD14="$WORK/rd14"
+set +e
+printf '%s' "$RISKY_SPEC" | SAIL_PLAN_CMD="bash $MOCK" MOCK_OUT="$CLEAN_JSON" \
+  SAIL_PLAN_CMD2="bash $ADV_MOCK" ADV_OUT="$ADV_CLEAN" \
+  python3 -m sail plan --target "$TARGET" --run-dir "$RD14" --plan-adversary >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" = "0" ] || fail "T14: clean author + clean adversary should exit 0, got $rc"
+echo "PASS T14: clean author + clean adversary → exit 0 (AC#4)"
+
+# --- T15 (#58 AC#4): --plan-adversary requested but NO second backend → degrades cleanly
+# to a single author pass (logged, not a hard error) on a clean plan → exit 0 ---
+RD15="$WORK/rd15"
+set +e
+printf '%s' "$RISKY_SPEC" | SAIL_PLAN_CMD="bash $MOCK" MOCK_OUT="$CLEAN_JSON" \
+  python3 -m sail plan --target "$TARGET" --run-dir "$RD15" --plan-adversary >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" = "0" ] || fail "T15: missing adversary backend should degrade to single-pass (exit 0), got $rc"
+grep -q -- 'plan-adversary' "$RD15/decision-log.md" || fail "T15: degraded adversary path must be logged"
+echo "PASS T15: --plan-adversary with no second backend degrades cleanly (AC#4)"
+
+# --- T16 (#58 review R1 HIGH lens2): an adversary BACKEND error fails closed AND the on-disk
+# plan.json status must be "error" (not "completed") so a downstream reuse can't treat a
+# failed-closed plan run as valid ---
+RD16="$WORK/rd16"
+set +e
+printf '%s' "$RISKY_SPEC" | SAIL_PLAN_CMD="bash $MOCK" MOCK_OUT="$CLEAN_JSON" \
+  SAIL_PLAN_CMD2="bash $ADV_MOCK" ADV_RC=1 ADV_OUT="" \
+  python3 -m sail plan --target "$TARGET" --run-dir "$RD16" --plan-adversary >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" = "1" ] || fail "T16: adversary backend error must fail closed (exit 1), got $rc"
+assert_plan_status "$RD16/plan.json" error || fail "T16: plan.json status must be 'error' on adversary backend error (must match exit code)"
+echo "PASS T16: adversary backend error → exit 1 AND plan.json status=error (R1 HIGH lens2)"
+
+# --- T17 (#58 review R1 MEDIUM lens1): an adversary risk with a typo'd/missing severity must
+# NOT be promoted to a blocking HIGH (no default-to-HIGH on the adversary union). A clean
+# author plan + an adversary whose only "risk" has a garbage severity stays exit 0 ---
+RD17="$WORK/rd17"
+ADV_BADSEV='{"risks":[{"severity":"meduim","area":"design","issue":"typo sev","mitigation":"x"}],"summary":"sloppy"}'
+set +e
+printf '%s' "$RISKY_SPEC" | SAIL_PLAN_CMD="bash $MOCK" MOCK_OUT="$CLEAN_JSON" \
+  SAIL_PLAN_CMD2="bash $ADV_MOCK" ADV_OUT="$ADV_BADSEV" \
+  python3 -m sail plan --target "$TARGET" --run-dir "$RD17" --plan-adversary >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" = "0" ] || fail "T17: a non-explicit adversary severity must not block (exit 0), got $rc"
+echo "PASS T17: adversary risk with garbage severity does not spuriously block (R1 MED lens1)"
+
+# --- T18 (#58 review R1 LOW lens1): the adversary is SKIPPED when the author plan is already
+# blocking (the gate is already red). A HIGH author plan + an adversary that would error still
+# exits 1 from the author HIGH alone, and the decision log records no adversary backend error ---
+RD18="$WORK/rd18"
+set +e
+printf '%s' "$RISKY_SPEC" | SAIL_PLAN_CMD="bash $MOCK" MOCK_OUT="$HIGH_JSON" \
+  SAIL_PLAN_CMD2="bash $ADV_MOCK" ADV_RC=1 ADV_OUT="" \
+  python3 -m sail plan --target "$TARGET" --run-dir "$RD18" --plan-adversary >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" = "1" ] || fail "T18: already-blocking author plan should exit 1, got $rc"
+assert_plan_status "$RD18/plan.json" completed || fail "T18: author HIGH plan stays completed (adversary skipped, not errored)"
+if grep -q 'plan-adversary: backend error' "$RD18/decision-log.md"; then
+  fail "T18: adversary must be SKIPPED (not invoked) when the author plan already blocks"
+fi
+echo "PASS T18: adversary skipped when author plan already blocking (R1 LOW lens1)"
+
 echo "PASS: sail plan contract verified"
