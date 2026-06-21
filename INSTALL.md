@@ -386,6 +386,47 @@ launchctl bootout "gui/$(id -u)/com.crg.daemon"
 launchctl bootout "gui/$(id -u)/com.crg.refresh-reminder"
 ```
 
+### `/surf` auto-resume LaunchAgent (optional, macOS only)
+
+`/surf` works the board unattended and can be cut off mid-run by the Max-subscription usage
+window. This LaunchAgent fires `config/surf-resume.sh` on a 30-minute interval; the wrapper is
+pure bash and only relaunches `claude --dangerously-bypass-permissions -p "/surf resume"` once
+the usage-cap reset time has passed and real unfinished board work remains — so idle ticks cost
+zero Claude tokens. Only set this up if you run `/surf` for long unattended sessions.
+
+> **Post-merge only:** install this after the branch has merged to `main`, per the symlink rule
+> at the top of this guide.
+
+**Install:**
+
+```bash
+cd ~/projects/CK-Skills
+
+# Replace placeholder with your repo path
+sed "s|__REPO_ROOT__|$(pwd)|g" config/com.surf.resume.plist \
+  > ~/Library/LaunchAgents/com.surf.resume.plist
+```
+
+**Load:**
+
+```bash
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.surf.resume.plist
+```
+
+**Verify:**
+
+```bash
+launchctl list | grep surf
+```
+
+You should see a line for `com.surf.resume`. Activity is logged to `/tmp/surf-resume.log`.
+
+**Removing (if needed):**
+
+```bash
+launchctl bootout "gui/$(id -u)/com.surf.resume"
+```
+
 ---
 
 ## Path note

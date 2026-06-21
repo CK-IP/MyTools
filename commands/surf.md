@@ -26,6 +26,26 @@ re-reads them at the top of every issue so it never drifts, even on a board of 3
 
 ## Run-mode selection (interactive, no flags)
 
+### Step 0-pre: Detect an in-progress run
+
+**Before** asking for the run mode, check whether a previous run was left unfinished. If `.surf/`
+holds a charter (`.surf/charter-*.md`) whose journal shows **unfinished work** — a picked-but-not-
+resolved issue, a parked issue still listed in `.surf/parked-issues.md`, and **no done-marker**
+(see Step 14) — then a prior run stopped before the board was exhausted.
+
+When that is the case, **offer to resume instead of re-running run-mode + charter**:
+
+> "I found an in-progress `/surf` run (charter `<charter>`, last activity `<when>`). Want me to
+> **resume** it where it stopped, or **start a fresh run**?"
+
+- **Latest charter = newest by timestamp** (`.surf/charter-<timestamp>.md`). If several
+  in-progress charters exist, list them (charter, mission line, last journal activity) and let the
+  user pick one interactively via `AskUserQuestion`.
+- **Resume reuses the run mode recorded in the chosen charter** — Step 4 already wrote the mode
+  there, so resume does **not** re-ask Step 0. It jumps straight to **Resume (Step 15)**.
+- If there is no in-progress charter, or the user chooses a fresh run, fall through to Step 0
+  below as normal.
+
 ### Step 0: Choose the run mode
 
 Before anything else, ask the user to pick the run mode with `AskUserQuestion`:
@@ -165,6 +185,17 @@ surviving — those are unreliable over a long board run. Instead:
 - **Only a genuinely heavy issue is delegated** to a worker (see Worker delegation). Delegation
   is the exception, reserved for work big enough that running it inline would blow the session's
   context budget.
+- **A hard stop is different from running low on context.** If the run is killed outright — a
+  crash, or (the common case) the Max-subscription usage window cutting it off mid-issue — the
+  session cannot re-anchor from chat at all. Recovery from a hard stop goes through **Resume
+  (Step 15)**, which rebuilds board position from the charter + journal + git, not from the
+  conversation.
+- **Live-session marker.** At the start of the per-issue loop (Step 7), write `.surf/active`
+  containing this process's PID, and **remove it on clean exit** (board exhausted, or the user
+  stops the run). This is the marker the auto-resume scheduler (Step 16) checks: while a live PID
+  sits in `.surf/active`, the scheduler will not launch a second `/surf` on top of a running
+  session. A crash leaves a *stale* marker (its PID is dead), which the scheduler ignores and
+  cleans — so it never blocks recovery.
 
 ---
 
@@ -183,15 +214,21 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
    about to build and why it's next.
 2. **Create the branch, then build.** Each issue starts from **current `main`**, so a parent
    merged earlier in this run is already included in the baseline. Create the issue branch off
-   up-to-date `main`, then run the engine:
+   up-to-date `main`, then run the engine **in a stable per-issue run-dir** so a hard stop
+   mid-issue can be resumed cleanly:
    ```bash
    git checkout main
    git checkout -b surf/<issue>
-   python3 -m sail run --diff main
+   python3 -m sail run --diff main --run-dir .surf/runs/<issue>
    ```
    This is the one-pass `/sail` mode: it runs the deterministic gates **and** the blocking LLM
    review against the diff vs. `main`. It exits **0** when the issue is green (all gates pass and
    the blocking review found no CRITICAL/HIGH) and **1** when something is blocking.
+
+   The run-dir is **stable per issue** (`.surf/runs/<issue>/`, under the gitignored `.surf/`) so
+   that if the run is killed mid-issue, Resume (Step 15) can re-invoke the *same* `--run-dir` and
+   `/sail` skips the gates it already finished. The per-issue **journal entry** written in step 4
+   below is the resume checkpoint: a hard stop loses at most the single in-flight issue.
 3. **Evaluate the exit code.**
    - **Exit 0 → green → auto-merge** — *but first, the stacked-parent guard.* Before merging,
      verify every dependency parent of this issue is **itself already merged to `main`**. If any
@@ -415,6 +452,104 @@ user — who is a non-programmer, so keep it plain and concrete. Include:
 
 Point the user at the journal and decision-log (`.surf/journal-<timestamp>.md`) for the full
 detail behind the summary.
+
+**Mark the run done.** When the board is exhausted — every selected issue has a terminal outcome
+(merged, parked, or won't-fix) — record that this run is finished so the auto-resume scheduler
+(Step 16) goes quiet: append a `- done: board exhausted <ISO>` line to the journal **and** write a
+marker file `.surf/<charter>-done`. The done-marker is the **authoritative quiet signal**: the
+work-remaining gate in Step 16 treats it as "nothing to resume," so the scheduler stops relaunching
+a completed run. (If the marker is already present from a self-healing resume — see Step 15 — keep
+it.) A user-stopped (not exhausted) run is **not** marked done — it is left resumable on purpose.
+
+**Remove the live-session marker.** On any clean exit — board exhausted or user-stopped — delete
+`.surf/active` (the PID marker written at Step 7) so the scheduler is no longer blocked by it.
+
+---
+
+## Resume
+
+### Step 15: Resuming after a stop
+
+A `/surf` run can be cut off mid-board — a crash, or (the common case) the Max-subscription usage
+window ending. The durable charter + journal + decision-log + parked-issues files (all under the
+gitignored `.surf/`) plus git itself hold everything needed to pick the board back up. Resume reads
+those, not chat history.
+
+- **Invocation:** `/surf resume` — used both manually and by the auto-resume scheduler (Step 16).
+- **Short-circuit the start gate, but verify bypass.** The original run already confirmed the repo
+  and `--dangerously-bypass-permissions` and recorded the run mode in the charter, so resume does
+  **not** re-prompt Step 1–2. It **does** verify that `--dangerously-bypass-permissions` is
+  actually active for this process. A scheduled relaunch is non-interactive, so if bypass is **not**
+  active, resume must **park and exit** with a note rather than prompting — a permission prompt
+  would hang a headless run forever. (The scheduler passes the flag; see Step 16.)
+- **Re-entry reconstruction.** Read the latest `.surf/charter-*`, its journal, `.surf/decision-log-*`,
+  and `.surf/parked-issues.md`, then **cross-check against git**: for each issue the journal says was
+  merged, confirm `surf/<issue>` is actually merged into `main` (capture the SHA); for each in-flight
+  issue, check whether the `surf/<issue>` branch exists. From that, rebuild the merged-issue→SHA map,
+  the parked set, and the **next unfinished issue**. Append `- ↺ resume <ISO>` to the journal
+  (mirroring `/sail`'s decision-log resume marker), then re-enter the Step 7 per-issue loop at the
+  next unfinished issue — **without** re-charter. As in a fresh run, write `.surf/active` with this
+  process's PID before re-entering the loop, and remove it on clean exit (this is the live-session
+  marker the scheduler checks; see Step 16).
+- **Self-heal an already-exhausted board.** If reconstruction finds the board is **already
+  exhausted** — no remaining unbuilt issues, every selected issue at a terminal outcome — write the
+  done-marker (`.surf/<charter>-done` and a `- done: board exhausted <ISO>` journal line) and **exit
+  cleanly without re-entering the loop**. This covers a crash that happened after the board was done
+  but before Wrap-up (Step 14) wrote the marker: the simplified Step 16 gate (charter present + no
+  done-marker → work remains) would otherwise keep relaunching, so writing the marker here is what
+  finally silences the scheduler.
+- **Idempotent half-issue recovery** (mirrors `/sail`'s "don't redo finished work"). For the issue
+  that was in flight when the run stopped:
+  1. **Branch merged to `main`, journal not updated** → record the merge (capture the SHA) and
+     advance to the next issue.
+  2. **Branch merged AND it was a stacked parent** → re-run the Step 10 dependent-issue guard for
+     its dependents (a parent merging may now unblock or re-order them) before advancing — don't
+     blindly skip.
+  3. **Branch exists, unmerged, and a valid `.surf/runs/<issue>/` run-dir exists** → re-invoke
+     `python3 -m sail run --diff main --run-dir .surf/runs/<issue>`. `/sail` skips the gates it
+     already finished, and `--diff main` re-derives the baseline against **current** `main` — so a
+     parent that merged since is included.
+  4. **Run-dir missing, or corrupt/partial** (a crash mid-write) → discard it and build the issue
+     **fresh**.
+  5. **No branch at all** → build the issue **fresh**.
+- **The per-issue journal entry is the checkpoint.** Because each issue's outcome is journaled as
+  it lands, a hard stop loses at most the one in-flight issue — never the merged board behind it.
+
+### Step 16: Reactive usage-cap auto-resume
+
+The subscription usage window is **not** API-readable (the `anthropic-ratelimit-*` headers report
+API-key per-minute throughput, a different pool), so auto-resume is **reactive**: capture the reset
+time the cap reports and relaunch after it — not a proactive remaining-quota monitor. A capped
+session can't wake itself, so the trigger is **external**.
+
+- **External scheduler.** A macOS LaunchAgent (`config/com.surf.resume.plist`) fires
+  `config/surf-resume.sh` on an interval and relaunches the run.
+- **The wrapper is pure bash and gates before any Claude call** — zero Claude tokens on an idle
+  tick. It launches Claude only when **all** of: no live resume lock; **no live `.surf/active`
+  session** (a PID marker whose process is still alive — written by a running interactive or
+  resumed `/surf`, see Steps 7 and 15 — so the scheduler never launches a second run on top of one
+  already running; a stale marker with a dead PID is ignored and cleaned); `now ≥` the RFC3339
+  timestamp in `.surf/resume-after` (or that file is absent); and **real unfinished work remains**.
+  Otherwise it exits immediately.
+- **"Work remains" = charter present AND no done-marker.** The gate is deliberately broad: if the
+  newest `.surf/charter-*.md` exists and there is **no** done-marker (no `.surf/<charter>-done` file
+  and no `- done: board exhausted` journal line), the scheduler treats the board as unfinished. The
+  **done-marker is the single authoritative quiet signal** — it is how a finished run (written at
+  Wrap-up, Step 14) or an abandoned one (written by self-healing resume, Step 15) silences the
+  scheduler. To stop a mid-board run that you do **not** want resumed, either `touch` the done-marker
+  (`.surf/<charter>-done`) or bootout the LaunchAgent. (The broad gate is why the live-session marker
+  above matters: without it the scheduler could relaunch on top of a running session.)
+- **The relaunch carries the bypass flag:** `claude --dangerously-bypass-permissions -p "/surf
+  resume"`. Without it the resumed run would stall at its own start gate (Step 15 parks on missing
+  bypass).
+- **Reset capture (conservative floor).** When the relaunched run hits the cap again, the wrapper
+  best-effort-parses the reset time from the output and writes
+  `resume-after = max(parsed_reset, now + MIN_BACKOFF)`. If the reset time is **unparseable**, it
+  writes a long default (`now + DEFAULT_BACKOFF`, multi-hour — subscription windows are multi-hour).
+  A parse-miss is therefore a *long* wait, never a per-tick hot-loop.
+- **Anti-pattern guard.** Never put the "is it time yet?" decision inside `claude -p` — that would
+  burn tokens on every idle tick and can't run while the session is capped. The decision lives in
+  the pure-shell wrapper; Claude is launched only once the gate has already said yes.
 
 ---
 

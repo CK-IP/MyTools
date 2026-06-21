@@ -104,6 +104,48 @@ grep -qi 'append-only' "$TARGET" && pass "append-only journal pinned" || fail "a
 # A7. Stacked-parent merge guard (FIX 4) pinned
 grep -qiE 'before auto-merging|verify .*parent.*merged|park the dependent' "$TARGET" && pass "stacked-parent merge guard pinned" || fail "stacked-parent merge guard missing"
 
+# --- Resume (#53) ---
+
+# R1. Resume section / Step 15 exists
+grep -qiE 'Step 15|## Resume' "$TARGET" && pass "Resume section / Step 15 present" || fail "Resume section / Step 15 missing"
+
+# R2. Resume marker mirrors /sail
+grep -qF '↺ resume' "$TARGET" && pass "↺ resume marker present" || fail "↺ resume marker missing"
+
+# R3. Per-issue stable run-dir
+grep -qF -- '--run-dir' "$TARGET" && pass "--run-dir present" || fail "--run-dir missing"
+
+# R4. Resume invocation
+grep -qF '/surf resume' "$TARGET" && pass "/surf resume invocation present" || fail "/surf resume invocation missing"
+
+# R5. Bypass flag carried at relaunch (resume context)
+grep -qiE 'resume.*--dangerously-bypass-permissions|--dangerously-bypass-permissions.*resume' "$TARGET" && pass "bypass flag in resume/relaunch context present" || fail "bypass flag in resume/relaunch context missing"
+
+# R6. resume-after timestamp file referenced
+grep -qF '.surf/resume-after' "$TARGET" && pass ".surf/resume-after referenced" || fail ".surf/resume-after missing"
+
+# R7. Per-issue runs dir referenced
+grep -qF '.surf/runs/' "$TARGET" && pass ".surf/runs/ referenced" || fail ".surf/runs/ missing"
+
+# R8. Wrapper script referenced
+grep -qF 'config/surf-resume.sh' "$TARGET" && pass "config/surf-resume.sh referenced" || fail "config/surf-resume.sh missing"
+
+# R9. Cheap-shell-gate principle (zero tokens before any Claude call)
+grep -qiE 'before any Claude call|zero tokens|pure[ -]?shell|pure[ -]?bash' "$TARGET" && pass "cheap-gate principle present" || fail "cheap-gate principle missing"
+
+# R10. In-progress run detection before Step 0
+grep -qiE 'Step 0-pre|in-progress run|detect an in-progress' "$TARGET" && pass "in-progress detection present" || fail "in-progress detection missing"
+
+# R11. INSTALL.md documents the surf auto-resume LaunchAgent
+grep -qF 'com.surf.resume.plist' "$INSTALL" && pass "INSTALL.md com.surf.resume.plist present" || fail "INSTALL.md com.surf.resume.plist missing"
+
+# R12. Done-marker named as the scheduler's quiet signal
+grep -qiE 'done-marker' "$TARGET" && pass "done-marker referenced" || fail "done-marker missing"
+grep -qiE 'quiet signal|goes quiet|silenc' "$TARGET" && pass "scheduler quiet-signal language present" || fail "scheduler quiet-signal language missing"
+
+# R13. Live-session marker (.surf/active) referenced
+grep -qF '.surf/active' "$TARGET" && pass ".surf/active live-session marker present" || fail ".surf/active missing"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 
