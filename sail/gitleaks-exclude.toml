@@ -1,0 +1,10 @@
+# sail gitleaks config (#48): retain gitleaks' built-in ruleset and add a path
+# allowlist for nested .claude worktrees only (NOT .sail — the diff baseline lives
+# under .sail/runs/*/baseline-src and must be scanned). gitleaks --config REPLACES
+# the default ruleset, so [extend] useDefault=true is required or detection is disabled.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "exclude nested .claude git worktrees"
+paths = ['''(^|/)\.claude/''']

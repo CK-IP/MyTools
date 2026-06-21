@@ -58,8 +58,52 @@ with tempfile.TemporaryDirectory() as td:
     npa=delta.new_findings(pcur,pbase,"pipaudit",td,td)
     if npa is None or len(npa)!=1: raise SystemExit(f"FAIL: only new vuln: {npa}")
     # KIND_BY_ARTIFACT mapping
-    for art,kind in {"ruff.sarif":"sarif","bandit.sarif":"sarif","semgrep.sarif":"sarif","mypy.junit.xml":"junit","junit.xml":"junit","pip-audit.json":"pipaudit"}.items():
+    for art,kind in {"ruff.sarif":"sarif","bandit.sarif":"sarif","semgrep.sarif":"sarif","mypy.junit.xml":"junit","junit.xml":"junit","pip-audit.json":"pipaudit","shellcheck.json":"shellcheck","gitleaks.sarif":"sarif"}.items():
         if delta.KIND_BY_ARTIFACT.get(art)!=kind: raise SystemExit(f"FAIL: KIND_BY_ARTIFACT[{art}] != {kind}")
+
+    # --- #48 Step 3: gitleaks delta reuses the SARIF extractor (gitleaks emits SARIF results
+    #     with locations[].physicalLocation.artifactLocation.uri). Crafted gitleaks-style SARIF
+    #     → expected (rel, ruleId, msg) fingerprint; cross-root match for diff-mode suppression. ---
+    if delta.KIND_BY_ARTIFACT.get("gitleaks.sarif")!="sarif":
+        raise SystemExit("FAIL: KIND_BY_ARTIFACT[gitleaks.sarif] must be 'sarif'")
+    gla=os.path.join(td,"gla.sarif")
+    json.dump(sarif([res("aws-access-key","AWS key found","file://"+rootA+"/creds.txt",2)]),open(gla,"w"))
+    grecs=delta._sarif_records(gla,rootA)
+    if len(grecs)!=1: raise SystemExit(f"FAIL: gitleaks SARIF → 1 record: {grecs}")
+    if grecs[0]["fp"]!=("creds.txt","aws-access-key","AWS key found"):
+        raise SystemExit(f"FAIL: gitleaks fp must be (rel,ruleId,msg): {grecs[0]['fp']}")
+    # cross-root: same secret under a baseline-src root → identical fingerprint (diff suppression).
+    glb=os.path.join(td,"glb.sarif")
+    json.dump(sarif([res("aws-access-key","AWS key found","file://"+rootB+"/creds.txt",2)]),open(glb,"w"))
+    if delta.new_findings(gla,glb,"sarif",rootA,rootB)!=[]:
+        raise SystemExit("FAIL: pre-existing gitleaks secret must be suppressed in diff mode")
+
+    # --- #48 Step 2: shellcheck delta kind (bare JSON array; integer `code` → SC<code>) ---
+    def sc(file,code,msg,line=1):
+        return {"file":file,"line":line,"code":code,"message":msg,"level":"warning"}
+    # (a) two distinct findings → two fingerprints.
+    sca=os.path.join(td,"sca.json")
+    json.dump([sc(rootA+"/x.sh",2086,"Double quote",3), sc(rootA+"/x.sh",2046,"Quote this",5)],open(sca,"w"))
+    recs=delta._shellcheck_records(sca,rootA)
+    if len(recs)!=2: raise SystemExit(f"FAIL: shellcheck 2 findings → 2 records: {recs}")
+    fps={r["fp"] for r in recs}
+    if ("x.sh","SC2086","Double quote") not in fps:
+        raise SystemExit(f"FAIL: shellcheck fp must be (rel,SC<code>,msg): {fps}")
+    # (b) empty [] → zero records.
+    sce=os.path.join(td,"sce.json"); open(sce,"w").write("[]")
+    if delta._shellcheck_records(sce,rootA)!=[]: raise SystemExit("FAIL: shellcheck [] → [] records")
+    if delta.new_findings(sce,sce,"shellcheck",rootA,rootA)!=[]: raise SystemExit("FAIL: shellcheck []/[] → [] new")
+    # (c) RT-11 cross-worktree: same logical file under DIFFERENT absolute roots → identical
+    #     fingerprints after _rel normalization (each artifact passed its matching root).
+    scb=os.path.join(td,"scb.json")
+    json.dump([sc(rootB+"/x.sh",2086,"Double quote",99)],open(scb,"w"))   # baseline-src root, diff line
+    scc=os.path.join(td,"scc.json")
+    json.dump([sc(rootA+"/x.sh",2086,"Double quote",3)],open(scc,"w"))    # target root
+    fp_b=delta.fingerprints(scb,"shellcheck",rootB); fp_c=delta.fingerprints(scc,"shellcheck",rootA)
+    if fp_b is None or fp_c is None: raise SystemExit("FAIL: parseable shellcheck artifact → Counter, not None")
+    if fp_b!=fp_c: raise SystemExit(f"FAIL: same shellcheck finding under different roots must match: {fp_b} vs {fp_c}")
+    # current (scc) ⊆ baseline (scb) for that fp → 0 new (diff-mode suppression).
+    if delta.new_findings(scc,scb,"shellcheck",rootA,rootB)!=[]: raise SystemExit("FAIL: pre-existing shellcheck finding must be suppressed in diff mode")
 print("PASS: sail.delta (#34) verified")
 PY
 then

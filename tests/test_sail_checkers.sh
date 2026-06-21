@@ -28,7 +28,7 @@ if ! python3 - <<'PY' >"$LOG_FILE" 2>&1
 import shutil
 import sail.checkers as checkers
 
-expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit"]
+expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks"]
 expected_artifacts = {
     "ruff": "ruff.sarif",
     "mypy": "mypy.junit.xml",
@@ -36,6 +36,8 @@ expected_artifacts = {
     "bandit": "bandit.sarif",
     "semgrep": "semgrep.sarif",
     "pip-audit": "pip-audit.json",
+    "shellcheck": "shellcheck.json",
+    "gitleaks": "gitleaks.sarif",
 }
 
 registry = checkers.build_registry()
@@ -60,6 +62,39 @@ for checker in registry:
         raise SystemExit(f"FAIL: expected {checker.name}.classify(0) to return 'passed'")
     if checker.classify(1) != "failed":
         raise SystemExit(f"FAIL: expected {checker.name}.classify(1) to return 'failed'")
+    # #48 Step 1: stdout_artifact field defaults False for every file-based-output checker.
+    # shellcheck (#48 Step 2) emits findings to stdout and opts in explicitly (asserted below);
+    # gitleaks (#48 Step 3) writes SARIF to a file, so it stays False (asserted below).
+    if checker.name != "shellcheck" and checker.stdout_artifact is not False:
+        raise SystemExit(
+            f"FAIL: {checker.name}.stdout_artifact must default False, got {checker.stdout_artifact!r}"
+        )
+
+# #48 Step 2: shellcheck registry contract — present, blocking, stdout-captured artifact.
+shellcheck_chk = {c.name: c for c in registry}.get("shellcheck")
+if shellcheck_chk is None:
+    raise SystemExit("FAIL: shellcheck checker must be registered (#48 Step 2)")
+if shellcheck_chk.tool != "shellcheck":
+    raise SystemExit(f"FAIL: shellcheck.tool must be 'shellcheck', got {shellcheck_chk.tool!r}")
+if shellcheck_chk.artifact != "shellcheck.json":
+    raise SystemExit(f"FAIL: shellcheck.artifact must be 'shellcheck.json', got {shellcheck_chk.artifact!r}")
+if shellcheck_chk.blocking is not True:
+    raise SystemExit(f"FAIL: shellcheck must be blocking, got {shellcheck_chk.blocking!r}")
+if shellcheck_chk.stdout_artifact is not True:
+    raise SystemExit(f"FAIL: shellcheck.stdout_artifact must be True, got {shellcheck_chk.stdout_artifact!r}")
+
+# #48 Step 3: gitleaks registry contract — present, blocking, file-based SARIF (NOT stdout).
+gitleaks_chk = {c.name: c for c in registry}.get("gitleaks")
+if gitleaks_chk is None:
+    raise SystemExit("FAIL: gitleaks checker must be registered (#48 Step 3)")
+if gitleaks_chk.tool != "gitleaks":
+    raise SystemExit(f"FAIL: gitleaks.tool must be 'gitleaks', got {gitleaks_chk.tool!r}")
+if gitleaks_chk.artifact != "gitleaks.sarif":
+    raise SystemExit(f"FAIL: gitleaks.artifact must be 'gitleaks.sarif', got {gitleaks_chk.artifact!r}")
+if gitleaks_chk.blocking is not True:
+    raise SystemExit(f"FAIL: gitleaks must be blocking, got {gitleaks_chk.blocking!r}")
+if gitleaks_chk.stdout_artifact is not False:
+    raise SystemExit(f"FAIL: gitleaks.stdout_artifact must be False (file-based), got {gitleaks_chk.stdout_artifact!r}")
 
 print("PASS: sail.checkers registry contract verified")
 PY
@@ -303,7 +338,7 @@ else
 fi
 
 # --- Issue #51: SAIL_CHECKERS allowlist restricts build_registry (order preserved, unknown
-# names ignored, unset/empty = all six). Lets fast hermetic test runs skip slow scanners. ---
+# names ignored, unset/empty = all eight). Lets fast hermetic test runs skip slow scanners. ---
 if ! SAIL_CHECKERS="pytest,ruff" python3 - <<'PY' >"$LOG_FILE" 2>&1
 import os
 import sail.checkers as checkers
@@ -325,25 +360,252 @@ got = [c.name for c in checkers.build_registry()]
 if got != ["ruff", "pytest"]:
     raise SystemExit(f"FAIL: whitespace around allowlist names must be tolerated, got {got!r}")
 
-# empty string = all six (backward compatible)
+# empty string = all eight (backward compatible)
 os.environ["SAIL_CHECKERS"] = ""
-if len(checkers.build_registry()) != 6:
-    raise SystemExit("FAIL: empty SAIL_CHECKERS must yield all six checkers")
+if len(checkers.build_registry()) != 8:
+    raise SystemExit("FAIL: empty SAIL_CHECKERS must yield all eight checkers")
 
-# whitespace-only = all six (treated as empty)
+# whitespace-only = all eight (treated as empty)
 os.environ["SAIL_CHECKERS"] = "   "
-if len(checkers.build_registry()) != 6:
-    raise SystemExit("FAIL: whitespace-only SAIL_CHECKERS must yield all six checkers")
+if len(checkers.build_registry()) != 8:
+    raise SystemExit("FAIL: whitespace-only SAIL_CHECKERS must yield all eight checkers")
 
-# unset = all six
+# unset = all eight
 del os.environ["SAIL_CHECKERS"]
-if [c.name for c in checkers.build_registry()] != ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit"]:
-    raise SystemExit("FAIL: unset SAIL_CHECKERS must yield all six in registry order")
+if [c.name for c in checkers.build_registry()] != ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks"]:
+    raise SystemExit("FAIL: unset SAIL_CHECKERS must yield all eight in registry order")
 
-print("PASS: SAIL_CHECKERS allowlist restricts the registry; unset/empty = all six (#51)")
+print("PASS: SAIL_CHECKERS allowlist restricts the registry; unset/empty = all eight (#51)")
 PY
 then
   fail "sail.checkers SAIL_CHECKERS allowlist (#51) failed"
 fi
 
 echo "PASS: sail.checkers SAIL_CHECKERS allowlist (#51) verified"
+
+# --- Issue #48 Step 2: shellcheck *.sh discovery (excl. nested .claude worktrees) + no-files no-op ---
+if ! python3 - <<'PY' >"$LOG_FILE" 2>&1
+import os, tempfile
+import sail.checkers as checkers
+
+shellcheck_chk = {c.name: c for c in checkers.build_registry()}["shellcheck"]
+
+# (a) discovery: a.sh under target is included; a *.sh under a nested .claude/ worktree is excluded.
+with tempfile.TemporaryDirectory() as td:
+    open(os.path.join(td, "a.sh"), "w").write("#!/bin/sh\necho hi\n")
+    os.makedirs(os.path.join(td, ".claude", "worktrees", "x"))
+    open(os.path.join(td, ".claude", "worktrees", "x", "b.sh"), "w").write("#!/bin/sh\necho hi\n")
+    cmd = shellcheck_chk.build_command(td, os.path.join(td, "shellcheck.json"))
+    if cmd[:3] != ["shellcheck", "-f", "json"]:
+        raise SystemExit(f"FAIL: shellcheck command must start with shellcheck -f json: {cmd!r}")
+    if os.path.join(td, "a.sh") not in cmd:
+        raise SystemExit(f"FAIL: shellcheck must discover a.sh under target: {cmd!r}")
+    if any("/.claude/" in tok for tok in cmd):
+        raise SystemExit(f"FAIL: shellcheck must EXCLUDE *.sh under nested .claude/: {cmd!r}")
+
+# (a2) .sail is NOT excluded — the diff baseline worktree lives under .sail/runs/.../baseline-src.
+with tempfile.TemporaryDirectory() as td:
+    bsrc = os.path.join(td, ".sail", "runs", "r", "baseline-src")
+    os.makedirs(bsrc)
+    open(os.path.join(bsrc, "c.sh"), "w").write("#!/bin/sh\necho hi\n")
+    cmd = shellcheck_chk.build_command(td, os.path.join(td, "shellcheck.json"))
+    if os.path.join(bsrc, "c.sh") not in cmd:
+        raise SystemExit(f"FAIL: shellcheck must NOT exclude .sail trees (diff baseline): {cmd!r}")
+
+# (b) no *.sh files → portable no-op emitting a valid empty JSON array (never zero-byte; RT-8).
+with tempfile.TemporaryDirectory() as td:
+    open(os.path.join(td, "notshell.py"), "w").write("x = 1\n")
+    cmd = shellcheck_chk.build_command(td, os.path.join(td, "shellcheck.json"))
+    if cmd != ["printf", "[]"]:
+        raise SystemExit(f"FAIL: no *.sh files must yield the ['printf','[]'] no-op, got {cmd!r}")
+
+print("PASS: sail.checkers shellcheck discovery + no-files no-op (#48 Step 2)")
+PY
+then
+  fail "sail.checkers shellcheck discovery (#48 Step 2) failed"
+fi
+
+echo "PASS: sail.checkers shellcheck discovery (#48 Step 2) verified"
+
+# --- Issue #48 RT-1: discovery must NOT exclude based on the target's OWN ancestor path ---
+# The canonical sail invocation runs `--target .` from a cwd like
+# .../.claude/worktrees/ship-NN/, so the target's absolute path itself contains /.claude/.
+# Exclusion must be RELATIVE to the target: prune only .claude segments BELOW the target,
+# never the target's ancestors — else every dirpath is excluded → silent no-op gate.
+if ! python3 - <<'PY' >"$LOG_FILE" 2>&1
+import os, tempfile
+import sail.checkers as checkers
+
+base = tempfile.mkdtemp()
+root = os.path.join(base, ".claude", "worktrees", "ship-x")
+os.makedirs(root)
+# a.sh directly under the target root (whose ancestor path contains /.claude/).
+open(os.path.join(root, "a.sh"), "w").write("#!/bin/sh\necho hi\n")
+# c.sh in a normal subdir below the target.
+os.makedirs(os.path.join(root, "sub"))
+open(os.path.join(root, "sub", "c.sh"), "w").write("#!/bin/sh\necho hi\n")
+# b.sh under a nested .claude worktree BELOW the target — must be excluded.
+os.makedirs(os.path.join(root, ".claude", "worktrees", "y"))
+open(os.path.join(root, ".claude", "worktrees", "y", "b.sh"), "w").write("#!/bin/sh\necho hi\n")
+
+found = checkers._discover_sh(root)
+if os.path.join(root, "a.sh") not in found:
+    raise SystemExit(f"FAIL: must INCLUDE a.sh under target whose ancestor path has /.claude/: {found!r}")
+if os.path.join(root, "sub", "c.sh") not in found:
+    raise SystemExit(f"FAIL: must INCLUDE c.sh in a subdir below the target: {found!r}")
+if os.path.join(root, ".claude", "worktrees", "y", "b.sh") in found:
+    raise SystemExit(f"FAIL: must EXCLUDE b.sh under a nested .claude worktree below target: {found!r}")
+
+print("PASS: sail.checkers _discover_sh excludes only .claude BELOW target, not ancestors (#48 RT-1)")
+PY
+then
+  fail "sail.checkers _discover_sh ancestor-path discovery (#48 RT-1) failed"
+fi
+
+echo "PASS: sail.checkers _discover_sh ancestor-path discovery (#48 RT-1) verified"
+
+# --- Issue #48 Step 2: e2e — real shellcheck on a .sh with a known SC code flags it.
+#     Availability-gated: skipped cleanly where shellcheck is absent (this host). ---
+if command -v shellcheck >/dev/null 2>&1; then
+  if ! python3 - <<'PY'
+import json, os, subprocess, tempfile
+import sail.checkers as checkers
+shellcheck_chk = {c.name: c for c in checkers.build_registry()}["shellcheck"]
+with tempfile.TemporaryDirectory() as td:
+    # Unquoted $var → SC2086, a default shellcheck finding.
+    open(os.path.join(td, "bad.sh"), "w").write("#!/bin/sh\nvar=x\necho $var\n")
+    out = os.path.join(td, "shellcheck.json")
+    res = subprocess.run(shellcheck_chk.build_command(td, out), capture_output=True, text=True)
+    # shellcheck -f json writes findings to STDOUT (no file flag); the runner persists it via
+    # stdout_artifact. Here we read stdout directly to verify the command shape really flags SC2086.
+    findings = json.loads(res.stdout or "[]")
+    codes = {f.get("code") for f in findings}
+    if 2086 not in codes:
+        raise SystemExit(f"FAIL: shellcheck must flag SC2086 on unquoted $var, got codes={codes}")
+print("PASS: shellcheck e2e flags SC2086 (#48 Step 2)")
+PY
+  then
+    fail "sail.checkers shellcheck e2e (#48 Step 2) failed"
+  fi
+else
+  echo "SKIP: shellcheck not installed — #48 Step 2 e2e check skipped"
+fi
+
+# --- Issue #48 Step 3: gitleaks build_command shape (hermetic — gitleaks NOT required) ---
+if ! python3 - <<'PY' >"$LOG_FILE" 2>&1
+import os, tempfile
+import sail.checkers as checkers
+
+gitleaks_chk = {c.name: c for c in checkers.build_registry()}["gitleaks"]
+
+with tempfile.TemporaryDirectory() as td:
+    artifact = os.path.join(td, "gitleaks.sarif")
+    cmd = gitleaks_chk.build_command(td, artifact)
+    # Must invoke: gitleaks dir <target> ...
+    if cmd[:3] != ["gitleaks", "dir", td]:
+        raise SystemExit(f"FAIL: gitleaks command must start with 'gitleaks dir <target>': {cmd!r}")
+    # SARIF report to the artifact path.
+    if "--report-format" not in cmd or cmd[cmd.index("--report-format") + 1] != "sarif":
+        raise SystemExit(f"FAIL: gitleaks must pass --report-format sarif: {cmd!r}")
+    if "--report-path" not in cmd or cmd[cmd.index("--report-path") + 1] != artifact:
+        raise SystemExit(f"FAIL: gitleaks must pass --report-path <artifact>: {cmd!r}")
+    # --exit-code 0 so a leak still writes SARIF; the diff-delta (not rc) decides blocking.
+    if "--exit-code" not in cmd or cmd[cmd.index("--exit-code") + 1] != "0":
+        raise SystemExit(f"FAIL: gitleaks must pass --exit-code 0 (SARIF written even on leak): {cmd!r}")
+    if "--no-banner" not in cmd:
+        raise SystemExit(f"FAIL: gitleaks must pass --no-banner: {cmd!r}")
+    # --config points at the shipped sail/gitleaks-exclude.toml (resolved from the module).
+    if "--config" not in cmd:
+        raise SystemExit(f"FAIL: gitleaks must pass --config <toml>: {cmd!r}")
+    cfg = cmd[cmd.index("--config") + 1]
+    if not cfg.endswith(os.path.join("sail", "gitleaks-exclude.toml")):
+        raise SystemExit(f"FAIL: gitleaks --config must point at sail/gitleaks-exclude.toml, got {cfg!r}")
+    if not os.path.isfile(cfg):
+        raise SystemExit(f"FAIL: gitleaks --config TOML must exist on disk: {cfg!r}")
+
+print("PASS: sail.checkers gitleaks build_command shape (#48 Step 3)")
+PY
+then
+  fail "sail.checkers gitleaks build_command (#48 Step 3) failed"
+fi
+
+echo "PASS: sail.checkers gitleaks build_command (#48 Step 3) verified"
+
+# --- Issue #48 Step 3: gitleaks-exclude.toml content (RT-1/RT-2 CRITICAL — parse with regex,
+#     NOT tomllib/tomli; neither is available on the Python 3.9 host). ---
+if ! python3 - <<'PY' >"$LOG_FILE" 2>&1
+import os, re
+import sail.checkers as checkers
+
+toml_path = os.path.join(os.path.dirname(checkers.__file__), "gitleaks-exclude.toml")
+if not os.path.isfile(toml_path):
+    raise SystemExit(f"FAIL: shipped config missing: {toml_path}")
+with open(toml_path, encoding="utf-8") as fh:
+    text = fh.read()
+
+# (a) RT-1 CRITICAL: gitleaks --config REPLACES the default ruleset. Without
+#     [extend] useDefault = true the gate detects NOTHING (silent no-op).
+if not re.search(r"(?m)^\s*useDefault\s*=\s*true", text):
+    raise SystemExit("FAIL: gitleaks-exclude.toml MUST set useDefault = true (else detection disabled)")
+
+# (b) RT-2: the allowlist path regex (^|/)\.claude/ must match nested .claude worktrees but
+#     NOT the .sail diff baseline nor ordinary src paths. Apply the exact regex via Python re.
+allow_re = re.compile(r"(^|/)\.claude/")
+if not allow_re.search("src/.claude/worktrees/x/f.py"):
+    raise SystemExit("FAIL: allowlist regex must MATCH a nested src/.claude/... path")
+if not allow_re.search(".claude/x.py"):
+    raise SystemExit("FAIL: allowlist regex must MATCH a top-level .claude/ path")
+if allow_re.search(".sail/runs/y/f.py"):
+    raise SystemExit("FAIL: allowlist regex must NOT match .sail (diff baseline must be scanned)")
+if allow_re.search("src/app.py"):
+    raise SystemExit("FAIL: allowlist regex must NOT match ordinary src/ paths")
+
+# The literal anchored regex must actually be present in the shipped TOML's allowlist.
+if r"(^|/)\.claude/" not in text:
+    raise SystemExit(r"FAIL: gitleaks-exclude.toml must contain the anchored regex (^|/)\.claude/")
+
+print("PASS: sail gitleaks-exclude.toml content — useDefault=true + anchored .claude allowlist (#48 Step 3, RT-1/RT-2)")
+PY
+then
+  fail "sail gitleaks-exclude.toml content (#48 Step 3) failed"
+fi
+
+echo "PASS: sail gitleaks-exclude.toml content (#48 Step 3) verified"
+
+# --- Issue #48 Step 3: e2e — real gitleaks on a planted secret in dir mode flags it; a secret
+#     under a nested .claude/worktrees/* path is excluded. Availability-gated: skipped on this host. ---
+if command -v gitleaks >/dev/null 2>&1; then
+  if ! python3 - <<'PY'
+import json, os, subprocess, tempfile
+import sail.checkers as checkers
+gitleaks_chk = {c.name: c for c in checkers.build_registry()}["gitleaks"]
+SECRET = 'aws_key = "AKIAIOSFODNN7EXAMPLE"\nsecret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"\n'
+def scan(target):
+    out = os.path.join(target, "gitleaks.sarif")
+    subprocess.run(gitleaks_chk.build_command(target, out), capture_output=True, text=True)
+    if not os.path.isfile(out):
+        return []
+    doc = json.load(open(out))
+    uris = []
+    for run in doc.get("runs", []):
+        for r in run.get("results", []):
+            for loc in r.get("locations", []):
+                uris.append(loc.get("physicalLocation", {}).get("artifactLocation", {}).get("uri", ""))
+    return uris
+with tempfile.TemporaryDirectory() as td:
+    open(os.path.join(td, "creds.txt"), "w").write(SECRET)        # real tree (must flag)
+    os.makedirs(os.path.join(td, ".claude", "worktrees", "wt"))   # nested worktree (must NOT flag)
+    open(os.path.join(td, ".claude", "worktrees", "wt", "creds.txt"), "w").write(SECRET)
+    uris = scan(td)
+    if not [u for u in uris if "/.claude/" not in u]:
+        raise SystemExit(f"FAIL: gitleaks must flag the real-tree secret; uris={uris}")
+    if [u for u in uris if "/.claude/" in u]:
+        raise SystemExit(f"FAIL: gitleaks must EXCLUDE secrets under nested .claude/: {uris}")
+print("PASS: gitleaks e2e flags real secret, excludes nested .claude/ (#48 Step 3)")
+PY
+  then
+    fail "sail.checkers gitleaks e2e (#48 Step 3) failed"
+  fi
+else
+  echo "SKIP: gitleaks not installed — #48 Step 3 e2e check skipped"
+fi

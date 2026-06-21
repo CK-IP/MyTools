@@ -14,6 +14,8 @@ KIND_BY_ARTIFACT = {
     "mypy.junit.xml": "junit",
     "junit.xml": "junit",
     "pip-audit.json": "pipaudit",
+    "shellcheck.json": "shellcheck",
+    "gitleaks.sarif": "sarif",
 }
 
 
@@ -82,7 +84,26 @@ def _pipaudit_records(path, root):
     return out
 
 
-_EXTRACTORS = {"sarif": _sarif_records, "junit": _junit_records, "pipaudit": _pipaudit_records}
+def _shellcheck_records(path, root):
+    # shellcheck -f json emits a bare JSON array of {file, line, code, message, ...}; `code`
+    # is an integer (e.g. 2086). Normalize `file` via _rel (same as _sarif_records) so a
+    # baseline (baseline-src worktree) and current (target) fingerprint match in diff mode.
+    doc = _load_json(path)
+    out = []
+    for entry in doc or []:
+        rel = _rel(entry.get("file", ""), root)
+        code = "SC" + str(entry.get("code", ""))
+        msg = entry.get("message", "") or ""
+        out.append({"fp": (rel, code, msg), "record": entry})
+    return out
+
+
+_EXTRACTORS = {
+    "sarif": _sarif_records,
+    "junit": _junit_records,
+    "pipaudit": _pipaudit_records,
+    "shellcheck": _shellcheck_records,
+}
 
 
 def _records(path, kind, root):
