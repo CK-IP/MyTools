@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import shutil
@@ -9,7 +10,8 @@ from datetime import datetime, timezone
 from glob import glob
 
 from sail import delta
-from sail.checkers import build_registry
+from sail import checkers as checkers_mod
+from sail.checkers import build_registry, CheckerContext
 from sail.decisionlog import DecisionLog
 from sail.runstate import RunState, _utc_now_iso
 
@@ -69,11 +71,24 @@ def run_tests(cmd=None) -> int:
     return rc
 
 
-def _run_checker(checker, target, artifact_path):
+def _build_command(checker, target, artifact_path, ctx):
+    # Call checker.build_command, passing the optional ctx ONLY when the (possibly overridden)
+    # build_command accepts a third parameter. A legacy 2-arg override (e.g. a test double or a
+    # checker that ignores ctx) is invoked unchanged — the contract extension is non-breaking.
+    try:
+        params = inspect.signature(checker.build_command).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if len(params) >= 3:
+        return checker.build_command(target, artifact_path, ctx)
+    return checker.build_command(target, artifact_path)
+
+
+def _run_checker(checker, target, artifact_path, ctx=None):
     # Run one checker, return its return code. Shared by the primary run and
     # diff-mode baseline generation.
     result = subprocess.run(
-        checker.build_command(target, artifact_path),
+        _build_command(checker, target, artifact_path, ctx),
         cwd=checker.cwd(target),
         capture_output=True, text=True,
     )
@@ -130,15 +145,20 @@ def _generate_baseline(registry, target, diff_ref, run_dir):
             "sail --diff: cannot create baseline worktree for ref "
             f"{diff_ref!r}: {created.stderr.strip()}"
         )
+    baseline_ctx = CheckerContext(diff_ref=diff_ref, mode="diff", target_root=os.path.abspath(baseline_src))
     try:
         for checker in registry:
             if not checker.available():
+                continue
+            if checker.artifact in delta.DIFF_ONLY_ARTIFACTS:
+                # diff-coverage's findings derive from the CURRENT diff-cover report, not a
+                # baseline multiset delta — skip it during baseline generation (lens1-9548).
                 continue
             artifact_path = os.path.join(baseline_dir, checker.artifact)
             if os.path.exists(artifact_path):
                 os.remove(artifact_path)
             try:
-                _run_checker(checker, baseline_src, artifact_path)
+                _run_checker(checker, baseline_src, artifact_path, baseline_ctx)
             except Exception:
                 pass  # failed baseline checker -> missing artifact -> treated as empty baseline
         return baseline_dir, baseline_src
@@ -257,7 +277,7 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
         status = gate.get("status")
 
         if status in terminal_statuses:
-            decision = "block" if status == "failed" and checker.blocking else "continue"
+            decision = "block" if status == "failed" and checker.is_blocking(target_root, mode) else "continue"
             decision_log.append(gate, decision)
             continue
 
@@ -271,6 +291,19 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
         state.save()
 
         artifact_path = os.path.join(run_dir, checker.artifact)
+        if mode != "diff" and checker.artifact in delta.DIFF_ONLY_ARTIFACTS:
+            # diff-coverage is a diff-mode concept (coverage of CHANGED lines vs a compare ref);
+            # in whole-repo mode there is no diff to scope to — record a clean, non-blocking skip
+            # instead of invoking diff-cover with no compare ref (lens1-cbde).
+            gate["status"] = "skipped"
+            gate["rc"] = None
+            gate["reason"] = f"not applicable in {mode} mode (diff-only gate)"
+            gate["artifact"] = None
+            gate["new_findings_count"] = None
+            gate["finished_at"] = _utc_now_iso()
+            state.save()
+            decision_log.append(gate, "continue")
+            continue
         if not checker.available():
             gate["status"] = "skipped"
             gate["rc"] = None
@@ -284,7 +317,8 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
 
         if os.path.exists(artifact_path):
             os.remove(artifact_path)
-        rc = _run_checker(checker, target_root, artifact_path)
+        run_ctx = CheckerContext(diff_ref=diff_ref, mode=mode, target_root=target_root)
+        rc = _run_checker(checker, target_root, artifact_path, run_ctx)
         gate["rc"] = rc
         gate["artifact"] = checker.artifact
 
@@ -296,11 +330,24 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
         else:
             kind = delta.KIND_BY_ARTIFACT.get(checker.artifact)
             base_artifact = os.path.join(baseline_dir, checker.artifact)
-            new = (
-                delta.new_findings(artifact_path, base_artifact, kind, target_root, baseline_root)
-                if kind
-                else None
-            )
+            if kind == "diffcoverage":
+                # diff-coverage is about the CURRENT change's uncovered lines (the diff-cover
+                # report already scopes to changed lines vs the compare ref), threshold-gated —
+                # not a baseline multiset delta. [] when advisory (no threshold) or coverage
+                # >= threshold. A missing report (e.g. no coverage.xml because pytest produced
+                # none) fails closed ONLY in threshold mode — in advisory mode it cannot block,
+                # so a missing report is a clean [] (lens1-153e/lens2-f5f0).
+                threshold = checkers_mod.diff_coverage_threshold(target_root)
+                if not os.path.isfile(artifact_path):
+                    new = [] if threshold is None else None
+                else:
+                    new = delta.diffcoverage_records(artifact_path, threshold)
+            else:
+                new = (
+                    delta.new_findings(artifact_path, base_artifact, kind, target_root, baseline_root)
+                    if kind
+                    else None
+                )
             if new is None:
                 status = "failed"
                 gate["status"] = status
@@ -316,11 +363,11 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
         gate["finished_at"] = _utc_now_iso()
         state.save()
 
-        decision = "block" if status == "failed" and checker.blocking else "continue"
+        decision = "block" if status == "failed" and checker.is_blocking(target_root, mode) else "continue"
         decision_log.append(gate, decision)
 
     blocking_failed = any(
-        gate.get("status") == "failed" and checker.blocking
+        gate.get("status") == "failed" and checker.is_blocking(target_root, mode)
         for checker in registry
         for gate in [gates_by_name[checker.name]]
     )

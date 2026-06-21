@@ -5,7 +5,7 @@ import shutil
 import configparser
 import re
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 # bandit -r does NOT honor .gitignore, and CLI -x REPLACES (not appends to) bandit's built-in
 # default excludes. bandit matches -x entries as fnmatch globs against the full path (bare dir
@@ -119,6 +119,43 @@ def _resolve_pytest_paths(target):
     return paths, config_file
 
 
+_NODE_MANIFESTS = ("package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock")
+
+
+def _has_node_manifest(target: str) -> bool:
+    # npm-audit must only invoke `npm audit` when the target actually has a Node manifest.
+    # `npm audit --json` with no package.json/lockfile ERRORS -> unparseable artifact ->
+    # delta None -> false-block (RT-7). Detect a manifest at the target root; absent => the
+    # caller emits a valid empty-JSON sentinel so a no-Node repo passes cleanly in BOTH modes.
+    return any(os.path.isfile(os.path.join(target, m)) for m in _NODE_MANIFESTS)
+
+
+def diff_coverage_threshold(target: str) -> Optional[int]:
+    # Parse `diff-coverage-threshold: N` from <target>/.ship/domain.md. Returns the int N,
+    # or None when the file or the key is absent (advisory mode). Regex parse — no tomllib on
+    # the Python 3.9 host (matches the _testpaths_from_pyproject idiom). The first match wins.
+    path = os.path.join(target, ".ship", "domain.md")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    m = re.search(r"(?mi)^\s*diff-coverage-threshold\s*:\s*(\d+)\s*$", text)
+    return int(m.group(1)) if m else None
+
+
+@dataclass(frozen=True)
+class CheckerContext:
+    # Runtime context threaded into build_command / is_blocking so a checker can scope to the
+    # change (diff_ref + mode) without the static dataclass fields needing to know it. All
+    # fields optional/defaulted so a checker that ignores ctx is unaffected.
+    diff_ref: Optional[str] = None
+    mode: Optional[str] = None
+    target_root: Optional[str] = None
+
+
 @dataclass(frozen=True)
 class Checker:
     name: str
@@ -129,6 +166,12 @@ class Checker:
 
     def available(self) -> bool:
         return shutil.which(self.tool) is not None
+
+    def is_blocking(self, target: str, mode: str) -> bool:
+        # Runtime blocking decision. Defaults to the static `blocking` field (the prior
+        # contract, unchanged for every existing checker). Subclasses override to decide
+        # per target/mode (diff-coverage: advisory unless .ship/domain.md sets a threshold).
+        return self.blocking
 
     def classify(self, rc: int) -> str:
         if self.name == "pytest":
@@ -153,13 +196,15 @@ class Checker:
                 return "no tests collected (rc=5)"
         return None
 
-    def cwd(self, target):
-        # pytest runs from the target root so the project's own execution model holds
-        # (relative fixture paths, conftest discovery) — matching `pytest tests/` run from
-        # the repo root. Other checkers receive the target as an argument and need no cwd.
-        return target if self.name == "pytest" else None
+    # Checkers that resolve files/manifests from the process cwd (not from an argument) must
+    # run FROM the target: pytest (conftest/fixtures), npm-audit (reads package.json from cwd),
+    # diff-coverage (diff-cover resolves the git diff + report paths relative to the repo root).
+    _CWD_AT_TARGET = ("pytest", "npm-audit", "diff-coverage")
 
-    def build_command(self, target: str, artifact_path: str) -> List[str]:
+    def cwd(self, target):
+        return target if self.name in self._CWD_AT_TARGET else None
+
+    def build_command(self, target: str, artifact_path: str, ctx: "Optional[CheckerContext]" = None) -> List[str]:
         if self.name == "ruff":
             return ["ruff", "check", "--output-format", "sarif", "--output-file", artifact_path, target]
         if self.name == "mypy":
@@ -208,7 +253,42 @@ class Checker:
                 "--exit-code", "0",
                 "--config", config,
             ]
+        if self.name == "npm-audit":
+            # Target-aware: only invoke `npm audit --json` when a Node manifest exists at the
+            # target. `npm audit --json` with no package.json/lockfile ERRORS -> unparseable
+            # artifact -> delta None -> false-block (RT-7). Absent manifest => a portable
+            # sentinel emitting a valid empty-JSON object to stdout (captured via
+            # stdout_artifact), so a no-Node repo parses to an empty delta and passes cleanly
+            # in BOTH whole-repo and diff modes. npm audit also writes JSON to stdout (no file
+            # flag), so the runner persists stdout for both the real and sentinel paths.
+            if _has_node_manifest(target):
+                return ["npm", "audit", "--json"]
+            return ["printf", "{}"]
+        if self.name == "diff-coverage":
+            # Line-level coverage of CHANGED lines only (strictly better than /fortify's
+            # file-level coverage). diff-cover compares a coverage.xml against the diff vs the
+            # compare ref threaded in via ctx, emitting a per-file/per-line JSON report. The
+            # compare ref defaults to the static "main" only as a last resort; normally ctx
+            # carries the run's diff_ref. coverage.xml is produced by the pytest gate alongside
+            # its junit artifact (same run-dir), so diff-cover reads it as the coverage source.
+            compare = (ctx.diff_ref if ctx and ctx.diff_ref else "main")
+            coverage_xml = os.path.join(os.path.dirname(artifact_path), "coverage.xml")
+            return [
+                "diff-cover", coverage_xml,
+                "--compare-branch", compare,
+                "--json-report", artifact_path,
+                "--fail-under", "0",
+            ]
         raise ValueError(f"unknown checker {self.name!r}")
+
+
+class DiffCoverageChecker(Checker):
+    # diff-coverage's blocking decision is RUNTIME, not static: advisory by default, blocking
+    # only when .ship/domain.md sets `diff-coverage-threshold: N`. The static `blocking` field
+    # stays False (advisory default) so the prior contract / decision-log shape is preserved;
+    # is_blocking overrides per target. frozen dataclass => construct via the dataclass init.
+    def is_blocking(self, target: str, mode: str) -> bool:
+        return diff_coverage_threshold(target) is not None
 
 
 def build_registry() -> list[Checker]:
@@ -221,6 +301,8 @@ def build_registry() -> list[Checker]:
         Checker("pip-audit", "pip-audit", "pip-audit.json"),
         Checker("shellcheck", "shellcheck", "shellcheck.json", stdout_artifact=True),
         Checker("gitleaks", "gitleaks", "gitleaks.sarif"),
+        Checker("npm-audit", "npm", "npm-audit.json", stdout_artifact=True),
+        DiffCoverageChecker("diff-coverage", "diff-cover", "diff-coverage.json", blocking=False),
     ]
     # Opt-in allowlist (comma-separated checker names) to restrict the registry — e.g. fast
     # hermetic test runs that only need ruff/pytest as background gates (#51). Unset/empty =
