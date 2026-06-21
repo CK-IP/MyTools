@@ -46,10 +46,19 @@ command -v radon     >/dev/null 2>&1 && HAVE_RADON=1     || HAVE_RADON=0
 command -v npm       >/dev/null 2>&1 && HAVE_NPM=1       || HAVE_NPM=0
 ```
 
-If NONE of the security tools are installed (gitleaks=0, semgrep=0, pip-audit=0, bandit=0), warn:
-> "No security/analysis tools found. Install at least one: `brew install semgrep gitleaks`"
+After recording availability, emit a calm **coverage-count** line (not an alarming "Missing"
+list) so the user sees that absent tools are skipped-by-design, not a failure. Over the gate set
+fortify uses (gitleaks, semgrep, pip-audit, bandit, shellcheck, coverage, pylint, radon, npm),
+count how many are installed (N total) and list any that are skipped:
 
-Proceed anyway — produce a minimal report noting that no tools ran, verdict = ADVISORY.
+> Gate coverage: X of N optional checks active. Skipped (not installed): <tools>
+> → Run ./install.sh to enable the rest (see INSTALL.md).
+
+If every tool is installed, just print the `Gate coverage: N of N optional checks active.` line and
+omit the skipped/pointer lines.
+
+If NONE of the security tools are installed (gitleaks=0, semgrep=0, pip-audit=0, bandit=0), still
+proceed — produce a minimal report noting that no tools ran, verdict = ADVISORY.
 
 ---
 

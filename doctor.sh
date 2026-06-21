@@ -67,9 +67,26 @@ fi
 
 echo ""
 echo "Gate tools (sail deterministic gates + /fortify — availability-gated, skipped if absent):"
-for t in gitleaks shellcheck semgrep ruff mypy pytest bandit pip-audit; do
-  if command -v "$t" >/dev/null 2>&1; then green "$t"; else yellow "$t not installed — its gate is skipped"; fi
+# Canonical globally-installable gate set (brew + pipx). pytest/coverage are per-project, npm is
+# environmental — both intentionally excluded from this count so it never under-reports.
+gate_total=0
+gate_have=0
+gate_skipped=""
+for t in gitleaks shellcheck semgrep ruff mypy pip-audit bandit diff-cover; do
+  gate_total=$((gate_total + 1))
+  if command -v "$t" >/dev/null 2>&1; then
+    gate_have=$((gate_have + 1))
+  else
+    gate_skipped="${gate_skipped:+$gate_skipped }$t"
+  fi
 done
+info "Gate coverage: $gate_have of $gate_total optional checks active."
+if [ -n "$gate_skipped" ]; then
+  info "Skipped (not installed): $gate_skipped"
+  info "→ Run ./install.sh to enable the rest (see INSTALL.md)."
+  warn=$((warn + 1))
+fi
+info "pytest + coverage are per-project (install in each project venv: pip install pytest coverage)."
 
 echo ""
 echo "Background agents + /surf readiness (informational — never blocks):"
@@ -102,7 +119,7 @@ if [ "$bad" -gt 0 ]; then
   exit 1
 elif [ "$warn" -gt 0 ]; then
   printf '\033[33mCore setup OK — %d optional item(s) missing.\033[0m To install the gate tools:\n' "$warn"
-  echo "  brew install gitleaks shellcheck semgrep && pipx install ruff mypy pip-audit bandit"
+  echo "  ./install.sh   (or see INSTALL.md Step 3 for the per-channel tool list)"
   echo "(Hook registration in settings.json, if flagged above, is manual — see home/settings.reference.json.)"
   exit 0
 else
