@@ -35,6 +35,33 @@ cd ~/projects/CK-Skills
 
 ---
 
+## Quick install (recommended)
+
+One command does the core setup — symlinks + gate tools + a verification check:
+
+```bash
+bash install.sh
+```
+
+Safe to re-run any time (idempotent). It does **not** edit `~/.claude/settings.json` — so after
+running it, register the CK-Skills hooks (Step 2's "Hooks wiring" note) and do any optional extras
+(Steps 4, 6, 7) by hand.
+
+Check your setup any time without changing anything:
+
+```bash
+bash doctor.sh
+```
+
+`doctor.sh` reports which tools are installed, which symlinks are wired, whether the hooks are
+registered in settings.json, and which gate tools are present — and exits non-zero if a required
+item is missing.
+
+The numbered steps below are the **manual, explained equivalent** of `install.sh` (Steps 2 + 3),
+plus the optional extras the script leaves to you (Steps 4, 6, 7).
+
+---
+
 ## Step 2: Symlink commands, agents, hooks, and skills
 
 Run the following from inside the repo root. This creates symlinks so Claude Code picks up everything automatically.
@@ -253,7 +280,18 @@ You should see `"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"` in the output.
 
 ## Step 5: Verify everything works
 
-Open Claude Code and run:
+Run the setup check from the repo root:
+
+```bash
+bash doctor.sh
+```
+
+It verifies required tools, that every command/agent/hook/skill is symlinked into `~/.claude`,
+that the CK-Skills hooks are registered in settings.json, and that the sail/fortify gate tools are
+installed — and exits non-zero if anything required is missing. Fix anything it flags (re-run
+`bash install.sh`, or follow the manual step it points to) and re-run it until it's clean.
+
+Then confirm a skill loads inside Claude Code:
 
 ```
 /fleet
