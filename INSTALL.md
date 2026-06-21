@@ -335,10 +335,13 @@ In Claude Code, ask: *"Run `list_repos_tool` and test a semantic search on one o
 
 ## Step 7: Set up background automation (optional, macOS only)
 
-This step installs two macOS LaunchAgents:
+**`install.sh` now offers these interactively** on macOS — when you run it in a terminal it prompts `y/N` for each LaunchAgent below (default No), with a plain-language description of what each does. The commands in this step are the manual/explicit fallback (and the removal reference): use them if you skipped the prompts during install, ran the installer non-interactively (piped/CI), or want to manage the agents by hand.
 
-1. **CRG daemon** — auto-starts the code-review-graph daemon on login so your code maps stay up to date
-2. **Memory refresh reminder** — sends a macOS notification on the 1st of each month reminding you to run `/refresh`
+The three LaunchAgents:
+
+1. **CRG daemon** (`com.crg.daemon`) — auto-starts the code-review-graph daemon on login so your code maps stay up to date
+2. **Memory refresh reminder** (`com.crg.refresh-reminder`) — sends a macOS notification on the 1st of each month reminding you to run `/refresh`
+3. **`/surf` auto-resume** (`com.surf.resume`) — auto-restarts an interrupted `/surf` board run after a usage limit resets (full details in the dedicated subsection below)
 
 ### Install the plist files
 
