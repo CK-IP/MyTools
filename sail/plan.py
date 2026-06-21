@@ -137,6 +137,10 @@ def build_adversary_prompt(spec):
         "the change introduces MUST have a concrete action in the change that fulfills it. Flag "
         "any promise with no matching delivered action (a broken promise, an unresolvable "
         "remediation loop, an unreconciled file/list). Be specific and skeptical.\n"
+        "Apply this adversarial-review craft:\n"
+        "Bias self-guards — resist verification avoidance (confirming the plan is fine instead of trying to break it), being seduced by the first 80%, anchoring to the spec or plan as if it were correct, and reasoning-only conclusions; cite the specific spec text behind every finding.\n"
+        "Confidence threshold — only report a finding when you are >80% confident it is a real defect. Do NOT flag style preferences, \"could be more efficient\" without concrete impact, error handling for impossible states, or theoretical issues with no practical failure mode.\n"
+        "Required adversarial probes — probe the design for concurrency hazards, boundary conditions (empty, missing, or corrupt inputs), idempotency violations, and injection vectors, in addition to the promise-to-action consistency class.\n"
         "Emit ONE JSON object with a risks list of this shape (each genuine defect is a "
         "CRITICAL or HIGH risk):\n"
         '{"risks":[{"severity":"CRITICAL|HIGH|MEDIUM|LOW","area":"design|security|scope|other",'

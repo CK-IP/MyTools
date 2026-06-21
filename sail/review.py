@@ -24,6 +24,11 @@ Output a single JSON object (a ```json fenced block is fine) of this shape:
 "design|correctness|security|scope|other", "file": "<path or null>", "line": "<int or null>", \
 "issue": "<what is wrong>", "recommendation": "<how to fix>"}}], "summary": "<one line>"}}
 If there are no issues, return {{"findings": [], "summary": "no issues"}}.
+Apply this review craft:
+Bias self-guards — actively resist these LLM failure modes: verification avoidance (confirming the code works instead of trying to break it), being seduced by the first 80% (approving because the happy path works while ignoring edge, error, and interaction cases), anchoring to the plan or spec (assuming it is correct rather than questioning it), and reasoning-only conclusions (claiming something looks correct without evidence from the actual diff).
+Confidence threshold — only report a finding when you are >80% confident it is a real defect. Do NOT flag: style preferences, "could be more efficient" without concrete impact, error handling for impossible states, theoretical issues with no practical failure mode, or run_in_background on a harness tool call (only shell-level backgrounding with a trailing ampersand matters).
+File-type strategy matrix — review by file type: shell scripts and hooks (unquoted variables, heredoc expansion of external data, PPID assumptions, exit codes, jq validation of untrusted JSON); test files (assertions that truly verify the behavior, isolation and cleanup, false-positive risk); config files (missing keys, schema drift, entries referencing things that do not exist); prompt/spec text (contradictions, ambiguity an LLM could misread, missing terminal-path handling); installers (idempotency, backup before overwrite, platform-varying paths).
+Required adversarial probes — actively probe for concurrency hazards, boundary conditions (empty input, missing files, corrupt JSON, zero-length strings), idempotency violations (safe to run twice), and injection vectors (external text flowing unsafely into shell, JSON, or file paths).
 
 === DIFF ===
 {diff}
