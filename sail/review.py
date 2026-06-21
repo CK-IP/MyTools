@@ -62,6 +62,32 @@ Flag genuinely NEW issues.
 Continue the existing finding-id scheme; keep prior ids stable for carried findings.
 Do not re-review resolved findings from scratch."""
 
+# The tidiness/simplify lens (#63). A SEPARATE, ADVISORY pass — distinct from the adversarial
+# correctness review above and from the cross-family codex dual-lens. It ports Anthropic's
+# /code-review + /simplify intent (reuse, simplification, efficiency, naming, altitude cleanups)
+# and is deliberately scoped to NON-BEHAVIORAL tidiness so it never competes with or dilutes the
+# correctness lens (codex = different bugs; tidiness = cleanup). Its findings never block.
+TIDINESS_PROMPT = """You are a code-tidiness reviewer. Review the git diff below ONLY for \
+NON-BEHAVIORAL cleanups — the kind Anthropic's /code-review and /simplify apply: reuse and \
+de-duplication (extract repeated logic; call an existing helper instead of re-implementing it), \
+simplification (collapse needless complexity, dead branches, dead locals/parameters/imports, \
+redundant lines), efficiency (obvious wasted work with a concrete, non-speculative win), naming \
+(misleading or inconsistent identifiers), and altitude (a change made at the wrong layer).
+Do NOT report correctness, security, design, or scope defects — a SEPARATE adversarial lens owns \
+those; reporting them here is out of scope. Do NOT propose speculative abstractions, configurability, \
+or error handling for impossible states. Only report a cleanup when it is concrete, safe, and \
+behavior-preserving, and you are >80% confident it genuinely improves THIS diff.
+
+Output a single JSON object (a ```json fenced block is fine) of this shape:
+{{"findings": [{{"severity": "MEDIUM|LOW", "category": \
+"reuse|simplification|efficiency|naming|altitude", "file": "<path or null>", "line": "<int or null>", \
+"issue": "<what is untidy>", "recommendation": "<the concrete cleanup>"}}], "summary": "<one line>"}}
+If the diff is already tidy, return {{"findings": [], "summary": "tidy"}}.
+
+=== DIFF ===
+{diff}
+=== END DIFF ==="""
+
 
 def _backend_argv():
     env = os.environ.get("SAIL_REVIEW_CMD")
@@ -84,6 +110,28 @@ def _escalated_argv():
     if env:
         return shlex.split(env)
     return None
+
+
+def _tidiness_argv():
+    # The tidiness lens backend (#63). Prefer SAIL_TIDINESS_CMD so the operator can point the
+    # lens at a cheaper / lower-effort model than the correctness backend; fall back to the
+    # default review backend when unset. An explicit empty string disables the lens (no backend).
+    env = os.environ.get("SAIL_TIDINESS_CMD")
+    if env is not None:
+        return shlex.split(env)
+    return _backend_argv()
+
+
+def tidiness_min_lines():
+    # Size gate for the tidiness lens (#63): skip diffs with fewer changed lines than this, so the
+    # lens runs only where cleanup is worth a backend call. Default 0 = run on any non-empty diff.
+    env = os.environ.get("SAIL_TIDINESS_MIN_LINES")
+    if not env:
+        return 0
+    try:
+        return int(env)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _argv_runnable(argv):
@@ -359,6 +407,27 @@ def _git_diff(target, diff_ref):
     return result.stdout
 
 
+def _diff_changed_lines(diff_text):
+    # Count added/removed content lines for the tidiness size gate (#63). Hunk-aware so a prefix
+    # filter cannot misclassify body content: the `---`/`+++` file headers appear BEFORE the first
+    # `@@` hunk, so we count `+`/`-` lines only inside hunk bodies. This correctly counts an added
+    # line whose content itself starts with `++` (rendered `+++…`) or a removed line starting with
+    # `--` (rendered `---…`), which a naive `startswith(("+++","---"))` filter would drop.
+    n = 0
+    in_hunk = False
+    for line in (diff_text or "").splitlines():
+        if line.startswith("@@"):
+            in_hunk = True
+            continue
+        if line.startswith(("diff --git", "index ", "--- ", "+++ ", "rename ", "similarity ",
+                            "new file", "deleted file", "old mode", "new mode")):
+            in_hunk = False  # a file-header block ends the current hunk
+            continue
+        if in_hunk and line and line[0] in "+-":
+            n += 1
+    return n
+
+
 def _sha256(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -419,7 +488,41 @@ def review(target, diff_ref, advisory=False, acs=None, lens="lens1", argv=None, 
     }
 
 
-def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, round=1):
+def review_tidiness(target, diff_ref, argv=None):
+    # The advisory tidiness/simplify lens (#63). Mirrors review() but uses TIDINESS_PROMPT and tags
+    # findings lens="tidiness". Returns a tidiness block dict; NEVER raises, NEVER blocks — an empty
+    # diff, a size-gated skip, a missing backend, or an unusable response all degrade to a recorded
+    # "skipped" status rather than failing the run.
+    diff_text = _git_diff(target, diff_ref)
+    if not diff_text.strip():
+        return {"status": "skipped", "reason": "empty diff", "findings": []}
+    min_lines = tidiness_min_lines()
+    changed = _diff_changed_lines(diff_text)
+    if changed < min_lines:
+        return {
+            "status": "skipped",
+            "reason": f"diff below SAIL_TIDINESS_MIN_LINES ({changed} < {min_lines})",
+            "findings": [],
+        }
+    argv = argv if argv is not None else _tidiness_argv()
+    if not _argv_runnable(argv):
+        return {"status": "skipped", "reason": "no tidiness backend", "findings": []}
+    rc, out, err = _invoke(TIDINESS_PROMPT.format(diff=diff_text), argv=argv)
+    findings = parse_findings(out)
+    if findings is None:
+        # Advisory lens: an unusable tidiness response is recorded, never blocks the gate.
+        return {"status": "skipped", "reason": f"tidiness backend unusable (rc={rc})", "findings": []}
+    for finding in findings:
+        finding["id"] = _finding_id(finding, "tidiness")
+        finding["lens"] = "tidiness"
+    return {
+        "status": "completed",
+        "findings": findings,
+        "summary": f"{len(findings)} cleanup suggestion(s)",
+    }
+
+
+def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, round=1, tidiness=False):
     if target is None:
         target = "."
     target = os.path.abspath(target or ".")
@@ -511,6 +614,11 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
         if ac.get("status") == "unmet"
     ]
 
+    # Tidiness lens (#63): advisory, opt-in (--tidiness), size-gated. Runs as a separate pass and is
+    # recorded under its own "tidiness" key — it never enters `findings`/`counts` and never changes
+    # the exit code, so it can surface non-blocking messiness without weakening correctness blocking.
+    tidiness_block = review_tidiness(target, diff_ref) if tidiness else None
+
     review_data = {
         "status": "error" if (backend_error or plan_error) else "completed",
         "parse_ok": result["parse_ok"],
@@ -524,6 +632,8 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
         "target": target,
         "diff_ref": diff_ref,
     }
+    if tidiness_block is not None:
+        review_data["tidiness"] = tidiness_block
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=run_dir) as fh:
@@ -554,6 +664,13 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
     # Record each unmet AC in the resolution log so the traceability spine is auditable.
     for ac in unmet_acs:
         log.review_marker(f"unmet AC: {ac.get('criterion', '')}")
+    if tidiness_block is not None:
+        if tidiness_block["status"] == "completed":
+            log.review_marker(
+                f"tidiness (advisory): {len(tidiness_block['findings'])} cleanup suggestion(s)"
+            )
+        else:
+            log.review_marker(f"tidiness (advisory): skipped — {tidiness_block.get('reason', '')}")
     print(f"sail review: {marker}")
 
     if advisory:

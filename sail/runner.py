@@ -206,7 +206,7 @@ def _completed_review(run_dir):
     return data if isinstance(data.get("findings"), list) else None
 
 
-def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None, baseline_dir=None, review=True, dual_lens=False, round=1):
+def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None, baseline_dir=None, review=True, dual_lens=False, round=1, tidiness=False):
     registry = build_registry()
 
     if run_dir is None:
@@ -423,6 +423,11 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
             # lens2 would never run. Invalidate when the requested mode needs a lens the cache lacks.
             reuse_candidate = None
             decision_log.review_marker("prior review stale (--dual-lens requested but cache is single-lens); re-reviewing")
+        if reuse_candidate is not None and tidiness and "tidiness" not in reuse_candidate:
+            # #63: a --tidiness resume must not reuse a cache that lacks the advisory tidiness block —
+            # the tidiness lens would be silently skipped. Mirrors the --dual-lens reuse guard above.
+            reuse_candidate = None
+            decision_log.review_marker("prior review stale (--tidiness requested but cache has no tidiness block); re-reviewing")
         if reuse_candidate is not None:
             # Resume of the same scope: reuse the completed review rather than re-invoking the
             # backend, but recompute blocking from its findings AND its recorded plan_verification
@@ -435,7 +440,7 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
             decision_log.review_marker("reused prior completed review (resumed)")
         else:
             if review_mod.active_review_available(round):
-                review_rc = review_mod.run_review(target_root, diff_ref, run_dir=run_dir, advisory=False, dual_lens=dual_lens, round=round)
+                review_rc = review_mod.run_review(target_root, diff_ref, run_dir=run_dir, advisory=False, dual_lens=dual_lens, round=round, tidiness=tidiness)
             else:
                 # never-mask: review was requested but no backend can run it — fail closed,
                 # don't let the change pass as if it had been reviewed.
