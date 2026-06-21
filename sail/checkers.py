@@ -19,6 +19,26 @@ _BANDIT_EXCLUDE = (
 )
 
 
+def _discover_sh(target):
+    # Return sorted *.sh paths under target, excluding any path with a .claude segment
+    # BELOW the target (nested git worktrees — mirrors the #44 _BANDIT_EXCLUDE idiom).
+    # Exclusion is RELATIVE to the target: the canonical invocation runs `--target .` from a
+    # cwd like .../.claude/worktrees/ship-NN/, so the target's OWN ancestor path contains
+    # /.claude/ — an absolute-substring match would exclude every dirpath → silent no-op gate
+    # (RT-1). .sail is NOT excluded: the diff-mode baseline worktree lives at
+    # .sail/runs/.../baseline-src and must be scanned.
+    found = []
+    for dirpath, _dirnames, filenames in os.walk(target):
+        rel = os.path.relpath(dirpath, target)
+        parts = [] if rel == "." else rel.split(os.sep)
+        if ".claude" in parts:
+            continue
+        for fn in filenames:
+            if fn.endswith(".sh"):
+                found.append(os.path.join(dirpath, fn))
+    return sorted(found)
+
+
 def _testpaths_from_ini(path, section):
     # Returns (section_present, testpaths) where testpaths is None when the testpaths KEY
     # is absent (caller falls back), or a list (possibly empty for an explicit empty value).
@@ -105,6 +125,7 @@ class Checker:
     tool: str
     artifact: str
     blocking: bool = True
+    stdout_artifact: bool = False
 
     def available(self) -> bool:
         return shutil.which(self.tool) is not None
@@ -165,6 +186,28 @@ class Checker:
             return ["semgrep", "--sarif", "--output", artifact_path, target]
         if self.name == "pip-audit":
             return ["pip-audit", "-f", "json", "-o", artifact_path]
+        if self.name == "shellcheck":
+            sh_files = _discover_sh(target)
+            if sh_files:
+                return ["shellcheck", "-f", "json", *sh_files]
+            # No *.sh files: a portable no-op that emits a valid empty JSON array to stdout
+            # (captured via stdout_artifact). Never a zero-byte artifact, which delta would
+            # read as None → false-fail (RT-8).
+            return ["printf", "[]"]
+        if self.name == "gitleaks":
+            # gitleaks --config REPLACES the default ruleset, so the shipped TOML keeps it via
+            # [extend] useDefault=true (RT-1). Resolve the config relative to THIS module so it
+            # works regardless of the scanned target / cwd. --exit-code 0 so a leak (gitleaks
+            # default rc=1) still writes the SARIF; the diff-delta — not rc — decides blocking.
+            config = os.path.join(os.path.dirname(__file__), "gitleaks-exclude.toml")
+            return [
+                "gitleaks", "dir", target,
+                "--report-format", "sarif",
+                "--report-path", artifact_path,
+                "--no-banner",
+                "--exit-code", "0",
+                "--config", config,
+            ]
         raise ValueError(f"unknown checker {self.name!r}")
 
 
@@ -176,10 +219,12 @@ def build_registry() -> list[Checker]:
         Checker("bandit", "bandit", "bandit.sarif"),
         Checker("semgrep", "semgrep", "semgrep.sarif"),
         Checker("pip-audit", "pip-audit", "pip-audit.json"),
+        Checker("shellcheck", "shellcheck", "shellcheck.json", stdout_artifact=True),
+        Checker("gitleaks", "gitleaks", "gitleaks.sarif"),
     ]
     # Opt-in allowlist (comma-separated checker names) to restrict the registry — e.g. fast
     # hermetic test runs that only need ruff/pytest as background gates (#51). Unset/empty =
-    # all six (unchanged). Order follows the registry, not the allowlist. Unknown names are
+    # all eight (unchanged). Order follows the registry, not the allowlist. Unknown names are
     # ignored (never crash); a fully-unknown allowlist yields an empty registry, which the
     # runner handles (no gates) and the LLM-review arm is unaffected.
     allow = os.environ.get("SAIL_CHECKERS")

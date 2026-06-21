@@ -35,7 +35,7 @@ cd "$REPO_ROOT"
 
 # rc is environment-dependent (a gate may fail when its tool is installed); the
 # orchestration writes its full audit trail regardless. Orchestration COMPLETENESS
-# (six terminal gates + audit trail) is asserted below, not the exit code.
+# (eight terminal gates + audit trail) is asserted below, not the exit code.
 python3 -m sail run --target "$TARGET" --run-dir "$RUN" >"$LOG_FILE" 2>&1 || true
 
 [ -f "$STATE_FILE" ] || fail "run-state.json was not created at $STATE_FILE"
@@ -47,7 +47,7 @@ import sys
 
 state_path = sys.argv[1]
 log_path = sys.argv[2]
-expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit"]
+expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks"]
 
 with open(state_path, "r", encoding="utf-8") as fh:
     data = json.load(fh)
@@ -81,7 +81,7 @@ legit_pytest_skips = {
     (5, "no tests collected (rc=5)"),
     (2, "collection/config error (rc=2) — not a test failure"),
 }
-# The gate's tool name matches its registry name for all six checkers.
+# The gate's tool name matches its registry name for all eight checkers.
 for gate in gates:
     name = gate.get("name")
     status = gate.get("status")
@@ -135,12 +135,80 @@ if len(header_lines) != 1:
     raise SystemExit(1)
 
 seq_lines = [line for line in lines if "seq=" in line]
-if len(seq_lines) != 6:
+if len(seq_lines) != 8:
     print(
-        f"FAIL: decision-log.md expected 6 outcome lines with seq=, got {len(seq_lines)}",
+        f"FAIL: decision-log.md expected 8 outcome lines with seq=, got {len(seq_lines)}",
         file=sys.stderr,
     )
     raise SystemExit(1)
 PY
 
 echo "PASS: sail orchestration runs all gates"
+
+# --- #48 Step 1: gate-reconciliation on resume ---
+# A run-state.json that predates a registry change (its gates array OMITS some registry
+# checkers) must NOT KeyError at the gates_by_name index sites. run() backfills the missing
+# gates (in registry order) before the per-checker loop; afterwards every registry checker has
+# a gate, and seq values are monotonic and gap-free. Hermetic: SAIL_CHECKERS pins a two-checker
+# registry (ruff,pytest) while the crafted state seeds only ruff — pytest must be backfilled.
+RECON_TARGET="$(mktemp -d "$TMP_ROOT/recon-target.XXXXXX")"
+RECON_RUN="$(mktemp -d "$TMP_ROOT/recon-run.XXXXXX")"
+RECON_STATE="$RECON_RUN/run-state.json"
+RECON_LOG="$TMP_ROOT/recon.log"
+
+cat >"$RECON_TARGET/trivial.py" <<'PY'
+print("hi")
+PY
+
+# Seed a resumable state whose gates array contains ONLY ruff (omits pytest). Give ruff a
+# terminal status with seq=1 so it is skipped by the loop and pytest is the only backfilled gate.
+cat >"$RECON_STATE" <<'JSON'
+{
+  "run_id": "recon",
+  "started_at": "2026-01-01T00:00:00Z",
+  "schema_version": 1,
+  "gates": [
+    {
+      "name": "ruff",
+      "status": "passed",
+      "artifact": "ruff.sarif",
+      "rc": 0,
+      "reason": null,
+      "seq": 1,
+      "started_at": "2026-01-01T00:00:00Z",
+      "finished_at": "2026-01-01T00:00:01Z"
+    }
+  ]
+}
+JSON
+
+SAIL_CHECKERS="ruff,pytest" python3 -m sail run --target "$RECON_TARGET" --run-dir "$RECON_RUN" --no-review >"$RECON_LOG" 2>&1 || true
+
+[ -f "$RECON_STATE" ] || fail "reconciliation: run-state.json missing after resume"
+
+python3 - "$RECON_STATE" <<'PY' || { echo "---- recon output ----" >&2; sed 's/^/  /' "$TMP_ROOT/recon.log" >&2 || true; echo "----------------------" >&2; exit 1; }
+import json, sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+gates = data["gates"]
+names = [g["name"] for g in gates]
+
+# Both registry checkers must now have a gate (pytest backfilled), in registry order.
+if names != ["ruff", "pytest"]:
+    raise SystemExit(f"FAIL: reconciliation must backfill missing gates in registry order, got {names!r}")
+
+# seq must be monotonic and gap-free across all gates that ran/were seeded.
+seqs = sorted(g["seq"] for g in gates if g.get("seq") is not None)
+if seqs != list(range(1, len(seqs) + 1)):
+    raise SystemExit(f"FAIL: seq must be monotonic gap-free starting at 1, got {seqs!r}")
+
+# The backfilled pytest gate reached a terminal status (no KeyError / crash).
+pytest_gate = next(g for g in gates if g["name"] == "pytest")
+if pytest_gate["status"] not in {"passed", "failed", "skipped"}:
+    raise SystemExit(f"FAIL: backfilled pytest gate not terminal: {pytest_gate['status']!r}")
+
+print("PASS: gate-reconciliation backfills missing registry gates on resume (#48 Step 1)")
+PY
+
+echo "PASS: gate-reconciliation backfills missing registry gates on resume (#48 Step 1)"

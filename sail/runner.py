@@ -72,11 +72,21 @@ def run_tests(cmd=None) -> int:
 def _run_checker(checker, target, artifact_path):
     # Run one checker, return its return code. Shared by the primary run and
     # diff-mode baseline generation.
-    return subprocess.run(
+    result = subprocess.run(
         checker.build_command(target, artifact_path),
         cwd=checker.cwd(target),
         capture_output=True, text=True,
-    ).returncode
+    )
+    if checker.stdout_artifact:
+        # The tool emits its findings to stdout (no file flag, e.g. shellcheck -f json),
+        # so persist the captured stdout to the artifact BEFORE returning — this runs for
+        # diff-mode baseline generation too (it routes through _run_checker). Write stdout
+        # verbatim: a genuinely empty stdout (tool crash) must yield an unreadable artifact
+        # that fails closed downstream — never mask it as "[]".
+        os.makedirs(os.path.dirname(artifact_path), exist_ok=True)
+        with open(artifact_path, "w", encoding="utf-8") as fh:
+            fh.write(result.stdout)
+    return result.returncode
 
 
 def _remove_worktree(target, path):
@@ -214,6 +224,31 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
 
     terminal_statuses = {"passed", "failed", "skipped"}
     gates_by_name = {gate["name"]: gate for gate in state.gates}
+
+    # Reconcile the resumed gate set against the current registry: a run-state.json that
+    # predates a newly-added checker lacks its gate, which would KeyError at the index sites
+    # below (the per-checker loop AND the blocking_failed comprehension). Backfill any missing
+    # registry checker as a fresh pending gate (RunState.init shape), in registry order, so the
+    # in-loop next_seq logic assigns its seq (monotonic, gap-free).
+    backfilled = False
+    for checker in registry:
+        if checker.name not in gates_by_name:
+            gate = {
+                "name": checker.name,
+                "status": "pending",
+                "artifact": None,
+                "rc": None,
+                "reason": None,
+                "seq": None,
+                "started_at": None,
+                "finished_at": None,
+            }
+            state.gates.append(gate)
+            gates_by_name[checker.name] = gate
+            backfilled = True
+    if backfilled:
+        state.save()
+
     next_seq = max((gate.get("seq") or 0 for gate in state.gates), default=0) + 1
 
     for checker in registry:
