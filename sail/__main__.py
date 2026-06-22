@@ -48,6 +48,13 @@ def main() -> int:
     isolate_parser.add_argument("--in-place", action="store_true")
     isolate_parser.add_argument("--concurrent", action="store_true")
 
+    land_parser = subparsers.add_parser("land")
+    land_parser.add_argument("--run-dir", required=True)
+    land_parser.add_argument("--issue", required=True)
+    land_parser.add_argument("--title", default="")
+    land_parser.add_argument("--prefix", default="sail")
+    land_parser.add_argument("--pr", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -75,6 +82,9 @@ def main() -> int:
             args.run_dir, args.branch, args.default_branch,
             args.isolate, args.in_place, args.concurrent, spec_text,
         )
+    if args.command == "land":
+        from sail.lifecycle import run_land
+        return run_land(args.run_dir, args.issue, args.title, args.pr, args.prefix)
 
     return 1
 
