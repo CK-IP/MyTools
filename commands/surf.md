@@ -87,6 +87,42 @@ are all answered through `AskUserQuestion` prompts at startup. This is a design 
 omission: a non-programmer should be able to drive `/surf` by reading and clicking, with
 nothing to memorize.
 
+### Step 0b: Announce the active mode — the mode banner
+
+Immediately after the mode is chosen — **and again at the top of every issue's re-anchor**
+(Step 7) — `/surf` prints a one-line **mode banner** so the active mode **and its
+decide-vs-ask behavior** are unmistakable with **zero user memory required**. The banner is
+a single mechanism whose purpose is to make the mode-dependent behavior visible at a glance;
+it states the **active mode** plus an **inline escape instruction on the same line** (the way
+to flip modes is always shown, never memorized — consistent with the no-flags principle):
+
+- **Autonomous:**
+  > ▶ `/surf` running in **AUTO** — code decisions are made-and-logged, never waited on; an
+  > unresolved domain call gets a bounded window then best-bet-and-record. *Press Esc / type
+  > `supervise` to switch to checkpoints.*
+- **Supervised:**
+  > ▶ `/surf` running in **SUPERVISED** — domain calls pause for you (up to the Step 11
+  > deadline); code decisions still auto-proceed. *Press Esc / type `autonomous` to stop being
+  > asked.*
+
+The banner exists so a non-programmer never has to remember which mode is live or what it will
+and won't ask about. The load-bearing distinction it makes plain: **AUTO means "don't bug me
+about code," it never means "guess at my domain"** (see Domain gating, Step 11b). The inline
+escape instruction lives on the **same line** as the mode so the switch is always one keystroke
+away and never something to look up.
+
+**The escape is a real control, consumed at the next checkpoint.** The inline escape is not
+decorative — there is a runtime path that consumes it. At any time the operator may request a
+switch (press **Esc** to interrupt and type the new mode, or type the keyword `supervise` /
+`autonomous`); `/surf` records the request and **applies it at the next issue boundary** — the
+Step 7 re-anchor, the same checkpoint that re-reads the charter and re-prints the banner. The
+switch **updates the mode recorded in the charter** (Step 4), so it is durable and survives
+resume, and the next issue's re-anchor re-prints the banner in the new mode. The change takes
+effect from the **next** issue, **never mid-build** — an in-flight teammate finishes under the
+mode it started in — so mode stays a charter-anchored fact, not a volatile chat state. This is
+still **no `--flag`**: flipping mode is an interactive keystroke, in keeping with the no-flags
+principle.
+
 ---
 
 ## Start gate
@@ -335,9 +371,10 @@ Repeat this loop for every issue in the work list:
 `<issue>` is the GitHub issue number) — this one convention is used everywhere: build, merge,
 dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is used.
 
-1. **Re-anchor.** Re-read the charter and the journal. Confirm this issue's dependencies have
-   landed (or handle them per the Dependent issues section). State, in one line, what you're
-   about to build and why it's next.
+1. **Re-anchor.** Re-read the charter and the journal. **Re-print the mode banner** (Step 0b)
+   so the active mode + decide-vs-ask behavior stays visible at every issue boundary. Confirm
+   this issue's dependencies have landed (or handle them per the Dependent issues section).
+   State, in one line, what you're about to build and why it's next.
 2. **Delegate the build to a fresh teammate.** The orchestrator never builds inline. Spawn a
    fresh per-issue teammate (Step 8) and hand it the issue. The teammate creates the issue branch
    off **current `main`** (so a parent merged earlier in this run is already in the baseline) and
@@ -540,8 +577,68 @@ does **not** block the whole board waiting for an answer. Instead:
 > available, to nudge `/surf` to checkpoint sooner — but the open-questions file + checkpoint
 > re-check is the mechanism that must always hold; the wakeup is only an accelerator.
 
-In autonomous mode there is no waiting: any decision the charter authorizes is made-and-logged
-immediately; anything it doesn't authorize is parked.
+In autonomous mode there is no *blocking* wait: code decisions the charter authorizes are
+made-and-logged immediately, and an unresolved **domain** assumption gets only a **bounded**
+window before best-bet-and-record (Step 11b) — it never idles indefinitely; anything genuinely
+irreversible or the human's alone is parked.
+
+---
+
+## Domain gating
+
+### Step 11b: Domain-gated input windows (auto-for-code / ask-for-domain)
+
+The deepest division of labor in `/surf` is **who owns which decision**: the agent owns
+**coding** decisions, the user owns **domain** decisions (formulas, thresholds, what "done"
+means for a feature). A naive autopilot would silently *guess* at domain calls and never
+surface them — the real risk as `/surf` takes on domain-bearing issues, not just infra. Domain
+gating is the guard, and it is **one primitive with mode-dependent behavior** (the mode banner,
+Step 0b, states which behavior is live):
+
+**What gates, and what doesn't.**
+
+- **Coding decisions** — reversible, in-scope, unambiguous (a broken/non-hermetic test, a
+  naming or refactor call, a clear code-quality fix, inserting a discovered fix-issue, a
+  merge/park call) — are **always** made-and-logged, in **both** modes. This is the
+  "fix, don't wait" Rule; `/surf` never opens a window for a code decision.
+- **Domain assumptions** the plan **cannot resolve from the run's charter, `.ship/domain.md`, or
+  the issue text** open a **user-input window**. `/surf` checks all three *first* — but the
+  **charter's decision-authority (Step 4 #4) is the current run's intent and takes precedence**:
+  where the charter and a stale `.ship/domain.md` entry disagree, the **charter wins** and the
+  question is re-opened rather than silently suppressed by old memory. Only a genuinely unresolved
+  domain assumption — unanswered by charter, memory, and issue alike — opens a window. This mirrors
+  `/sail`'s risk-gated `--dual-lens` pattern, applied to *human* input.
+
+**One primitive, mode-dependent behavior.** The user-input window is a **single mechanism**
+whose behavior is **mode-dependent**:
+
+- **Supervised:** the domain question is recorded and **waits for the user** — it **flows
+  through** the **Step 11** open-questions file + ~30-minute deadline (record the question, work
+  other independent issues meanwhile, re-check at every checkpoint, decide-and-log only if the
+  deadline passes unanswered). Supervised therefore *asks within the deadline* rather than
+  hard-blocking the whole board.
+- **Autonomous (`/surf` board-run):** the window is **bounded** — `/surf` gives a short window,
+  then **takes the best bet, records the options it weighed and the route it chose** in the
+  decision-log for the user to review later, and keeps going. This preserves the unattended-run
+  guarantee (never wait forever if the user is away); the audit trail is what lets the user
+  adjust the domain call afterward.
+
+**Even AUTO surfaces domain pauses.** Autonomous = **"don't bug me about code"** — it is
+**never** "guess silently at my domain." A domain assumption in AUTO still opens the bounded
+window and still records the options + chosen route; AUTO only removes the *code* questions, not
+the domain ones. A domain call that is genuinely **irreversible** or has **no defensible
+default** is **parked** with a written recommendation (the only "stop" path — Guardrails,
+Step 13), never best-bet-guessed.
+
+**`.ship/domain.md` is the memory that stops re-asking — but only *confirmed* answers persist.**
+A **user-confirmed** domain answer is written back to `.ship/domain.md` so the same question is
+not asked twice. An **autonomous best-bet is not** a confirmed answer: it is recorded as
+**provisional** in the decision-log (the options weighed + the route chosen) and is **not**
+promoted into durable `.ship/domain.md` memory until the user confirms it — otherwise a wrong
+guess would silently suppress the very prompt that would have caught it. Teach the crew the
+confirmed answers via **`/train`** (which maintains `.ship/` domain knowledge) and future runs
+pause less: a well-trained `.ship/domain.md` is what makes a domain-bearing board runnable
+unattended (more training → fewer windows → closer to fully autonomous).
 
 ---
 
@@ -820,6 +917,18 @@ from the durable files is the canonical path.
   reserved for the genuinely irreversible (cannot be undone by `git revert`), the genuinely ambiguous
   (no defensible default), or a non-code judgment that is truly the human's. Supervised mode asks
   within the deadline (§11); autonomous mode decides. (See #57 for the mode-banner treatment.)
+- **Domain gating: auto-for-code, ask-for-domain (Step 11b).** Coding decisions are
+  made-and-logged in both modes; an unresolved **domain** assumption (one not answerable from the
+  charter, `.ship/domain.md`, or the issue text — the charter's current-run intent wins over stale
+  memory) opens a **user-input window** — **supervised** waits on
+  the Step 11 deadline, **autonomous** gives a **bounded** window then takes the best bet,
+  recording the options it weighed + the route it chose. AUTO means "don't bug me about code,"
+  **never** "guess at my domain." Only **user-confirmed** domain answers are written to
+  `.ship/domain.md` (taught via `/train`) so they are not re-asked; an autonomous best-bet stays
+  **provisional** in the decision-log until confirmed.
+- **The mode banner makes decide-vs-ask unmistakable (Step 0b).** At startup and at each
+  re-anchor, `/surf` prints a one-line banner stating the active mode + an **inline escape
+  instruction on the same line** — zero user memory required.
 - One `--no-ff` merge commit per green issue; log every merge SHA so each is `git revert`-able.
 - **Sandbox repo only. No force-push or destructive git.** Park anything irreversible.
 - **Every issue is built by a fresh per-issue `Agent(team_name)` teammate — in both modes**, never
@@ -845,3 +954,6 @@ from the durable files is the canonical path.
 - `cc-dotfiles: home/commands/sail.md` (and the `/sail` README) — the **default engine** each
   per-issue teammate runs via `python3 -m sail run --diff main` (`/ship` is the optional heavier
   engine); defines the exit-0/exit-1 and fail-closed-review contract `/surf` relies on
+- `/train` — maintains `.ship/domain.md`, the domain memory **domain gating** (Step 11b) reads
+  first; teaching the crew there turns repeated domain windows into already-answered questions so
+  a domain-bearing board runs with fewer pauses

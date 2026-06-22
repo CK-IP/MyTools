@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# This file asserts doc invariants with the `grep -q … && pass … || fail …` idiom throughout.
+# `pass`/`fail` always succeed (echo + arithmetic increment), so the SC2015 "C may run when A
+# is true" caveat does not apply here; disable it file-wide to keep the assertions terse.
+# Backticks inside single-quoted grep patterns are literal-by-design (matching `code` spans), so
+# SC2016 ("expressions don't expand in single quotes") is also a non-issue here.
+# shellcheck disable=SC2015,SC2016
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -196,6 +202,70 @@ grep -qiE 'both.{0,4}modes' "$TARGET" && pass "both-modes delegation pinned" || 
 # A16. Revive watcher requires positive stall evidence + precise pane target (#73 review fixes)
 grep -qiE 'positive stall evidence|never nudge a healthy session|armed floor' "$TARGET" && pass "positive-stall-evidence pinned" || fail "positive-stall-evidence missing"
 grep -qF '.surf/orchestrator-pane' "$TARGET" && pass "orchestrator-pane targeting pinned" || fail "orchestrator-pane targeting missing"
+
+# --- #57: domain-gated input windows + clear mode banner ---
+
+# D1. Mode banner: states active mode + inline escape instruction on the same line
+grep -qiE 'mode banner' "$TARGET" && pass "mode banner present" || fail "mode banner missing"
+grep -qiE 'inline escape instruction' "$TARGET" && pass "inline escape instruction present" || fail "inline escape instruction missing"
+grep -qiE 'zero user memory|nothing to memorize|never (something to look up|memorized)' "$TARGET" && pass "banner zero-memory rationale present" || fail "banner zero-memory rationale missing"
+
+# D1b. Bind each mode's Step-0b banner to its OWN escape — a swap or a missing escape must fail.
+# The mode labels recur in Step 11b and the banner phrases wrap across lines, so: bound extraction
+# to the Step-0b section, capture each mode's stanza, strip the blockquote markers, and collapse
+# wrapping. Keyword-anywhere greps would pass even on a supervise/autonomous escape swap.
+norm() { sed -E 's/^[[:space:]]*>[[:space:]]?//' | tr '\n' ' ' | tr -s ' '; }
+AUTO_BLOCK=$(awk '/### Step 0b:/{s=1} /^## Start gate/{s=0} s&&/\*\*Autonomous:\*\*/{f=1} s&&/\*\*Supervised:\*\*/{f=0} f' "$TARGET" | norm)
+SUP_BLOCK=$(awk '/### Step 0b:/{s=1} /^## Start gate/{s=0} s&&/\*\*Supervised:\*\*/{f=1} s&&/^The banner exists/{f=0} f' "$TARGET" | norm)
+printf '%s' "$AUTO_BLOCK" | grep -qF 'AUTO' && pass "autonomous banner names AUTO" || fail "autonomous banner missing AUTO"
+printf '%s' "$AUTO_BLOCK" | grep -qF '`supervise`' && pass "AUTO banner escape token is supervise" || fail "AUTO banner escape (supervise) missing/swapped"
+printf '%s' "$AUTO_BLOCK" | grep -qiF 'switch to checkpoints' && pass "AUTO banner escape target = checkpoints" || fail "AUTO banner escape target missing/swapped"
+printf '%s' "$AUTO_BLOCK" | grep -qiF 'Press Esc' && pass "AUTO banner has Press Esc escape" || fail "AUTO banner Press Esc missing"
+printf '%s' "$SUP_BLOCK" | grep -qF 'SUPERVISED' && pass "supervised banner names SUPERVISED" || fail "supervised banner missing SUPERVISED"
+printf '%s' "$SUP_BLOCK" | grep -qF '`autonomous`' && pass "SUPERVISED banner escape token is autonomous" || fail "SUPERVISED banner escape (autonomous) missing/swapped"
+printf '%s' "$SUP_BLOCK" | grep -qiF 'stop being asked' && pass "SUPERVISED banner escape target = stop being asked" || fail "SUPERVISED banner escape target missing/swapped"
+printf '%s' "$SUP_BLOCK" | grep -qiF 'Press Esc' && pass "SUPERVISED banner has Press Esc escape" || fail "SUPERVISED banner Press Esc missing"
+
+# D1c. Banner is reprinted at the Step 7 re-anchor (not only at startup) + is spec'd as one-line.
+# Bind the reprint check to the Step 7 section so a regression that drops it from re-anchor fails.
+REANCHOR=$(awk '/### Step 7:/{s=1} s&&/### Step 8:/{s=0} s' "$TARGET")
+printf '%s' "$REANCHOR" | grep -qiF 'mode banner' && pass "Step 7 re-anchor reprints the mode banner" || fail "Step 7 re-anchor banner reprint missing"
+grep -qiE 'one-line (\*\*)?mode banner|one-line banner' "$TARGET" && pass "banner specified as one-line" || fail "one-line banner property missing"
+
+# D1d. The banner escape is a real control: a runtime mode-toggle path consumes Esc/keyword input.
+grep -qiE 'applies it at the next issue boundary|consumed at the next checkpoint|escape is (a )?real control' "$TARGET" && pass "mid-run mode-toggle runtime path defined" || fail "mode-toggle runtime path missing"
+grep -qiE 'never mid-build|effect from the \*\*next\*\* issue|takes effect from the' "$TARGET" && pass "mode switch takes effect next issue (not mid-build)" || fail "mode-switch timing missing"
+
+# D2. Domain gating: auto-for-code / ask-for-domain ownership split
+grep -qiE 'domain gating|auto-for-code|ask-for-domain' "$TARGET" && pass "domain-gating concept present" || fail "domain-gating concept missing"
+grep -qiE 'coding decision|code decision' "$TARGET" && pass "coding-decision ownership present" || fail "coding-decision ownership missing"
+grep -qiE 'domain (decision|assumption|call|question)' "$TARGET" && pass "domain-decision ownership present" || fail "domain-decision ownership missing"
+
+# D3. .ship/domain.md is the domain memory that stops re-asking
+grep -qF '.ship/domain.md' "$TARGET" && pass ".ship/domain.md memory referenced" || fail ".ship/domain.md missing"
+grep -qiE 'stops? (re-)?asking|not (be )?asked twice|not (be )?re-asked|fewer (windows|pauses)' "$TARGET" && pass "domain-memory stops-re-asking present" || fail "stops-re-asking missing"
+
+# D4. /train teaches the domain memory
+grep -qF '/train' "$TARGET" && pass "/train referenced" || fail "/train missing"
+
+# D5. One primitive, mode-dependent behavior
+grep -qiE 'one primitive|single mechanism' "$TARGET" && pass "one-primitive framing present" || fail "one-primitive framing missing"
+grep -qiE 'mode-dependent' "$TARGET" && pass "mode-dependent behavior present" || fail "mode-dependent behavior missing"
+
+# D6. Autonomous: bounded window -> best bet, record options + chosen route
+grep -qiE 'bounded window|bounded' "$TARGET" && pass "bounded window (autonomous) present" || fail "bounded window missing"
+grep -qiE 'best bet|best-bet' "$TARGET" && pass "best-bet present" || fail "best-bet missing"
+grep -qiE 'options it weighed|record(s|ed)? the options|options .*route|route it chose|route chosen|chosen route' "$TARGET" && pass "record-options-and-route present" || fail "record-options-and-route missing"
+
+# D7. Supervised domain questions flow through the Step 11 deadline (reconciled, not duplicated)
+grep -qiE 'flows? through.*Step 11|Step 11 (open-questions|deadline)|asks within the deadline' "$TARGET" && pass "supervised domain ties to Step 11 deadline" || fail "Step 11 tie-in missing"
+
+# D8. Even AUTO surfaces domain pauses (don't bug me about code / never guess at my domain)
+grep -qiE "don.t bug me about code" "$TARGET" && pass "auto=don't-bug-me-about-code present" || fail "auto framing missing"
+grep -qiE "guess .{0,12}(at )?my domain|guess at my domain" "$TARGET" && pass "never-guess-at-domain present" || fail "never-guess-at-domain missing"
+
+# D9. An irreversible / no-defensible-default domain call is parked, not guessed
+grep -qiE 'irreversible|no defensible default' "$TARGET" && pass "irreversible-domain-call parks present" || fail "irreversible-domain park missing"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
