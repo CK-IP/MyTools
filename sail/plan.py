@@ -162,6 +162,7 @@ def build_adversary_prompt(spec):
         "Bias self-guards — resist verification avoidance (confirming the plan is fine instead of trying to break it), being seduced by the first 80%, anchoring to the spec or plan as if it were correct, and reasoning-only conclusions; cite the specific spec text behind every finding.\n"
         "Confidence threshold — only report a finding when you are >80% confident it is a real defect. Do NOT flag style preferences, \"could be more efficient\" without concrete impact, error handling for impossible states, or theoretical issues with no practical failure mode.\n"
         "Required adversarial probes — probe the design for concurrency hazards, boundary conditions (empty, missing, or corrupt inputs), idempotency violations, and injection vectors, in addition to the promise-to-action consistency class.\n"
+        "Design breadth (#62) — even if a consistency bug is already obvious, do NOT stop there: this pass exists to widen the DESIGN lens. Probe whether the spec picks the wrong design shape, misses a materially simpler approach, or commits to a design choice with a better-fitting alternative — surface those as findings too, not just the first defect.\n"
         "Emit ONE JSON object with a risks list of this shape (each genuine defect is a "
         "CRITICAL or HIGH risk):\n"
         '{"risks":[{"severity":"CRITICAL|HIGH|MEDIUM|LOW","area":"design|security|scope|other",'
@@ -351,15 +352,24 @@ def run_plan(target, run_dir=None, advisory=False, plan_adversary=False):
     # fires). Mirrors review's --dual-lens: an opt-in INDEPENDENT second backend (SAIL_PLAN_CMD2)
     # re-derives risks from the same spec with adversarial framing, union its BLOCKING risks into
     # the plan gate, fail closed if it errors. A non-risky change never escalates (AC#4: no
-    # uniform weight). Only run on an otherwise-usable author plan that is not ALREADY blocking
-    # (review R1 LOW: when the author plan already has a blocking risk the gate is already exit 1
-    # — the adversary call would be wasted) — and not on a backend/parse error (already failing
-    # closed, no usable plan to adversarially break).
+    # uniform weight). Only run on an otherwise-usable author plan — not on a backend/parse error
+    # or unusable plan (already failing closed, no usable plan to adversarially break).
+    #
+    # #62: the adversary now runs on plan-risky work EVEN WHEN the author plan is ALREADY blocking
+    # — reversing #58 review R1 LOW's skip-when-already-red. That skip saved a call but threw away
+    # the adversary's reason for being: a SECOND, independent design perspective (the lens most
+    # likely to surface design choices / a simpler approach the single author pass misses). When a
+    # consistency bug is already flagged, the gate is red regardless — but the adversary's job is
+    # design BREADTH, not adding to the blocking count: its independent CRITICAL/HIGH design
+    # findings still union into plan.json (tagged lens=adversary) so the reviewer sees the design
+    # risks the author missed. Cost stays risk-gated: escalate still requires plan_adversary or
+    # is_plan_risky, so ordinary work never pays — only the rare risky-AND-already-blocking
+    # intersection adds one bounded one-shot call. An adversary backend error fails closed
+    # UNIFORMLY (status=error, exit 1) whether or not the author plan was independently blocking.
     adversary_error = False
     escalate = (
         (plan_adversary or is_plan_risky(spec))
         and not (backend_error or unusable_plan)
-        and not has_blocking_risk(payload.get("risks", []))
     )
     if escalate:
         if adversary_available():
