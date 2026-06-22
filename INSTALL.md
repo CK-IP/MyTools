@@ -357,7 +357,7 @@ The three LaunchAgents:
 
 1. **CRG daemon** (`com.crg.daemon`) — auto-starts the code-review-graph daemon on login so your code maps stay up to date
 2. **Memory refresh reminder** (`com.crg.refresh-reminder`) — sends a macOS notification on the 1st of each month reminding you to run `/refresh`
-3. **`/surf` auto-resume** (`com.surf.resume`) — auto-restarts an interrupted `/surf` board run after a usage limit resets (full details in the dedicated subsection below)
+3. **`/surf` revive watcher** (`com.surf.resume`) — revives a `/surf` board run **in place** inside its persistent `tmux` session after a usage limit resets (full details in the dedicated subsection below)
 
 ### Install the plist files
 
@@ -405,13 +405,23 @@ launchctl bootout "gui/$(id -u)/com.crg.daemon"
 launchctl bootout "gui/$(id -u)/com.crg.refresh-reminder"
 ```
 
-### `/surf` auto-resume LaunchAgent (optional, macOS only)
+### `/surf` revive watcher LaunchAgent (optional, macOS only)
 
 `/surf` works the board unattended and can be cut off mid-run by the Max-subscription usage
-window. This LaunchAgent fires `config/surf-resume.sh` on a 30-minute interval; the wrapper is
-pure bash and only relaunches `claude --dangerously-bypass-permissions -p "/surf resume"` once
-the usage-cap reset time has passed and real unfinished board work remains — so idle ticks cost
-zero Claude tokens. Only set this up if you run `/surf` for long unattended sessions.
+window. As of issue #73 `/surf` delegates **every** issue to an agent-team teammate, and agent
+teams cannot run in headless `claude -p` mode — so the old headless relaunch is **retired**.
+Instead `/surf` runs in a long-lived **named `surf` tmux session** that stays alive across the
+cap window, and this LaunchAgent fires `config/surf-resume.sh` on a 30-minute interval to
+**revive that still-alive session in place** with `tmux send-keys` once the usage-cap reset time
+has passed and real unfinished board work remains. The wrapper is pure bash and touches no Claude
+tokens to decide — so idle ticks cost zero Claude tokens, and it never spawns a headless run.
+
+> **Reboot trade-off:** this revives across a usage-cap window but **not** a machine reboot — a
+> reboot destroys the tmux session, so automatic recovery is lost. After a reboot, recover
+> manually with `tmux new -s surf` → `claude --dangerously-bypass-permissions` → `/surf resume`.
+
+Only set this up if you run `/surf` for long unattended sessions, and start `/surf` inside the
+named session: `tmux new -s surf`, then `claude --dangerously-bypass-permissions`, then `/surf`.
 
 > **Post-merge only:** install this after the branch has merged to `main`, per the symlink rule
 > at the top of this guide.

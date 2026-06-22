@@ -81,9 +81,10 @@ grep -qF 'commands/surf.md' "$INSTALL" && pass "INSTALL.md /surf symlink present
 # A1. Supervised delegation mechanism pinned
 grep -qF 'TeamCreate' "$TARGET" && pass "supervised delegation (TeamCreate) pinned" || fail "supervised delegation (TeamCreate) missing"
 
-# A2. Autonomous delegation: fleet-rule exception + concrete subagent mechanism pinned
-grep -qiF 'deliberate exception' "$TARGET" && pass "fleet-rule exception pinned" || fail "fleet-rule exception missing"
-grep -qiE 'subagent_type|general-purpose' "$TARGET" && pass "autonomous subagent mechanism pinned" || fail "autonomous subagent mechanism missing"
+# A2. Delegation model (#73): EVERY issue → fresh teammate; the old "autonomous = subagent" path is retired
+grep -qiE 'every issue is (delegated|built by).*teammate|delegating every issue to a teammate' "$TARGET" && pass "every-issue-delegated-to-teammate pinned" || fail "every-issue-delegated-to-teammate missing"
+grep -qiE 'cannot host|can.t host|never a one-shot subagent|no subagent path' "$TARGET" && pass "subagent-cannot-host-crew rationale pinned" || fail "subagent-incompatibility rationale missing"
+grep -qiE 'replaces the old .*subagent|that rule is .*retired|no longer uses subagents' "$TARGET" && pass "autonomous=subagent rule retired" || fail "autonomous=subagent retirement missing"
 
 # A3. Context model / anti-drift pinned
 grep -qi 're-anchor' "$TARGET" && pass "re-anchor pinned" || fail "re-anchor missing"
@@ -165,6 +166,36 @@ grep -qi 'tombstone' "$TARGET" && pass "tombstone-on-fresh language present" || 
 grep -qiE 'done: superseded' "$TARGET" && pass "tombstone journal line (done: superseded) pinned" || fail "tombstone journal line missing"
 grep -qi 'externally exhausted' "$TARGET" && pass "externally-exhausted trigger present" || fail "externally-exhausted trigger missing"
 grep -qiE 'lay the old charter to rest' "$TARGET" && pass "tombstone instruction (lay the old charter to rest) present" || fail "tombstone lay-to-rest instruction missing"
+
+# --- #73: teammate-for-every-issue + persistent-tmux revive ---
+
+# A10. Engine: /sail default, /ship optional
+grep -qiE 'sail.{0,12}default|default engine.*sail' "$TARGET" && pass "/sail-default engine pinned" || fail "/sail-default engine missing"
+grep -qiE 'ship.{0,6}optional|optional.*heavier engine' "$TARGET" && pass "/ship-optional engine pinned" || fail "/ship-optional engine missing"
+
+# A11. Persistent-tmux + revive resume model; headless relaunch retired/reframed; reboot trade-off
+grep -qiE 'persistent.?tmux' "$TARGET" && pass "persistent-tmux model pinned" || fail "persistent-tmux model missing"
+grep -qiF 'tmux send-keys' "$TARGET" && pass "send-keys revive mechanism pinned" || fail "send-keys revive missing"
+grep -qiE 'retired|reframed' "$TARGET" && pass "headless-relaunch retired/reframed pinned" || fail "headless-relaunch retire/reframe missing"
+grep -qiE 'reboot' "$TARGET" && pass "reboot trade-off pinned" || fail "reboot trade-off missing"
+
+# A12. Named tmux session start/monitor procedure (the start front door)
+grep -qF 'tmux new -s surf' "$TARGET" && pass "named-session start command pinned" || fail "named-session start command missing"
+grep -qF 'tmux attach -t surf' "$TARGET" && pass "named-session attach/monitor command pinned" || fail "named-session attach command missing"
+
+# A13. Teardown mandatory on every stop path
+grep -qi 'teardown' "$TARGET" && pass "teardown referenced" || fail "teardown missing"
+grep -qiE 'every stop path|dismiss (all|every) teammate' "$TARGET" && pass "teardown-on-every-stop-path pinned" || fail "teardown-on-every-stop-path missing"
+
+# A14. Spawn contract: start immediately / run to terminus / don't idle (idle-on-spawn fix)
+grep -qiE 'start immediately|run autonomously to terminus|do not idle|without idling' "$TARGET" && pass "teammate spawn-immediately contract pinned" || fail "spawn-immediately contract missing"
+
+# A15. Agent-teams required in BOTH modes (no longer supervised-only)
+grep -qiE 'both.{0,4}modes' "$TARGET" && pass "both-modes delegation pinned" || fail "both-modes requirement missing"
+
+# A16. Revive watcher requires positive stall evidence + precise pane target (#73 review fixes)
+grep -qiE 'positive stall evidence|never nudge a healthy session|armed floor' "$TARGET" && pass "positive-stall-evidence pinned" || fail "positive-stall-evidence missing"
+grep -qF '.surf/orchestrator-pane' "$TARGET" && pass "orchestrator-pane targeting pinned" || fail "orchestrator-pane targeting missing"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
