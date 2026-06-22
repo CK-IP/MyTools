@@ -47,6 +47,24 @@ DESIGN_ALTERNATIVES_DIRECTIVE = (
     "trivial spec. This is informational and never a blocking risk on its own.\n"
 )
 
+# AC#1 (#80): a FREE code-health item folded into the SAME single plan pass (no new plan lens —
+# it rides the existing self-check + the #62 cross-family plan-adversary). Shift-left on the two
+# code-health axes the review-time tidiness lens (#63/#80) enforces: simplicity (a materially
+# simpler shape) and efficiency (an obviously-worse algorithm/data-structure). Marginal-value rule:
+# ONLY an EGREGIOUS case becomes a blocking risk — a quadratic where linear is obvious on a
+# reachable path, or a needlessly roundabout shape when a materially simpler one is at hand.
+# Diminishing-returns polish is NOT a risk (mirrors the review-time advisory tier), so trivial
+# specs stay 1-pass and unblocked.
+CODE_HEALTH_SELF_CHECK = (
+    "CODE-HEALTH CHECK (mandatory, marginal-value): assess whether the planned approach picks an "
+    "obviously-worse algorithm or data-structure (e.g. a quadratic scan where a linear/hashed pass "
+    "is the obvious shape, on a reachable path), or whether a materially simpler shape achieves the "
+    "same result. Only an EGREGIOUS case — a clear, large, reachable defect — is a blocking (HIGH or "
+    "CRITICAL) risk; record it in the risks list with the concrete cheaper/simpler alternative. "
+    "Diminishing-returns polish (a marginal micro-optimization, a stylistic preference) is NOT a "
+    "risk — do not invent one for a sound, simple plan.\n"
+)
+
 # AC#2/#4 (#58): markers of a plan-risky spec, in two families:
 #   (A) REMEDIATION  — the change adds a user-facing instruction/remediation (the broken
 #                      promise->action class), and
@@ -136,6 +154,7 @@ def build_prompt(spec):
         '"risks":[{"severity":"CRITICAL|HIGH|MEDIUM|LOW","area":"design|security|scope|other",'
         '"issue":"...","mitigation":"..."}],"scope":{"in":[...],"out":[...]},"summary":"..."}\n'
         + CONSISTENCY_SELF_CHECK
+        + CODE_HEALTH_SELF_CHECK
         + DESIGN_ALTERNATIVES_DIRECTIVE
         + "Return JSON only.\n\n"
         "=== SPEC ===\n"
