@@ -251,6 +251,19 @@ gitleaks version && shellcheck --version | head -2
 
 You can install tools later — `/fortify` and `/sail` gracefully skip any tool that is not installed.
 
+### Cross-family dual-lens second backend (codex — required for `/surf` per-teammate review, #74)
+
+`/surf` delegates every issue build to a teammate that runs `/sail` with `--dual-lens` and a
+**second review lens** pointed at a codex CLI via `SAIL_REVIEW_CMD2` (e.g.
+`SAIL_REVIEW_CMD2="codex exec -m gpt-5.4-mini"`). These are ordinary CLI-subprocess lenses — *not*
+the session-bound `advisor()` tool — so the second lens is reachable inside a nested teammate where
+`advisor()` is not. Install a codex CLI and ensure it is on `PATH`. Without a codex (or other
+`SAIL_REVIEW_CMD2`) backend reachable from **both** the teammate and the orchestrator, `/sail`'s
+review degrades to single-lens and `/surf`'s pre-merge guard cannot compensate — so it **parks
+every issue rather than merging a single-lens build**. In other words, codex is effectively
+**required for `/surf` to land work**; it is optional only for one-off `/sail` runs you review
+yourself (which degrade cleanly to single-lens).
+
 ---
 
 ## Step 4: Enable the agent teams feature

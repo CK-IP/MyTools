@@ -316,6 +316,21 @@ def second_lens_available():
     return _argv_runnable(_second_lens_argv())
 
 
+def dual_lens_status(review):
+    """Classify a review.json's dual-lens state for the /surf pre-merge guard (#74).
+
+    The single source of truth for the degradation predicate — keyed off the explicit
+    `lens2_ran` boolean, NOT len(lenses) (a high-stakes diff can add a `redteam` lens, so
+    lens1+redteam with no lens2 is length-2 yet still degraded). Returns:
+      - "single-by-design" : --dual-lens was never requested (not a degradation).
+      - "ok"               : requested AND the second lens genuinely ran.
+      - "degraded"         : requested BUT the second lens did not run (compensate or park).
+    """
+    if not review.get("dual_lens_requested"):
+        return "single-by-design"
+    return "ok" if review.get("lens2_ran") else "degraded"
+
+
 def escalate_round():
     env = os.environ.get("SAIL_REVIEW_ESCALATE_ROUND")
     if not env:
@@ -1162,6 +1177,16 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
         "plan_hash": _sha256(json.dumps(acs or [], sort_keys=True)),
         "plan_verification": plan_verification,
         "lenses": lenses,
+        # Machine-readable dual-lens signal (#74). Two self-contained booleans so a reader never
+        # has to infer lens2's fate from `len(lenses)` — which is unsound because `lenses` may also
+        # carry a `redteam` entry on a high-stakes diff (so len==2 with lens1+redteam and NO lens2).
+        #   dual_lens_requested : was --dual-lens asked for?
+        #   lens2_ran           : did the SECOND review lens actually run (codex)?
+        # Degradation is unambiguous: dual_lens_requested AND NOT lens2_ran  → requested but the
+        # second lens was unavailable (degraded to single). dual_lens_requested False → single-lens
+        # by design (never mistake design for degradation).
+        "dual_lens_requested": dual_lens,
+        "lens2_ran": ("lens2" in lenses),
         "target": target,
         "diff_ref": diff_ref,
     }

@@ -383,11 +383,15 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
    # the TEAMMATE runs this (the orchestrator only receives the exit code + summary):
    git checkout main
    git checkout -b surf/<issue>
-   python3 -m sail run --diff main --run-dir .surf/runs/<issue>
+   SAIL_REVIEW_CMD2="codex exec -m gpt-5.4-mini" \
+     python3 -m sail run --diff main --dual-lens --run-dir .surf/runs/<issue>
    ```
    This is the one-pass `/sail` mode (the teammate's default engine; `/ship` is the optional
    heavier engine — see Step 8): it runs the deterministic gates **and** the blocking LLM review
-   against the diff vs. `main`. It exits **0** when the issue is green (all gates pass and the
+   against the diff vs. `main`. The `--dual-lens` flag plus `SAIL_REVIEW_CMD2` give the delegated
+   build a genuine **cross-family** review (codex + the default `claude` lens) — Step 8 explains why
+   these **CLI-subprocess lenses** (not `advisor()`) work inside a teammate, and the pre-merge guard
+   below handles the rare degraded case, never silently (#74). It exits **0** when the issue is green (all gates pass and the
    blocking review found no CRITICAL/HIGH) and **1** when something is blocking. The teammate
    reports that exit code plus a one-line summary; the orchestrator ingests only that.
 
@@ -401,7 +405,55 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
      parent is still parked, **park this dependent too** — never auto-merge a stacked branch whose
      base is not on `main`, because a branch stacked on a parked parent (branch-from-parent, §10)
      carries the parent's commits in the diff, can exit 0, and would smuggle the parent's unmerged
-     work into `main` past its parked status. With all parents confirmed merged, **land** the
+     work into `main` past its parked status.
+
+     *Second pre-merge guard — the dual-lens degradation check (#74, REQUIRED).* The teammate
+     builds with `--dual-lens`, but if its second lens could not run the delegated review degraded
+     to single-lens (cross-family review is the quality mechanism; Step 8 explains why these CLI
+     lenses, not `advisor()`, are used). Before merging, the orchestrator MUST read the teammate's
+     `.surf/runs/<issue>/review.json` and classify it with `sail.review.dual_lens_status()` — the
+     single tested source of truth. A `degraded` verdict means the predicate
+     **`dual_lens_requested == true AND lens2_ran == false`** held; it keys off the explicit
+     `lens2_ran` boolean, NOT `len(lenses)` (a high-stakes diff can add a `redteam` lens, so
+     `lens1`+`redteam` with no `lens2` is length 2 yet still degraded). If the verdict is
+     `degraded`, the in-teammate review was single-lens — do not merge yet.
+     **Run the missing second lens** yourself, soundly (three sub-steps, none skippable):
+     1. **Re-review the issue's content, not nothing.** Check out the issue branch (or a worktree
+        holding it) so the diff is real, then assert it is **non-empty** — a re-review from bare
+        `main` produces an empty diff that comes back trivially clean and would silently wave the
+        degraded build through. An empty diff means park, not pass.
+     2. **Run it; trust the exit code for blocking; confirm the second lens genuinely ran.**
+        `sail review`'s exit code already covers the FULL blocking verdict (findings, unmet ACs,
+        code-health) — do not re-derive it. But exit 0 alone is insufficient here: a missing
+        *second-lens* backend still lets `sail review` complete single-lens and exit 0 (lens1 passed,
+        `status: completed`, `lens2_ran=false`) — that is the degraded case, and exit 0 does not
+        prove the second lens ran. (Only when *no* lens runs at all does the review write a
+        `status: skipped` artifact and fail closed at exit 1.) So require BOTH the run to exit 0 AND
+        `dual_lens_status(review.json) == "ok"` (the tested classifier in `sail.review`, which is
+        `ok` only when the second lens actually ran). Only then is it safe to merge:
+        ```bash
+        RD=.surf/runs/<issue>
+        git checkout surf/<issue>
+        [ -n "$(git diff main --name-only)" ] || { echo "empty diff — park, do NOT merge"; exit 1; }
+        SAIL_REVIEW_CMD2="codex exec -m gpt-5.4-mini" \
+          python3 -m sail review --target . --diff main --run-dir "$RD" --dual-lens
+        rc=$?
+        { [ "$rc" -eq 0 ] && python3 -c 'import json,sys; from sail.review import dual_lens_status; sys.exit(0 if dual_lens_status(json.load(open(sys.argv[1])))=="ok" else 1)' "$RD/review.json"; } \
+          || { echo "compensation blocked, or second lens did not run — park, do NOT merge"; exit 1; }
+        ```
+     3. Merge only if step 2's verification passes. If the second lens still cannot run anywhere
+        (codex unavailable in the orchestrator context too, so `lens2_ran` stays false):
+        **never silently merge** the single-lens build — park it loudly with the dual-lens
+        degradation as the blocking reason, exactly like any other exit-1 outcome.
+
+     *Guard mechanics.* The orchestrator checks out `surf/<issue>` in the **shared repo** here — the
+     same basis the Step-7 merge below already relies on (the teammate has reported back and
+     released the branch by this point). The compensation re-review overwrites the teammate's
+     degraded `review.json` in place; that is intentional (the upgraded dual-lens review supersedes
+     the single-lens one), and the degradation *event* is preserved in the run journal (step 4) —
+     the audit trail lives there, not in `review.json`.
+
+     With all parents confirmed merged and the dual-lens guard satisfied, **land** the
      issue via the **shared `sail land` logic** (the closing bookend, #59 — same source of truth
      `/sail` Stage 5 uses; keep the two in sync): emit the closing artifacts from the
      already-produced review evidence, merge into `main` as a single `--no-ff` commit whose
@@ -470,10 +522,13 @@ in both modes — there is no subagent path.
 > modes — the mode no longer changes the delegation mechanism, only decision behavior and whether
 > a human is watching the panes (Step 0).
 
-**Engine: `/sail` by default, `/ship` optional.** The teammate runs **`/sail`** (`python3 -m sail
-run --diff main --run-dir .surf/runs/<n>`) as its default engine. **`/ship`** is the optional
-heavier engine for an unusually demanding issue. Both produce the exit-0-green / exit-1-blocking
-contract `/surf` reads.
+**Engine: `/sail` by default, `/ship` optional.** The teammate runs **`/sail`**
+(`SAIL_REVIEW_CMD2="codex exec -m gpt-5.4-mini" python3 -m sail run --diff main --dual-lens
+--run-dir .surf/runs/<n>`) as its default engine — `--dual-lens` + `SAIL_REVIEW_CMD2` give the
+delegated build a real cross-family review via **CLI-subprocess lenses** (codex + `claude`), with
+no `advisor()` dependency, so the second lens is available even in a nested teammate (#74; see
+Step 7's degradation guard). **`/ship`** is the optional heavier engine for an unusually demanding
+issue. Both produce the exit-0-green / exit-1-blocking contract `/surf` reads.
 
 **Spawn contract (the teammate's prompt).** The prompt handed to each teammate must tell it to:
 
