@@ -33,6 +33,22 @@ Compute the spec (Stage 1 fetches it; do it here so the decision can reuse `is_p
 [ -f "$HOME/.claude/lib/ship-resume-safety.sh" ] && . "$HOME/.claude/lib/ship-resume-safety.sh"  # #125 orphan-safety guard (reused, not reinvented)
 [ -f "$HOME/.claude/lib/sail-git-lifecycle.sh" ] && . "$HOME/.claude/lib/sail-git-lifecycle.sh"   # #65 git mechanics (plain git worktree)
 
+# <!-- SAIL-ISOLATION-PREFLIGHT-BEGIN -->
+# #88: the isolation infra is a HARD dependency, not optional. sail_setup_isolation /
+# sail_concurrent_run come from sail-git-lifecycle.sh; ship_safe_cleanup_orphan_dir comes
+# from ship-resume-safety.sh. If any is missing/unsourced the run would SILENTLY degrade to
+# in-place on the shared tree with COMMIT=no, defeating #65 invisibly. Assert all three at
+# run start; if any is undefined, HALT loudly (autonomous /surf parks — see the Decision
+# contract) rather than silently proceeding in-place. Runs BEFORE the first sail_concurrent_run use.
+if ! command -v sail_setup_isolation >/dev/null 2>&1 \
+   || ! command -v sail_concurrent_run >/dev/null 2>&1 \
+   || ! command -v ship_safe_cleanup_orphan_dir >/dev/null 2>&1; then
+  echo "sail: FATAL — isolation infra not loaded (sail-git-lifecycle.sh / ship-resume-safety.sh missing or unsourced); refusing to silently run in-place on the shared tree (#88, #65)." >&2
+  echo "sail: fix the install — symlink the libs into ~/.claude/lib per INSTALL.md — then re-run /sail <issue>." >&2
+  exit 1
+fi
+# <!-- SAIL-ISOLATION-PREFLIGHT-END -->
+
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)"
 CONCURRENT=""; sail_concurrent_run "$REPO_ROOT" <issue> && CONCURRENT="--concurrent"
@@ -42,11 +58,35 @@ MODE="$(printf '%s' "$DECISION" | cut -f1)"    # isolate | in-place
 COMMIT="$(printf '%s' "$DECISION" | cut -f2)"  # yes | no
 
 WORK_DIR="$REPO_ROOT"
+# <!-- SAIL-ISOLATION-ISOLATE-BEGIN -->
 if [ "$MODE" = "isolate" ]; then
-  WORK_DIR="$(sail_setup_isolation "$REPO_ROOT" <issue>)" \
-    || { echo "sail: could not isolate (parallel run holds sail/<issue>?) — falling back to in-place"; WORK_DIR="$REPO_ROOT"; COMMIT="no"; }
+  # Capture sail_setup_isolation's rc robustly (correct even under set -e).
+  WORK_DIR="$(sail_setup_isolation "$REPO_ROOT" <issue>)" && isolate_rc=0 || isolate_rc=$?
+  case "$isolate_rc" in
+    0) : ;;  # isolated onto the worktree; WORK_DIR is the new path
+    1)
+      # rc=1 is the lib's "cannot add worktree" signal. In-place is correct ONLY for a genuine
+      # collision: branch sail/<issue> already checked out in another live worktree (git refuses
+      # to add a second worktree for it). Confirm that exact condition; any OTHER rc=1 is a real
+      # git/worktree/setup error and must HALT, never silently degrade (#88, #65).
+      if git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null \
+           | grep -qx "branch refs/heads/sail/<issue>"; then
+        echo "sail: sail/<issue> is held by a concurrent run — falling back to in-place (no commit); not clobbering the parallel run." >&2
+        WORK_DIR="$REPO_ROOT"; COMMIT="no"
+      else
+        echo "sail: FATAL — sail_setup_isolation failed (rc=1) with no concurrent-run collision (a git/worktree error, not a collision); refusing to silently run in-place (#88)." >&2
+        exit 1
+      fi
+      ;;
+    *)
+      # rc>=2 (incl. 127 = undefined function): isolation infra/config error. HALT.
+      echo "sail: FATAL — sail_setup_isolation returned rc=$isolate_rc (isolation infra/config error); refusing to silently run in-place (#88)." >&2
+      exit 1
+      ;;
+  esac
   cd "$WORK_DIR"
 fi
+# <!-- SAIL-ISOLATION-ISOLATE-END -->
 ```
 
 **Decision contract (mirrors `--dual-lens`/`--plan-adversary` risk-gating):**
@@ -55,6 +95,7 @@ fi
 - **On a feature branch already** (e.g. `/surf`'s `surf/<issue>`) → stay in place and commit on **that** branch — by design (forcing a `sail/<issue>` checkout would fight `/surf`); the `sail/<issue>` name applies only to the from-default isolate path.
 - **Risk-gated skip** (`--in-place`): work in place with **no commit** ONLY when not plan-risky AND no concurrent run; either condition flips it back to isolate. `--isolate` forces isolation (the two flags are mutually exclusive).
 - **Concurrency-safe:** `sail_setup_isolation` idempotently **reuses** an existing clean `sail/<issue>` worktree (rerun-safe) and never destroys unsaved work — a true parallel-run collision makes it fail, and the driver falls back to in-place rather than clobbering the other run (autonomous `/surf` never pauses).
+- **Hard dependency, not optional (#88):** the isolation infra (`sail_setup_isolation` / `sail_concurrent_run` from `sail-git-lifecycle.sh`, plus `ship_safe_cleanup_orphan_dir` from `ship-resume-safety.sh`) is **load-bearing**. A run-start preflight asserts all three are defined; if any is missing/unsourced the run **HALTS loudly** (autonomous `/surf` parks to its WIP handoff) — it never silently degrades to in-place on the shared tree. This is distinct from a genuine **collision** (a parallel run holds `sail/<issue>`), which is the one case where falling back to in-place with `COMMIT=no` is correct: `sail_setup_isolation` rc=1 maps to in-place ONLY when `sail/<issue>` is positively confirmed checked-out in another live worktree; any other rc (generic git/worktree error, or rc≥2/undefined) HALTS.
 
 All of plan → build → review then run **inside `$WORK_DIR`** (`--target .` from there). The mechanism is **plain `git worktree`** so it works in the autonomous/pinned-cwd `/surf` subagent (native `EnterWorktree(create)` is rejected there).
 
