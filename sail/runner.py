@@ -455,7 +455,11 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
                 ac.get("status") == "unmet"
                 for ac in reuse_candidate.get("plan_verification", {}).get("acceptance_criteria", [])
             )
-            review_rc = 1 if (review_mod.has_blocking(reuse_candidate["findings"]) or prior_unmet) else 0
+            # #80: a confirmed block-tier code-health finding still blocks on reuse — recompute it
+            # alongside findings/ACs so a resume can never silently drop a code-health block.
+            prior_code_health_block = bool((reuse_candidate.get("tidiness") or {}).get("blocking"))
+            review_rc = 1 if (review_mod.has_blocking(reuse_candidate["findings"])
+                              or prior_unmet or prior_code_health_block) else 0
             decision_log.review_marker("reused prior completed review (resumed)")
         else:
             if review_mod.active_review_available(round):
