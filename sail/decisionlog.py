@@ -100,6 +100,16 @@ class DecisionLog:
     def review_marker(self, summary):
         self._append_marker(f"- review: {_sanitize_text(summary)}")
 
+    def isolate_marker(self, decision, commit, reason):
+        # Opening-bookend isolate decision (#65): records whether /sail isolated on a
+        # worktree+branch or worked in place, whether it will commit, and the rationale —
+        # written on EVERY path (isolate, in-place, forced) so the choice is auditable.
+        commit_flag = "yes" if commit else "no"
+        self._append_marker(
+            f"- isolate: {_sanitize_text(decision)} (commit={commit_flag}) "
+            f"— {_sanitize_text(reason)}"
+        )
+
     def plan_marker(self, summary):
         self._append_marker(f"- plan: {_sanitize_text(summary)}")
 

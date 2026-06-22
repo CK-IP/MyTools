@@ -94,6 +94,12 @@ ln -s "$(pwd)/commands/fortify.md" ~/.claude/commands/fortify.md
 rm -f ~/.claude/commands/sail.md
 ln -s "$(pwd)/commands/sail.md" ~/.claude/commands/sail.md
 
+# /sail git "opening bookend" library (#65) — sourced by commands/sail.md Stage 0.5.
+# Depends on ~/.claude/lib/ship-resume-safety.sh (from cc-dotfiles) being installed too.
+mkdir -p ~/.claude/lib
+rm -f ~/.claude/lib/sail-git-lifecycle.sh
+ln -s "$(pwd)/home/lib/sail-git-lifecycle.sh" ~/.claude/lib/sail-git-lifecycle.sh
+
 # /refresh — check memory for staleness, broken refs, duplicates, and contradictions
 rm -f ~/.claude/commands/refresh.md
 ln -s "$(pwd)/commands/refresh.md" ~/.claude/commands/refresh.md

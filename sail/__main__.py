@@ -40,6 +40,14 @@ def main() -> int:
 
     subparsers.add_parser("spec")
 
+    isolate_parser = subparsers.add_parser("isolate")
+    isolate_parser.add_argument("--run-dir")
+    isolate_parser.add_argument("--branch", required=True)
+    isolate_parser.add_argument("--default-branch", default="main")
+    isolate_parser.add_argument("--isolate", action="store_true")
+    isolate_parser.add_argument("--in-place", action="store_true")
+    isolate_parser.add_argument("--concurrent", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -60,6 +68,13 @@ def main() -> int:
     if args.command == "spec":
         from sail.spec import run_spec
         return run_spec()
+    if args.command == "isolate":
+        from sail.lifecycle import run_isolate
+        spec_text = sys.stdin.read()
+        return run_isolate(
+            args.run_dir, args.branch, args.default_branch,
+            args.isolate, args.in_place, args.concurrent, spec_text,
+        )
 
     return 1
 
