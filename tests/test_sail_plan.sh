@@ -400,4 +400,34 @@ if d.get("design_alternatives") != []:
 PY
 echo "PASS T21: omitted design_alternatives defaults to [] (#61 AC#2)"
 
+# --- T22 (#90): the plan prompt front-loads a CONDITIONAL failure-class checklist so the
+# single author pass proactively addresses the three robustness properties /ship's heavier
+# red-team caught on #86 — (1) queue ORDERING (a later-discovered item violating a required
+# parent-before-dependent order; name the reordering rule), (2) HYDRATION-before-decision
+# (a filter/classify acting on data a cheap list call does not carry; require the hydrate
+# step first), and (3) PERSISTENCE/RESUME (a terminal/partial cap-hit/interrupted state whose
+# leftover work must be durably recorded + reconciled on resume; require the artifact + reader).
+# It must be CONDITIONAL — naming the work-queue / multi-pass-loop / persisted-run-state surface
+# AND giving a no-op escape — so trivial diffs are not forced (the #61/#80 "no uniform weight"
+# lesson). Prompt-content assertion: the LLM-output variant is non-deterministic (same reason
+# T19/#58/#61/#80 assert the prompt, not the model output). ---
+python3 - <<'PY' || fail "T22: plan prompt missing the conditional failure-class checklist (#90)"
+from sail.plan import build_prompt
+p = build_prompt("some spec").lower()
+ok = (
+    # (1) ordering / reordering rule
+    ("order" in p and "reorder" in p)
+    # (2) hydration-before-decision
+    and "hydrat" in p
+    # (3) persistence / resume
+    and "persist" in p and "resume" in p
+    # conditional surface markers
+    and "queue" in p and ("multi-pass" in p or "loop" in p) and "run state" in p
+    # no-op escape so trivial specs are not forced (no uniform weight)
+    and ("if " in p or "no " in p or "skip" in p or "not applicable" in p)
+)
+raise SystemExit(0 if ok else 1)
+PY
+echo "PASS T22: plan prompt includes the conditional failure-class checklist (#90)"
+
 echo "PASS: sail plan contract verified"
