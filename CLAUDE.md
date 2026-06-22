@@ -20,6 +20,16 @@ Custom Claude Code skills repo. Changes here are symlinked into `~/.claude/` and
 - **INSTALL.md is the source of truth** for setup steps. When adding a new command, agent, hook, or skill, add its symlink command to INSTALL.md Step 2.
 - **settings.reference.json is a reference, not a symlink.** It shows recommended settings — users merge into their own `~/.claude/settings.json`.
 
+## Infrastructure placement — where each kind of logic lives
+
+Three homes. Match logic to its home; don't mix.
+
+- **Judgment** (planning, reviewing — anything needing reasoning) → an **LLM call**. Never hard-code it; never fake it in bash.
+- **Deterministic decisions** that must not drift and must be testable (gate pass/fail, exit codes, parsing model output, risk heuristics) → **tested Python** (`sail/`). Never in the markdown prompt (it drifts run-to-run) or in complex bash (it's fragile).
+- **Side-effects & glue** (git, gh, file moves, sequencing) → **thin shell**, kept short.
+
+**Rule of thumb (the tell):** if a bash block needs `set -e` foot-gun comments, or a `case`/`if` that interprets another command's exit code or parsed output, it's doing Python's job — lift the *decision* into `sail/` (with a test) and leave the shell to only *call* and *move bytes*.
+
 ## Dependencies
 
 - **cc-dotfiles** — org-level base skills (`/ship`, `/skiff`, `/implement`, `/board`, `/train`, agents, hooks). Read-only — build improvements here in CK-Skills, not there.
