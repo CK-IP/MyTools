@@ -37,7 +37,7 @@ cat >"$WORK/stubbin/tmux" <<STUB
 #!/usr/bin/env bash
 cmd="\$1"
 case "\$cmd" in
-  has-session)   exit 0 ;;
+  has-session)   [ -n "\${TMUX_NO_SESSION:-}" ] && exit 1 || exit 0 ;;
   display-message) echo '%0' ;;
   capture-pane)  cat "$CAP_FIXTURE" 2>/dev/null || true ;;
   send-keys)     echo "send-keys \$*" >> "$SENDKEYS_REC" ;;
@@ -96,6 +96,38 @@ run_watcher
 c="$(sendkeys_count)"
 [ "$c" -eq 1 ] && pass "(d) lingering-past-cap → revive (no livelock)" || fail "(d) expected 1 send-keys, got $c"
 [ ! -f "$WORK/.surf/resume-after" ] && pass "(d) floor disarmed after lingering-cap revive" || fail "(d) resume-after not disarmed"
+
+# --- Gate coverage (#57 cleanup — reconciled from the retired test_surf_resume_wrapper.sh).
+# should_revive must be CLOSED (no send-keys) when work_remains is false or there is no LIVE
+# session. These replace the old relauncher's launch-gating cases under #73's revive model.
+gate_setup() {  # fresh state: armed+crossed floor + healthy pane (so ONLY the gate can stop a revive)
+  rm -rf "$WORK/.surf/resume.lock"
+  echo '%0' >"$WORK/.surf/orchestrator-pane"
+  printf '# charter\n- mission: test\n' >"$WORK/.surf/charter-20260101T000000.md"
+  rm -f "$WORK/.surf/charter-20260101T000000.md-done"
+  printf 'all good, working...\n' >"$CAP_FIXTURE"
+  echo '2020-01-01T00:00:00Z' >"$WORK/.surf/resume-after"
+  : >"$SENDKEYS_REC"
+}
+gate_run() { PATH="$WORK/stubbin:$PATH" SURF_RESUME_SESSION=surf SURF_RESUME_LOG="$WORK/.surf/watch.log" "$@" bash "$WORK/config/surf-resume.sh" >/dev/null 2>&1 || true; }
+
+# (e) done-marker present → work_remains false → gate closed → no revive
+gate_setup; echo "$$" >"$WORK/.surf/active"; touch "$WORK/.surf/charter-20260101T000000.md-done"
+gate_run
+c="$(sendkeys_count)"
+[ "$c" -eq 0 ] && pass "(e) done-marker → gate closed, no revive" || fail "(e) expected 0 send-keys, got $c"
+
+# (f) stale/dead .surf/active PID → no live session → gate closed → no revive (#73 semantics flip)
+gate_setup; echo '999999' >"$WORK/.surf/active"
+gate_run
+c="$(sendkeys_count)"
+[ "$c" -eq 0 ] && pass "(f) dead .surf/active pid → no live session, no revive" || fail "(f) expected 0 send-keys, got $c"
+
+# (g) no tmux session (has-session fails) → no live session → gate closed → no revive
+gate_setup; echo "$$" >"$WORK/.surf/active"
+gate_run env TMUX_NO_SESSION=1
+c="$(sendkeys_count)"
+[ "$c" -eq 0 ] && pass "(g) no tmux session → no live session, no revive" || fail "(g) expected 0 send-keys, got $c"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
