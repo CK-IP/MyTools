@@ -76,6 +76,20 @@ The general rule: a sail test controls exactly what it sees and depends on no li
 
 *Source: #68 — red-team raised this 3× as a false-positive (S1.R1.3 / S2.R2.1 / F.R1.2).*
 
+### Batch git/gh operations use `while read` + `</dev/null`, never `for x in $unquoted`
+When closing/commenting/merging a list of issues (or any batch git/gh loop), do NOT iterate an unquoted space-separated variable (`for pair in $PAIRS`) — word-splitting can fail (the whole string is treated as one element, so the loop runs once with mangled parsing). Drive the loop from newline-delimited input via `while read -r a b`, and append `</dev/null` to every `git`/`gh` call inside the loop so it cannot consume the loop's own stdin:
+
+```bash
+while read -r n sha; do
+  gh issue close "$n" --comment "…$sha…" </dev/null
+done <<'ROWS'
+57 5699c81
+59 734f16c
+ROWS
+```
+
+*Source: /surf 2026-06-22 — a `for pair in $PAIRS` close-loop ran once and closed one issue with the wrong SHA; the `while read` + `</dev/null` rewrite closed the remaining 17 cleanly.*
+
 ## Structure
 - `commands/` — personal Claude skill files (markdown)
 - `tests/` — shell test scripts verifying repo structure
