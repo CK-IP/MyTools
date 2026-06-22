@@ -8,6 +8,7 @@ import subprocess
 import sys
 import uuid
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 
 from sail.decisionlog import DecisionLog
 
@@ -322,7 +323,29 @@ def run_plan(target, run_dir=None, advisory=False, plan_adversary=False):
         log.plan_marker("skipped: no LLM backend available")
         return 0
 
-    rc, out, _err = _invoke(build_prompt(spec))
+    # Concurrent dispatch (#89): the author plan pass and the risk-gated --plan-adversary pass are
+    # mutually INDEPENDENT — the adversary re-derives risks from the SAME spec (build_adversary_prompt
+    # consumes `spec`, not the author's output), so neither consumes the other's result. Dispatch them
+    # CONCURRENTLY and join on the slowest, dropping plan-stage wall-clock from author+adversary to the
+    # slower of the two. The union below is UNCHANGED ("union as today").
+    #
+    # The adversary's escalation is gated by SPEC-derived predicates (plan_adversary or
+    # is_plan_risky(spec)) — knowable upfront — so ordinary (non-risky) work still never dispatches it
+    # (the "no uniform weight" property, AC#4 of #58, is preserved). The adversary is unioned ONLY when
+    # the author plan is usable, exactly as today (escalate = spec_escalate and not (backend_error or
+    # unusable_plan)); on the degenerate author backend-error / unusable-plan path the run already fails
+    # closed (status=error, exit 1) and the speculatively-dispatched adversary result is DISCARDED, so
+    # gate semantics are identical. The only token-cost difference from the serial path is that one rare
+    # already-failing path pays for a discarded adversary call; the common (usable-author) path is
+    # token-identical and pure latency.
+    spec_escalate = plan_adversary or is_plan_risky(spec)
+    run_adversary = spec_escalate and adversary_available()
+    with ThreadPoolExecutor(max_workers=2) as _ex:
+        _f_author = _ex.submit(_invoke, build_prompt(spec))
+        _f_adv = _ex.submit(
+            _invoke, build_adversary_prompt(spec), argv=_adversary_argv()) if run_adversary else None
+    rc, out, _err = _f_author.result()
+    adv_result = _f_adv.result() if _f_adv is not None else None
     parsed = parse_plan(out)
     backend_error = rc != 0 or parsed is None
     approach = parsed.get("approach") if parsed is not None else None
@@ -386,13 +409,14 @@ def run_plan(target, run_dir=None, advisory=False, plan_adversary=False):
     # intersection adds one bounded one-shot call. An adversary backend error fails closed
     # UNIFORMLY (status=error, exit 1) whether or not the author plan was independently blocking.
     adversary_error = False
-    escalate = (
-        (plan_adversary or is_plan_risky(spec))
-        and not (backend_error or unusable_plan)
-    )
+    escalate = spec_escalate and not (backend_error or unusable_plan)
     if escalate:
         if adversary_available():
-            arc, aout, _aerr = _invoke(build_adversary_prompt(spec), argv=_adversary_argv())
+            # adv_result was resolved by the concurrent dispatch above (#89). run_adversary is
+            # exactly `spec_escalate and adversary_available()`, and escalate implies spec_escalate,
+            # so within this branch adv_result is non-None. On the !escalate path (author error /
+            # unusable plan) this block is skipped and any dispatched adv_result is discarded.
+            arc, aout, _aerr = adv_result
             blocking = _explicit_blocking_risks(aout)
             if arc != 0 or blocking is None:
                 adversary_error = True
