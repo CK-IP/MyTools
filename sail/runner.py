@@ -206,7 +206,7 @@ def _completed_review(run_dir):
     return data if isinstance(data.get("findings"), list) else None
 
 
-def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None, baseline_dir=None, review=True, dual_lens=False, round=1, tidiness=False):
+def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None, baseline_dir=None, review=True, dual_lens=False, round=1, tidiness=False, red_team=False):
     registry = build_registry()
 
     if run_dir is None:
@@ -447,6 +447,13 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
             # the tidiness lens would be silently skipped. Mirrors the --dual-lens reuse guard above.
             reuse_candidate = None
             decision_log.review_marker("prior review stale (--tidiness requested but cache has no tidiness block); re-reviewing")
+        if reuse_candidate is not None and red_team and "red_team" not in reuse_candidate:
+            # #66: a forced --red-team resume must not reuse a cache with no red_team block — the
+            # escalation would be silently skipped. (Auto-triggered high-stakes runs are covered by
+            # the diff-content reuse gate above: an unchanged diff keeps the same high-stakes verdict
+            # and its findings already live in the cached `findings`.) Mirrors the --tidiness guard.
+            reuse_candidate = None
+            decision_log.review_marker("prior review stale (--red-team requested but cache has no red_team block); re-reviewing")
         if reuse_candidate is not None:
             # Resume of the same scope: reuse the completed review rather than re-invoking the
             # backend, but recompute blocking from its findings AND its recorded plan_verification
@@ -463,7 +470,7 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
             decision_log.review_marker("reused prior completed review (resumed)")
         else:
             if review_mod.active_review_available(round):
-                review_rc = review_mod.run_review(target_root, diff_ref, run_dir=run_dir, advisory=False, dual_lens=dual_lens, round=round, tidiness=tidiness, scanner_findings=scanner_findings)
+                review_rc = review_mod.run_review(target_root, diff_ref, run_dir=run_dir, advisory=False, dual_lens=dual_lens, round=round, tidiness=tidiness, scanner_findings=scanner_findings, red_team=red_team)
             else:
                 # never-mask: review was requested but no backend can run it — fail closed,
                 # don't let the change pass as if it had been reviewed.
