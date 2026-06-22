@@ -483,27 +483,28 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
      independent issue.
 4. **Journal the decision.** Append an entry recording the outcome (merged + SHA, or parked +
    reason), the alternatives weighed, and whether the result is reversible (see Recovery).
-5. **Dismiss the teammate the moment its issue resolves — follow `/fleet`'s dismissal pattern.**
-   Every issue has a teammate; dismiss it as soon as the issue is merged or parked, before moving
-   on, exactly as `/fleet` dismisses a cleared worker (fleet Step 13 / Step 22b):
+5. **Dismiss the teammate AND kill its pane the moment its issue resolves.** Every issue has a
+   teammate; dismiss it as soon as the issue is merged or parked, before moving on. Use `/fleet`'s
+   graceful-shutdown wording (fleet Step 13), but in `/surf`'s **tmux** setup the pane-kill is a
+   **standard step, not a rare fallback** — empirically the agent-teams framework does **not**
+   self-close a teammate's tmux pane when its process exits; it leaves an idle `zsh` shell behind.
+   So both steps are routine:
    1. **Send a clear, graceful shutdown request** via `SendMessage` — a `shutdown_request` with a
       concrete reason, e.g. *"Issue #<n> merged to `main` (<sha>) — work complete and captured.
       You're dismissed; please shut down."* (For a parked issue: *"Issue #<n> parked on
-      `surf/<issue>` — captured for follow-up. You're dismissed; please shut down."*)
-   2. **The teammate accepts, ends its turn, and the agent-teams framework closes its pane
-      automatically.** Do **not** create or kill tmux panes by hand in the normal path — the
-      framework manages split panes, mirroring `/fleet`'s rule *"never create tmux sessions or
-      windows manually."* Send the dismissal only when the teammate is **done and idle** (it has
-      reported its result); dismissing mid-work, or double-sending, is what leaves a pane stuck as
-      an idle `zsh` shell instead of closing cleanly.
+      `surf/<issue>` — captured for follow-up. You're dismissed; please shut down."*) Send it only
+      when the teammate is **done and idle** (it has reported its result) — dismissing mid-work or
+      double-sending is what leaves a half-exited session.
+   2. **Confirm the teammate has exited, then kill its pane.** A dismissed teammate's pane shows an
+      idle `zsh` (not a running `claude` / the `2.1.176`-style version string); that idle-shell
+      state is the signal its process is gone. Read its recorded `tmuxPaneId` from
+      `~/.claude/teams/<team>/config.json` and `tmux kill-pane -t <paneId>`. **NEVER** kill the
+      orchestrator's own pane (`.surf/orchestrator-pane`) or any pane still running `claude` (a
+      live teammate). In an environment where the framework *does* auto-close panes, this kill is a
+      harmless no-op (the pane is already gone).
 
    A fresh teammate is spawned per issue (see Worker delegation); never carry one across issues.
-   Any straggler whose pane does **not** close on dismissal is swept at teardown by `TeamDelete`
-   (Step 14b). **Unattended fallback:** because `/surf` runs with no human to "note it to" (unlike
-   `/fleet`, which notes a stuck worker for the user), the orchestrator MAY, for a confirmed
-   straggler (its pane shows an idle `zsh`, not a running `claude`), kill that **one** pane via its
-   recorded `tmuxPaneId` (`~/.claude/teams/<team>/config.json`) with `tmux kill-pane -t <paneId>`
-   — **never** the orchestrator's own pane (`.surf/orchestrator-pane`) or any live teammate's.
+   Any teammate not individually cleaned here is still swept at teardown by `TeamDelete` (Step 14b).
 
 ---
 
@@ -563,11 +564,11 @@ quality-critical issues, so the build host should match the manager's tier rathe
 sonnet. The user may still override per-issue (e.g. lower it for a trivial issue).
 
 **Fresh teammate per issue, dismissed at terminus.** Spawn a new teammate for each issue and
-**dismiss it** the moment that issue is merged or parked — via a graceful `SendMessage` shutdown
-request that the teammate accepts, on which the framework closes its pane (the `/fleet` dismissal
-pattern; see Step 7 step 5 for the mechanism and the unattended straggler fallback). Never reuse a
-teammate across issues — stale context is exactly the drift `/surf` is built to avoid. Per-issue
-dismissal is what keeps the Step 14 teardown cheap (no board's worth of panes piling up).
+**dismiss it** the moment that issue is merged or parked — graceful `SendMessage` shutdown, then
+**kill its now-idle pane** (in tmux the framework leaves an idle `zsh` shell, so the pane-kill is a
+standard step; see Step 7 step 5 for the full mechanism). Never reuse a teammate across issues —
+stale context is exactly the drift `/surf` is built to avoid. Per-issue dismissal + pane-kill is
+what keeps the Step 14 teardown cheap (no board's worth of idle panes piling up).
 
 ---
 
@@ -807,18 +808,20 @@ panes behind. **Teardown is mandatory on every stop path**, not just the happy o
 
 On any of these, before the process exits:
 
-1. **Dismiss every teammate.** Send each live teammate a graceful `SendMessage` shutdown and
-   confirm it ends (the framework closes each accepted teammate's pane). `TeamDelete` (step 2) then
-   sweeps any that didn't.
-2. **Tear down remaining panes via `TeamDelete` — follow `/fleet` Step 22b.** Once teammates have
-   been dismissed, call `TeamDelete` to tear down the team and **close any remaining panes**.
-   `TeamDelete` fails if any teammate is still active — on error, identify the still-running
-   teammate, send it a `SendMessage` shutdown, wait for it to exit, then retry `TeamDelete` (the
-   exact `/fleet` retry loop). **Unattended fallback:** a straggler that refuses to exit may have
-   its recorded pane killed (`tmux kill-pane -t <paneId>` from the config's `tmuxPaneId`) before
-   retrying `TeamDelete`. The **`surf` session itself is left alive** (it is the persistent session
-   the next run / resume reuses, and the resume watcher revives — Step 16) and the **orchestrator
-   pane is never killed** — `TeamDelete` clears the team and its panes, not the tmux session.
+1. **Dismiss every teammate, then kill its now-idle pane.** Send each live teammate a graceful
+   `SendMessage` shutdown; once it has exited (its pane shows an idle `zsh`, not `claude`),
+   `tmux kill-pane -t <paneId>` using its recorded `tmuxPaneId` from
+   `~/.claude/teams/<team>/config.json`. In tmux this pane-kill is standard (the framework leaves
+   idle shells); where the framework auto-closes, it is a no-op.
+2. **Sweep anything left via `TeamDelete` — follow `/fleet` Step 22b.** Call `TeamDelete` to tear
+   down the team and close any pane not already cleaned. `TeamDelete` fails if any teammate is still
+   active — on error, identify the still-running teammate, send it a `SendMessage` shutdown, wait
+   for it to exit, kill its pane, then retry `TeamDelete` (the `/fleet` retry loop). Also sweep
+   `tmux list-panes -s -t surf` for any idle-`zsh` pane that is **not** the orchestrator
+   (`.surf/orchestrator-pane`) and kill it — in case a straggler's id was never recorded. The
+   **`surf` session itself is left alive** (the persistent session the next run / resume reuses and
+   the resume watcher revives — Step 16) and the **orchestrator pane is never killed** —
+   `TeamDelete` clears the team, not the tmux session.
 3. **Verify clean.** The operator can `tmux attach -t surf` to confirm only the orchestrator pane
    remains (the monitoring-meets-teardown check from Step 3b). A residual teammate pane means
    teardown didn't complete.
@@ -1017,10 +1020,10 @@ from the durable files is the canonical path.
   human watches the panes — not the delegation mechanism. Run `/surf` inside the named `surf` tmux
   session; the agent-teams framework splits panes within it — never split panes by hand.
 - **Teardown is mandatory on every stop path** (board-exhausted, user-stop, error): dismiss every
-  teammate via graceful `SendMessage` shutdown (the framework closes accepted teammates' panes),
-  then `TeamDelete` to sweep any remaining panes — the `/fleet` Step 22b pattern, with manual
-  `tmux kill-pane` only as the unattended-straggler fallback; leave the `surf` session itself alive
-  for resume.
+  teammate via graceful `SendMessage` shutdown, then **kill each now-idle teammate pane** (standard
+  in tmux — the framework leaves idle `zsh` shells), then `TeamDelete` to sweep anything left (the
+  `/fleet` Step 22b retry pattern); leave the `surf` session and the orchestrator pane alive for
+  resume.
 - **Auto-resume is persistent-tmux + revive, not headless relaunch.** The named session stays
   alive across a usage cap and an external watcher revives it in place (`tmux send-keys`); the
   headless `claude -p` LaunchAgent relaunch is retired (can't host teammates). A reboot loses
