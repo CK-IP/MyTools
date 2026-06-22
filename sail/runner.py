@@ -291,6 +291,13 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
 
     next_seq = max((gate.get("seq") or 0 for gate in state.gates), default=0) + 1
 
+    # Scanner-triage context (#69): collect each diff-mode gate's already-computed `new`
+    # findings as we go, so they can be fed into the LLM review below as triage context
+    # (gates run FIRST, review second — series, not parallel). Advisory only: this never
+    # changes the gate decision (blocking_failed stays authoritative); it just lets the
+    # reviewer corroborate real alarms / flag false positives instead of re-deriving them.
+    scanner_findings = []
+
     for checker in registry:
         gate = gates_by_name[checker.name]
         gate["mode"] = mode
@@ -379,6 +386,18 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
                 gate["status"] = status
                 gate["new_findings_count"] = n
                 gate["reason"] = f"mode={mode} new={n}"
+                if new and mode == "diff" and kind != "diffcoverage" and checker.is_blocking(target_root, mode):
+                    # Thread this gate's new findings into the review's triage context (#69).
+                    # The triage prompt frames these as real defects to corroborate, so the set
+                    # must be exactly "real defect" signals: only BLOCKING gates, and NOT
+                    # diff-coverage — an uncovered changed line is the absence of a test, not a
+                    # defect, and diff-coverage's gate is blocking in threshold mode (so the
+                    # is_blocking check alone would not exclude it). Excluding it by kind keeps
+                    # coverage gaps out of the "corroborate as a real defect" framing.
+                    scanner_findings.append({
+                        "tool": checker.name,
+                        "lines": [delta.finding_descriptor(r) for r in new],
+                    })
 
         gate["finished_at"] = _utc_now_iso()
         state.save()
@@ -440,7 +459,7 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
             decision_log.review_marker("reused prior completed review (resumed)")
         else:
             if review_mod.active_review_available(round):
-                review_rc = review_mod.run_review(target_root, diff_ref, run_dir=run_dir, advisory=False, dual_lens=dual_lens, round=round, tidiness=tidiness)
+                review_rc = review_mod.run_review(target_root, diff_ref, run_dir=run_dir, advisory=False, dual_lens=dual_lens, round=round, tidiness=tidiness, scanner_findings=scanner_findings)
             else:
                 # never-mask: review was requested but no backend can run it — fail closed,
                 # don't let the change pass as if it had been reviewed.

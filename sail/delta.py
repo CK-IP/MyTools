@@ -162,6 +162,44 @@ def diffcoverage_records(path, threshold):
     return out
 
 
+def finding_descriptor(record):
+    # Best-effort one-line human descriptor for a raw scanner record (#69), used to render
+    # diff-mode gate findings into the LLM review's triage context. Kind-agnostic: pulls the
+    # common fields across the unwrapped record shapes new_findings() yields — SARIF
+    # (ruff/bandit/semgrep/gitleaks), shellcheck, pip-audit, npm-audit, junit. (diff-coverage
+    # is excluded from triage by the runner — an uncovered line is not a defect.) Pure; never raises.
+    if not isinstance(record, dict):
+        return str(record)
+    rule = (record.get("ruleId") or record.get("code") or record.get("id")
+            or record.get("advisory") or "")
+    msg = ""
+    m = record.get("message")
+    if isinstance(m, dict):
+        msg = m.get("text") or ""
+    elif isinstance(m, str):
+        msg = m
+    if not msg:
+        msg = record.get("name") or record.get("module") or ""
+    file = record.get("file") or record.get("path") or ""
+    line = record.get("line")
+    if not file:
+        locs = record.get("locations")
+        if isinstance(locs, list) and locs and isinstance(locs[0], dict):
+            pl = locs[0].get("physicalLocation")
+            pl = pl if isinstance(pl, dict) else {}
+            al = pl.get("artifactLocation")
+            file = (al.get("uri") if isinstance(al, dict) else None) or ""
+            region = pl.get("region")
+            region = region if isinstance(region, dict) else {}
+            if line is None:
+                line = region.get("startLine")
+    loc = str(file) if file else ""
+    if loc and line is not None:
+        loc = f"{loc}:{line}"
+    parts = [p for p in [str(rule).strip(), loc, str(msg).strip()] if p]
+    return " — ".join(parts) if parts else str(record)
+
+
 _EXTRACTORS = {
     "sarif": _sarif_records,
     "junit": _junit_records,
