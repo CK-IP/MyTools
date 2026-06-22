@@ -18,6 +18,7 @@ def main() -> int:
     run_parser.add_argument("--no-review", action="store_true")
     run_parser.add_argument("--dual-lens", action="store_true")
     run_parser.add_argument("--tidiness", action="store_true")
+    run_parser.add_argument("--red-team", action="store_true")
     run_parser.add_argument("--round", type=int, default=1)
 
     test_parser = subparsers.add_parser("test")
@@ -30,6 +31,7 @@ def main() -> int:
     review_parser.add_argument("--advisory", action="store_true")
     review_parser.add_argument("--dual-lens", action="store_true")
     review_parser.add_argument("--tidiness", action="store_true")
+    review_parser.add_argument("--red-team", action="store_true")
     review_parser.add_argument("--round", type=int, default=1)
 
     plan_parser = subparsers.add_parser("plan")
@@ -60,7 +62,7 @@ def main() -> int:
     if args.command == "run":
         if args.diff and args.baseline:
             parser.error("--diff and --baseline are mutually exclusive")
-        return run(args.run_dir, target=args.target, diff_ref=args.diff, baseline_dir=args.baseline, review=not args.no_review, dual_lens=args.dual_lens, round=args.round, tidiness=args.tidiness)
+        return run(args.run_dir, target=args.target, diff_ref=args.diff, baseline_dir=args.baseline, review=not args.no_review, dual_lens=args.dual_lens, round=args.round, tidiness=args.tidiness, red_team=args.red_team)
     if args.command == "test":
         cmd = list(getattr(args, "cmd", []))
         if cmd and cmd[0] == "--":
@@ -68,7 +70,7 @@ def main() -> int:
         return run_tests(cmd)
     if args.command == "review":
         from sail.review import run_review
-        return run_review(args.target, args.diff, args.run_dir, args.advisory, dual_lens=args.dual_lens, round=args.round, tidiness=args.tidiness)
+        return run_review(args.target, args.diff, args.run_dir, args.advisory, dual_lens=args.dual_lens, round=args.round, tidiness=args.tidiness, red_team=args.red_team)
     if args.command == "plan":
         from sail.plan import run_plan
         return run_plan(args.target or ".", args.run_dir, args.advisory, plan_adversary=args.plan_adversary)
