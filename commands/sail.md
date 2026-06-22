@@ -151,7 +151,50 @@ if [ "$COMMIT" = "yes" ]; then
 fi
 ```
 
-Supervised runs may show/approve the message first; the autonomous `/surf` path commits without pausing (never break `/surf`). The branch now carries the committed change for #59 (land/merge) to close. (Note: a `git commit` here is subject to the global `delivery-gate.sh` hook only when a `~/.ship/ship-state-*.json` exists — `/sail`/`/surf` runs have none, so the gate is inert; see `.ship/domain.md`.)
+Supervised runs may show/approve the message first; the autonomous `/surf` path commits without pausing (never break `/surf`). The branch now carries the committed change for the land stage (Stage 5) to close. (Note: a `git commit` here is subject to the global `delivery-gate.sh` hook only when a `~/.ship/ship-state-*.json` exists — `/sail`/`/surf` runs have none, so the gate is inert; see `.ship/domain.md`.)
+
+### Stage 5 — Land (closing the loop, #59)
+
+**The closing git bookend.** Stage 0.5 opened the loop (isolate); Stage 4 committed the green change to `sail/<issue>`; Stage 5 lands it: merge to `main`, auto-close the issue, flip the board to Done, prune the branch, and publish the review evidence as the closing comment. It runs **only after Stage 3 is green** (final `sail run` exited 0). Like #65, the substantive logic lives in the engine and the git/gh mechanics are a thin documented sequence — the **same** sequence `/surf` runs (one source of truth; keep the two in sync).
+
+First, the engine emits the closing artifacts from the **already-produced** review evidence — no re-review, no network:
+
+```bash
+# Reachable only after the convergence loop confirms `sail run ...` exited 0.
+TITLE="$(printf '%s' "$RAW" | python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])')"
+python3 -m sail land --run-dir .surf/runs/<issue> --issue <issue> --title "$TITLE"
+# writes:  .surf/runs/<issue>/land-comment.md      (AC verdicts + finding dispositions + gate counts)
+#          .surf/runs/<issue>/land-commit-msg.txt  (merge subject + a `Closes #<issue>` line)
+```
+
+**Human-gated terminus (hands-on `/sail` runs only).** Before any outward action, **show what land will do** — print `land-comment.md` and `land-commit-msg.txt` and the exact merge/close/prune commands below — and **pause for approval**. Merge to `main` only after the operator approves. (`/surf` is unattended and does **not** pause — see below.)
+
+**Direct-merge (default).** GitHub auto-closes the issue from the `Closes #<issue>` keyword in the merge commit when it lands on the **default branch (`main`)**; the board's native *Item closed → Done* automation then flips status — **no `gh issue close`, no board API call**. Confirm the merge target is `main` (the auto-close only fires there), then:
+
+```bash
+RD=.surf/runs/<issue>
+git checkout main
+git merge sail/<issue> --no-ff -F "$RD/land-commit-msg.txt"   # `Closes #<issue>` lives in the merge message
+git push origin main                                         # REQUIRED: the merge must reach origin's DEFAULT branch — only then does GitHub auto-close the issue and fire the board's Item-closed→Done automation; a local-only merge does neither
+git rev-parse HEAD                                            # record the merge SHA
+gh issue comment <issue> -F "$RD/land-comment.md"            # publish review evidence (reused, not re-derived)
+# Prune the merged branch ONLY after the merge is on origin/main (auto-delete-head-branch is
+# PR-only — it won't fire on a direct merge). Order matters: `git push origin --delete` ignores
+# merge state, so deleting the remote branch before main is pushed could drop unmerged work.
+git branch -d sail/<issue>                                    # safe local delete: refuses if not fully merged
+git ls-remote --exit-code --heads origin sail/<issue> >/dev/null 2>&1 && git push origin --delete sail/<issue> || true
+```
+
+**`--pr` mode (high-stakes changes).** Instead of a direct merge, open a PR — the linked-PR merge then handles close + board + branch-delete **natively**:
+
+```bash
+python3 -m sail land --run-dir "$RD" --issue <issue> --title "$TITLE" --pr   # also writes land-pr-body.md (carries `Closes #<issue>`)
+gh pr create --base main --head sail/<issue> --title "$TITLE" --body-file "$RD/land-pr-body.md"
+```
+
+**Preconditions (document, don't assume).** The merge must be **pushed to origin's default branch** — a local-only merge triggers neither GitHub's auto-close nor the board automation. Board → Done then relies on the repo's *Item closed → Done* Projects automation staying enabled; `Closes #<issue>` auto-closes **only** on the default branch; `git branch -d` refuses an unmerged branch, and the remote delete is guarded on the branch having been pushed **and** sequenced after `git push origin main` so it never drops unmerged work. If any precondition fails, land surfaces it rather than silently no-op'ing.
+
+> **Keep in sync:** this orchestration is intentionally identical to `commands/surf.md`'s post-merge land step — both consume the same `sail land` output. Change one, change the other.
 
 ## Calibration (operator validation — deferred to a live run)
 

@@ -290,13 +290,26 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
      parent is still parked, **park this dependent too** — never auto-merge a stacked branch whose
      base is not on `main`, because a branch stacked on a parked parent (branch-from-parent, §10)
      carries the parent's commits in the diff, can exit 0, and would smuggle the parent's unmerged
-     work into `main` past its parked status. With all parents confirmed merged, merge the issue's
-     branch into `main` as a single `--no-ff` commit and **record the merge SHA** in the journal
-     and decision-log, then return to `main` for the next issue:
+     work into `main` past its parked status. With all parents confirmed merged, **land** the
+     issue via the **shared `sail land` logic** (the closing bookend, #59 — same source of truth
+     `/sail` Stage 5 uses; keep the two in sync): emit the closing artifacts from the
+     already-produced review evidence, merge into `main` as a single `--no-ff` commit whose
+     `Closes #<issue>` keyword **auto-closes the issue** (the board's native *Item closed → Done*
+     automation then flips status — no `gh issue close`, no board API call), **record the merge
+     SHA**, publish the review evidence as the closing comment, and prune the branch. `/surf` is
+     unattended — it runs this **without pausing** (unlike `/sail`'s human-gated terminus). Then
+     return to `main` for the next issue:
      ```bash
+     RD=.surf/runs/<issue>
+     python3 -m sail land --run-dir "$RD" --issue <issue> --title "<title>" --prefix surf
      git checkout main
-     git merge surf/<issue> --no-ff -m "merge: surf #<issue> — <title>"
-     git rev-parse HEAD   # capture this SHA into the journal/decision-log
+     git merge surf/<issue> --no-ff -F "$RD/land-commit-msg.txt"   # `Closes #<issue>` lives in the merge message
+     git push origin main                                         # REQUIRED: only a merge on origin's DEFAULT branch fires GitHub auto-close + the board's Item-closed→Done automation; a local-only merge does neither
+     git rev-parse HEAD                                            # capture this SHA into the journal/decision-log
+     gh issue comment <issue> -F "$RD/land-comment.md"            # publish review evidence (reused, not re-derived)
+     # Prune ONLY after the merge is on origin/main (`git push origin --delete` ignores merge state):
+     git branch -d surf/<issue>                                    # safe local delete: refuses if not fully merged
+     git ls-remote --exit-code --heads origin surf/<issue> >/dev/null 2>&1 && git push origin --delete surf/<issue> || true
      ```
    - **Exit 1 → not green → park.** Do **not** merge. **Parking** = leave the branch
      (`surf/<issue>`) intact, do not merge, and write a **parking note** recording the issue
