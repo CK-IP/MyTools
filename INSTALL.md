@@ -264,6 +264,10 @@ every issue rather than merging a single-lens build**. In other words, codex is 
 **required for `/surf` to land work**; it is optional only for one-off `/sail` runs you review
 yourself (which degrade cleanly to single-lens).
 
+### Grounded plan backend (codex — risk-gated, optional)
+
+On a **plan-risky** spec (a remediation/instruction signal co-occurring with a file/list-reconciliation signal, per `is_plan_risky`), `/sail`'s plan stage can run a **grounded plan pass**: a tool-using backend that explores the repo (`cwd=target`, Read/Grep) and grounds the plan against the real code, citing concrete file/line **evidence** for every risk it raises (unevidenced risks are dropped, never block — mirrors the `--red-team` contract). Point it at a codex CLI via `SAIL_PLAN_GROUNDED_CMD` (e.g. `SAIL_PLAN_GROUNDED_CMD="codex exec -m gpt-5.4-mini"`). Backend selection falls back **Codex → Claude → blind**: the explicit `SAIL_PLAN_GROUNDED_CMD` if runnable, else the default author backend (`claude`) run in grounded mode, else (neither available) the run degrades cleanly to today's blind plan (logged, not an error). Ordinary (non-risky) specs never trigger it — no token or latency cost. Force it on any spec with `sail plan --grounded-plan`. Its evidenced CRITICAL/HIGH risks union into the plan gate (tagged `lens: grounded`); a grounding-backend error fails closed (`status: error`, exit 1).
+
 ---
 
 ## Step 4: Enable the agent teams feature
