@@ -66,6 +66,29 @@ CODE_HEALTH_SELF_CHECK = (
     "risk — do not invent one for a sound, simple plan.\n"
 )
 
+# AC (#90): a FREE failure-class checklist folded into the SAME single plan pass — no new agent,
+# no new exit code. Front-loads the three robustness properties /ship's heavier red-team caught on
+# the #86 /ship-vs-/sail A/B that /sail's single plan pass missed (/sail does not run extra red-team
+# rounds to stumble onto them later). CONDITIONAL by construction: it fires ONLY when the change
+# touches a work queue, a multi-pass loop, or persisted run state, and is an explicit no-op
+# otherwise — so ordinary diffs pay ~nothing (the #61/#80 "no uniform weight" lesson). Surfaced like
+# the other self-checks; a genuine gap it finds rides the existing risks list, never a new exit code.
+FAILURE_CLASS_CHECKLIST = (
+    "FAILURE-CLASS CHECKLIST (mandatory, CONDITIONAL): If — and only if — the change involves a "
+    "work queue, a multi-pass loop, or persisted run state, the plan MUST address all three of these "
+    "failure classes (if the change has no such surface, say 'not applicable' and skip this):\n"
+    "  (1) ORDERING: can a later-discovered item violate a required ordering (e.g. a parent found "
+    "mid-run that must run before an already-queued dependent)? Name the concrete reordering / "
+    "re-rank-on-intake rule in the plan.\n"
+    "  (2) HYDRATION-BEFORE-DECISION: does any filter or classify step act on data a cheap list call "
+    "does not reliably carry (e.g. labels/body absent from a summary listing)? Require the hydrate "
+    "step BEFORE the decision so a stale or partial record cannot slip through.\n"
+    "  (3) PERSISTENCE / RESUME: is there a terminal or partial state (cap-hit, interrupted) whose "
+    "leftover work must survive the process? Require a durable artifact that records it AND a reader "
+    "that reconciles it on resume — not just a wrap-up report.\n"
+    "Record any unaddressed class as a blocking (HIGH or CRITICAL) risk in the risks list.\n"
+)
+
 # AC#2/#4 (#58): markers of a plan-risky spec, in two families:
 #   (A) REMEDIATION  — the change adds a user-facing instruction/remediation (the broken
 #                      promise->action class), and
@@ -157,6 +180,7 @@ def build_prompt(spec):
         + CONSISTENCY_SELF_CHECK
         + CODE_HEALTH_SELF_CHECK
         + DESIGN_ALTERNATIVES_DIRECTIVE
+        + FAILURE_CLASS_CHECKLIST
         + "Return JSON only.\n\n"
         "=== SPEC ===\n"
         f"{spec}\n"
