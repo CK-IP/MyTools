@@ -57,6 +57,21 @@ When a shell helper greps/reads state files that a prose command spec writes (e.
 
 *Source: #53 full-branch RT — surf-resume.sh grepped `in flight`/`picked #`/`resume` journal tokens surf.md never wrote; the wrapper test masked it with a hand-made fixture.*
 
+### Env-var assignments must PREFIX the command, never trail it
+A one-shot env var only reaches a subprocess when it precedes the command name: `VAR=val python3 -c '... os.environ["VAR"] ...'`. Trailing it (`python3 -c '...' VAR=val`) makes `VAR=val` a positional argument to python3, so `os.environ["VAR"]` raises `KeyError` at runtime. This bites tests that drive a `python3 -c` (or any binary) with an env-var input. Always prefix.
+
+*Source: #68 — recurred 2× in step-3 codex-worker leadsman tests (T15/T16).*
+
+### sail review/gate tests must be hermetic — throwaway git target, never `--target $REPO_ROOT`
+A sail test that runs the gates/review against the live repo root (`--target $REPO_ROOT`) scans the actual working diff, so it flakes the moment the tree changes. Build each test on a throwaway git target (a temp repo seeded with just the fixture) and bind `SAIL_CHECKERS` to the checker(s) under test. This keeps the test deterministic and independent of the developer's working state. (Same family as the worktree-scanning rule above — sail tests must control exactly what the gate sees.)
+
+*Source: #68 — `--target $REPO_ROOT` caused a T9 false-fail.*
+
+### DecisionLog resolution reader splits on the FIRST `—` by design — don't re-flag it as truncation
+`DecisionLog.read_resolutions` parses `- resolution: [id] <disposition> — <rationale>` by finding the **first** ` — ` separator. This is correct, not a truncation bug: `disposition` is a controlled vocabulary (`addressed`/`deferred`/`rejected`) that never contains the separator, and `rationale` is everything after the first separator — so a rationale containing its own `—` round-trips losslessly. Tightening to a last-separator or split-all scheme would REGRESS that lossless round-trip. Red-team must NOT re-flag the first-split as a truncation/data-loss defect.
+
+*Source: #68 — red-team raised this 3× as a false-positive (S1.R1.3 / S2.R2.1 / F.R1.2).*
+
 ## Structure
 - `commands/` — personal Claude skill files (markdown)
 - `tests/` — shell test scripts verifying repo structure
