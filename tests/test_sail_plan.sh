@@ -293,22 +293,60 @@ set -e
 [ "$rc" = "0" ] || fail "T17: a non-explicit adversary severity must not block (exit 0), got $rc"
 echo "PASS T17: adversary risk with garbage severity does not spuriously block (R1 MED lens1)"
 
-# --- T18 (#58 review R1 LOW lens1): the adversary is SKIPPED when the author plan is already
-# blocking (the gate is already red). A HIGH author plan + an adversary that would error still
-# exits 1 from the author HIGH alone, and the decision log records no adversary backend error ---
+# --- T18 (#62): the adversary now RUNS on plan-risky work EVEN WHEN the author plan is already
+# blocking (reversing #58 review R1 LOW's skip-when-already-red). Its job is design BREADTH: a
+# HIGH author plan + an adversary that finds its OWN blocking design risk must run, exit 1, and
+# union the adversary's risk (tagged lens=adversary) into plan.json ON TOP OF the author HIGH —
+# so the second design perspective is recorded for the reviewer regardless of the already-red gate. ---
 RD18="$WORK/rd18"
 set +e
 printf '%s' "$RISKY_SPEC" | SAIL_PLAN_CMD="bash $MOCK" MOCK_OUT="$HIGH_JSON" \
-  SAIL_PLAN_CMD2="bash $ADV_MOCK" ADV_RC=1 ADV_OUT="" \
+  SAIL_PLAN_CMD2="bash $ADV_MOCK" ADV_OUT="$ADV_HIGH" \
   python3 -m sail plan --target "$TARGET" --run-dir "$RD18" --plan-adversary >/dev/null 2>&1
 rc=$?
 set -e
-[ "$rc" = "1" ] || fail "T18: already-blocking author plan should exit 1, got $rc"
-assert_plan_status "$RD18/plan.json" completed || fail "T18: author HIGH plan stays completed (adversary skipped, not errored)"
-if grep -q 'plan-adversary: backend error' "$RD18/decision-log.md"; then
-  fail "T18: adversary must be SKIPPED (not invoked) when the author plan already blocks"
-fi
-echo "PASS T18: adversary skipped when author plan already blocking (R1 LOW lens1)"
+[ "$rc" = "1" ] || fail "T18: already-blocking author plan + adversary should exit 1, got $rc"
+grep -q 'plan-adversary: ran' "$RD18/decision-log.md" || fail "T18: adversary must RUN (not skip) when the author plan already blocks"
+python3 - "$RD18/plan.json" <<'PY' || fail "T18: adversary risk must be unioned (tagged lens=adversary) on top of the author HIGH"
+import json, sys
+d = json.load(open(sys.argv[1]))
+risks = d.get("risks", [])
+# the author HIGH is present AND the adversary's risk is appended and tagged lens=adversary
+author = [r for r in risks if isinstance(r, dict) and r.get("lens") != "adversary"]
+adv = [r for r in risks if isinstance(r, dict) and r.get("lens") == "adversary"]
+if not any(r.get("severity") == "HIGH" for r in author):
+    raise SystemExit(1)
+if not any(r.get("severity") == "HIGH" for r in adv):
+    raise SystemExit(1)
+PY
+echo "PASS T18: adversary RUNS on already-blocking plan and unions its design finding (#62)"
+
+# --- T18b (#62, mirrors #58 review R1 HIGH lens2): with the skip removed, an adversary BACKEND
+# error on an ALREADY-BLOCKING author plan must fail closed UNIFORMLY — status=error (not the old
+# "stays completed"), exit 1. The artifact status must match a failed-closed run regardless of
+# whether the author plan was independently blocking. ---
+RD18B="$WORK/rd18b"
+set +e
+printf '%s' "$RISKY_SPEC" | SAIL_PLAN_CMD="bash $MOCK" MOCK_OUT="$HIGH_JSON" \
+  SAIL_PLAN_CMD2="bash $ADV_MOCK" ADV_RC=1 ADV_OUT="" \
+  python3 -m sail plan --target "$TARGET" --run-dir "$RD18B" --plan-adversary >/dev/null 2>&1
+rc=$?
+set -e
+[ "$rc" = "1" ] || fail "T18b: adversary error on an already-blocking plan must exit 1, got $rc"
+assert_plan_status "$RD18B/plan.json" error || fail "T18b: adversary backend error must set status=error even when author plan already blocks"
+grep -q 'plan-adversary: backend error' "$RD18B/decision-log.md" || fail "T18b: adversary backend error must be logged"
+echo "PASS T18b: adversary error on already-blocking plan fails closed (status=error, exit 1) (#62)"
+
+# --- T18c (#62): the adversary prompt is explicitly DESIGN-FOCUSED — it directs the reviewer to
+# surface design breadth (design choices / a simpler approach a single author pass misses), so the
+# pass earns its keep on an already-blocking plan beyond merely adding to the blocking count. ---
+python3 - <<'PY' || fail "T18c: adversary prompt missing the design-breadth directive"
+from sail.plan import build_adversary_prompt
+p = build_adversary_prompt("some spec").lower()
+ok = "design" in p and ("breadth" in p or "simpler" in p or "alternativ" in p)
+raise SystemExit(0 if ok else 1)
+PY
+echo "PASS T18c: adversary prompt is design-focused (surfaces design breadth) (#62)"
 
 # --- T19 (#61 AC#1): the plan prompt instructs the planner to surface key design
 # ALTERNATIVES, a recommended choice, and the trade-off — gated on a genuine
