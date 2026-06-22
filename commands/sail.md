@@ -24,9 +24,12 @@ Pass `--run-dir "$SESSION_DIR"` to **both** `sail plan` and `sail run --diff` be
 Fetch the issue, **checking `gh`'s exit code before feeding the planner** (a bare pipe would not), then run the plan stage:
 
 ```bash
-SPEC=$(gh issue view <issue>) || { echo "sail: gh failed to fetch issue <issue> — aborting"; exit 1; }
+RAW=$(gh issue view <issue> --json title,body,comments) || { echo "sail: gh failed to fetch issue <issue> — aborting"; exit 1; }
+SPEC=$(python3 -m sail spec <<< "$RAW") || { echo "sail: issue <issue> spec is empty or has no body — aborting"; exit 1; }
 python3 -m sail plan --target . --run-dir "$SESSION_DIR" <<< "$SPEC"
 ```
+
+**Why `--json title,body,comments | sail spec` (#60):** the planner — and `is_plan_risky` — must see the **full** issue (body **and** comments), because the #55 failure shape needs a remediation signal and a reconcile/list signal that often live in *different* parts of the issue. A bare `gh issue view <issue>` is body-only, and `gh issue view <issue> --comments` is comments-only on some `gh` versions; either feeds a partial spec and the heuristic under-fires. The two statements above keep `gh`'s exit code genuinely checked (not swallowed by a pipe): `gh` is captured first, then `sail spec` assembles title + body + comments and **fails closed** (exit 1) on an empty fetch or an issue with no body. Note: comment bodies are now part of the LLM-trusted spec, so in the autonomous `/surf → /sail` path a third-party comment is planner-visible input — keep that trust boundary in mind.
 
 `sail plan` does ONE LLM pass and writes `plan.json` (approach, acceptance criteria, test plan, a lightweight design/security risk check, and scope). The pass also runs a **free consistency self-check (#58):** for every user-facing instruction or remediation the change introduces, the plan must name the exact action in the change that fulfills it — a promise with no matching delivered action (an unresolvable remediation loop, an unreconciled file/list) is recorded as a blocking risk. This catches the broken promise→action failure class at plan-time, in the same single pass (no extra agent). Its exit code is the convergence signal:
 

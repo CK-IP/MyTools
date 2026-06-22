@@ -38,6 +38,8 @@ def main() -> int:
     plan_parser.add_argument("--advisory", action="store_true")
     plan_parser.add_argument("--plan-adversary", action="store_true")
 
+    subparsers.add_parser("spec")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -55,6 +57,9 @@ def main() -> int:
     if args.command == "plan":
         from sail.plan import run_plan
         return run_plan(args.target or ".", args.run_dir, args.advisory, plan_adversary=args.plan_adversary)
+    if args.command == "spec":
+        from sail.spec import run_spec
+        return run_spec()
 
     return 1
 
