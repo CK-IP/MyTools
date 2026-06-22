@@ -73,15 +73,41 @@ if echo "$HERMETIC_BLOCK" | grep -qi 'fail closed\|fail-closed\|must block\|adds
 fi
 echo "PASS T5: hermeticity guidance is advisory (no new gate / exit code)"
 
-# --- T6: scope guard — prose-only, no sail Python package changes (no new deterministic guard). ---
-if ! git rev-parse --verify main >/dev/null 2>&1; then
-  echo "SKIP T6: no main ref to diff against"
-else
-  PY_CHANGED="$(git diff --name-only main -- 'sail/*.py' 2>/dev/null || true)"
-  PY_UNTRACKED="$(git ls-files --others --exclude-standard -- 'sail/*.py' 2>/dev/null || true)"
-  PY_ALL="$(printf '%s\n%s\n' "$PY_CHANGED" "$PY_UNTRACKED" | grep -v '^$' || true)"
-  [ -z "$PY_ALL" ] || fail "T6: #64 is advisory prose only — sail/*.py changed: $PY_ALL"
-  echo "PASS T6: no sail/*.py changes — advisory prose only, no new guard"
-fi
+# --- T6: scope guard — #64 added NO new deterministic guard (advisory prose only). ---
+# HERMETIC rewrite (#78). The ORIGINAL T6 asserted `git diff --name-only main -- sail/*.py`
+# was empty — a NON-HERMETIC global property of the whole branch-vs-main diff that FALSE-FAILS
+# on any sibling branch that legitimately changes a sail/*.py for a DIFFERENT issue (the exact
+# antipattern this very file's #64 guidance + the #68 domain rule warn against). The intent #64
+# cares about — "no new sail gate was registered" — is verified branch-independently below by
+# inspecting the LIVE checker registry (a pure function of the source, never a branch diff).
+
+# T6a — a NEW gate would register a checker in sail/checkers.py. Assert no hermeticity-named
+# checker is present. Reads registry NAMES only — no git, no diff, no branch dependence.
+REGISTRY="$(python3 -c 'from sail.checkers import build_registry; print(" ".join(c.name for c in build_registry()))' 2>/dev/null || true)"
+[ -n "$REGISTRY" ] || fail "T6a: could not read the live sail checker registry"
+for gate in hermetic hermeticity hermetic-build isolation-check; do
+  if echo "$REGISTRY" | grep -qw "$gate"; then
+    fail "T6a: #64 is advisory-only but a '$gate' gate is registered: $REGISTRY"
+  fi
+done
+echo "PASS T6a: #64 registered no new sail gate (advisory prose only) — registry: $REGISTRY"
+
+# T6b — PROVE T6a is branch-independent by actually RE-RUNNING its check against a THROWAWAY
+# copy of the sail package that carries an unrelated sail/*.py change (#78 regression guard).
+# This is the exact scenario the OLD `git diff main -- sail/*.py` check false-failed on: a
+# sibling branch legitimately edits a sail/*.py for a DIFFERENT issue. Per the hermetic-test
+# domain rule we mutate a THROWAWAY copy, never the live repo root. Only ADDING a gate may flip
+# the verdict; an unrelated .py edit must not.
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+cp -R sail "$TMP/sail"
+# Simulate a sibling branch's unrelated sail/*.py change (NOT a new gate):
+printf '\n# unrelated sibling edit for a DIFFERENT issue (#78 proof)\n_UNRELATED = True\n' >> "$TMP/sail/plan.py"
+# Re-run the SAME registry check against the mutated copy (cwd-first import picks up the copy):
+REGISTRY_SIB="$(cd "$TMP" && python3 -c 'from sail.checkers import build_registry; print(" ".join(c.name for c in build_registry()))' 2>/dev/null || true)"
+[ -n "$REGISTRY_SIB" ] || fail "T6b: could not read the registry from the throwaway sail copy"
+[ "$REGISTRY" = "$REGISTRY_SIB" ] \
+  || fail "T6b: registry check changed under an unrelated sibling sail/*.py edit — not branch-independent (got: $REGISTRY_SIB)"
+echo "PASS T6b: an unrelated sibling sail/*.py change leaves T6a's verdict unchanged — branch-independent (the OLD git-diff-main check would have false-failed here)"
 
 echo "PASS: sail #64 hermetic-build guidance verified"
