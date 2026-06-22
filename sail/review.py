@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import uuid
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 import tempfile
 
 from sail.decisionlog import DecisionLog
@@ -1076,8 +1077,44 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
                 prior_finding.setdefault("rationale", "")
             prior_context.append(prior_finding)
 
-    result = review(target, diff_ref, advisory=advisory, acs=acs, lens="lens1", argv=active_argv,
-                    prior=prior_context, scanner_findings=scanner_findings)
+    # Concurrent dispatch (#89): the review-stage LLM passes — lens1, the optional dual-lens
+    # lens2, the optional repo-exploring red-team, and the optional tidiness lens — are mutually
+    # INDEPENDENT (none consumes another's in-round output; each re-derives the diff and shells
+    # out to its own backend). Dispatch the runnable ones CONCURRENTLY and join on the slowest, so
+    # per-stage wall-clock drops from sum-of-passes to slowest-pass. The union/blocking/tagging and
+    # degrade-clean merge below is UNCHANGED — it runs serially on the resolved results, in the
+    # same order as before, so tokens and gate semantics are identical (pure latency win).
+    #
+    # The dispatch SET is decidable upfront: empty_diff is a pure function of the diff (NOT of any
+    # LLM output — see review()/redteam_review()/review_tidiness(), which each compute it from the
+    # same _git_diff), and the lens2/red-team gates are diff- and flag-derived. We submit exactly
+    # the passes the serial merge below consumes — no speculative backend call — so token cost is
+    # unchanged. Each pass function returns a dict and never raises (review() catches OSError in
+    # _invoke; redteam_review()/review_tidiness() never raise), so future.result() surfaces the
+    # same values the inline calls did; a genuine raise propagates exactly as it would serially.
+    gate_diff = _git_diff(target, diff_ref)
+    empty_diff = not gate_diff.strip()
+    run_lens2 = dual_lens and not empty_diff and second_lens_available()
+    redteam_triggered = (not advisory) and (not empty_diff) and (red_team or is_high_stakes(gate_diff))
+    run_redteam = redteam_triggered and redteam_available()
+
+    with ThreadPoolExecutor(max_workers=4) as _ex:
+        _f_lens1 = _ex.submit(
+            review, target, diff_ref, advisory=advisory, acs=acs, lens="lens1",
+            argv=active_argv, prior=prior_context, scanner_findings=scanner_findings)
+        _f_lens2 = _ex.submit(
+            review, target, diff_ref, advisory=advisory, acs=acs, lens="lens2",
+            argv=_second_lens_argv(), prior=prior_context, scanner_findings=scanner_findings,
+        ) if run_lens2 else None
+        _f_redteam = _ex.submit(
+            redteam_review, target, diff_ref, argv=_redteam_argv()) if run_redteam else None
+        _f_tidiness = _ex.submit(
+            review_tidiness, target, diff_ref, enforce=not advisory) if tidiness else None
+
+    result = _f_lens1.result()
+    result2 = _f_lens2.result() if _f_lens2 is not None else None
+    rt = _f_redteam.result() if _f_redteam is not None else None
+    tidiness_block = _f_tidiness.result() if _f_tidiness is not None else None
     findings = list(result["findings"])
     ac_results_by_lens = [result.get("ac_results")]
     # Backend error = a non-empty diff whose review is unusable: bad exit code OR unparseable.
@@ -1092,9 +1129,8 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
     lenses = ["lens1"]
     if dual_lens and not result.get("empty_diff"):
         if second_lens_available():
-            result2 = review(target, diff_ref, advisory=advisory, acs=acs,
-                             lens="lens2", argv=_second_lens_argv(), prior=prior_context,
-                             scanner_findings=scanner_findings)
+            # result2 was resolved by the concurrent dispatch above (#89); run_lens2 is exactly
+            # `dual_lens and not empty_diff and second_lens_available()`, so result2 is non-None here.
             findings.extend(result2["findings"])
             ac_results_by_lens.append(result2.get("ac_results"))
             lenses.append("lens2")
@@ -1115,10 +1151,10 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
     # fails closed (never-mask), like lens2.
     red_team_block = None
     if not advisory and not result.get("empty_diff"):
-        gate_diff = _git_diff(target, diff_ref)
         if red_team or is_high_stakes(gate_diff):
             if redteam_available():
-                rt = redteam_review(target, diff_ref, argv=_redteam_argv())
+                # rt was resolved by the concurrent dispatch above (#89); run_redteam is exactly
+                # this branch's condition, so rt is non-None here.
                 if rt.get("error"):
                     backend_error = True
                     log.review_marker(f"red-team escalation: backend error (failing closed) — {rt.get('reason', '')}")
@@ -1164,7 +1200,7 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
     # code (pre-#80 behavior); a CONFIRMED block-tier finding surfaces under `blocking` and folds
     # into the exit code below (Gear 3). In advisory mode nothing blocks, so skip the paid Gear-2
     # verification (enforce=False).
-    tidiness_block = review_tidiness(target, diff_ref, enforce=not advisory) if tidiness else None
+    # tidiness_block was resolved by the concurrent dispatch above (#89).
     code_health_block = bool(tidiness_block and tidiness_block.get("blocking"))
 
     review_data = {
