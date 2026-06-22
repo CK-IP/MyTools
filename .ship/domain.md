@@ -62,10 +62,14 @@ A one-shot env var only reaches a subprocess when it precedes the command name: 
 
 *Source: #68 — recurred 2× in step-3 codex-worker leadsman tests (T15/T16).*
 
-### sail review/gate tests must be hermetic — throwaway git target, never `--target $REPO_ROOT`
-A sail test that runs the gates/review against the live repo root (`--target $REPO_ROOT`) scans the actual working diff, so it flakes the moment the tree changes. Build each test on a throwaway git target (a temp repo seeded with just the fixture) and bind `SAIL_CHECKERS` to the checker(s) under test. This keeps the test deterministic and independent of the developer's working state. (Same family as the worktree-scanning rule above — sail tests must control exactly what the gate sees.)
+### sail tests must be hermetic — never assert against live `git diff` / working-tree / branch state
+A sail test must not key any assertion off live repository state — neither the **gate target** nor a **git diff**. Two instances of the same root cause:
+- **Gate target:** a test that runs the gates/review against the live repo root (`--target $REPO_ROOT`) scans the actual working diff and flakes the moment the tree changes. Build each test on a throwaway git target (a temp repo seeded with just the fixture) and bind `SAIL_CHECKERS` to the checker(s) under test.
+- **Diff-shape assertions:** a test that asserts a property of `git diff main` / `git diff <ref>` / `git ls-files` (e.g. "this issue changed no `sail/*.py`") inspects the **whole branch-vs-base diff**, so it FALSE-FAILS on any sibling branch that legitimately changes those paths for a *different* issue. It passes in isolation (and on merged main, where the diff is empty), which hides the bug until a sibling build trips it. **Test behavior, not diff-shape:** verify the intent branch-independently — inspect a pure function of the source (e.g. `sail.checkers.build_registry()` names to prove "no new gate"), or assert the positive feature exists — never `git diff`. Diff-shape policing belongs in a CI scope-check, not a unit test.
 
-*Source: #68 — `--target $REPO_ROOT` caused a T9 false-fail.*
+The general rule: a sail test controls exactly what it sees and depends on no live `git`/working-tree/branch state. (Same family as the worktree-scanning rule above.)
+
+*Source: #68 — `--target $REPO_ROOT` caused a T9 false-fail; #78 — #56-T4/#64-T6 asserted `git diff main -- sail/*.py` and false-failed on every `.py`-touching sibling branch (rewritten to inspect the checker registry).*
 
 ### DecisionLog resolution reader splits on the FIRST `—` by design — don't re-flag it as truncation
 `DecisionLog.read_resolutions` parses `- resolution: [id] <disposition> — <rationale>` by finding the **first** ` — ` separator. This is correct, not a truncation bug: `disposition` is a controlled vocabulary (`addressed`/`deferred`/`rejected`) that never contains the separator, and `rationale` is everything after the first separator — so a rationale containing its own `—` round-trips losslessly. Tightening to a last-separator or split-all scheme would REGRESS that lossless round-trip. Red-team must NOT re-flag the first-split as a truncation/data-loss defect.
