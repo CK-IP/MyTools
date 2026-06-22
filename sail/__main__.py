@@ -39,6 +39,7 @@ def main() -> int:
     plan_parser.add_argument("--run-dir")
     plan_parser.add_argument("--advisory", action="store_true")
     plan_parser.add_argument("--plan-adversary", action="store_true")
+    plan_parser.add_argument("--grounded-plan", action="store_true")
 
     subparsers.add_parser("spec")
 
@@ -73,7 +74,7 @@ def main() -> int:
         return run_review(args.target, args.diff, args.run_dir, args.advisory, dual_lens=args.dual_lens, round=args.round, tidiness=args.tidiness, red_team=args.red_team)
     if args.command == "plan":
         from sail.plan import run_plan
-        return run_plan(args.target or ".", args.run_dir, args.advisory, plan_adversary=args.plan_adversary)
+        return run_plan(args.target or ".", args.run_dir, args.advisory, plan_adversary=args.plan_adversary, grounded_plan=args.grounded_plan)
     if args.command == "spec":
         from sail.spec import run_spec
         return run_spec()
