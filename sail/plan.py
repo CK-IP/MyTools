@@ -28,6 +28,25 @@ CONSISTENCY_SELF_CHECK = (
     "consistency risk; record it in the risks list.\n"
 )
 
+# #61: surface design-QUALITY choices the consistency self-check cannot catch. The self-check
+# (#58) catches broken promise->action BUGS; it is blind to design decisions with no single right
+# answer (the #55 doctor count: N=8 exclude per-project pytest vs N=9 include + split remediation
+# — /sloop's plan red-team surfaced the call, autonomous /sail shipped the messier N=9). This
+# directive asks the SAME single author pass to populate a structured `design_alternatives` field
+# so a reviewer (auto or supervised human) sees the call and the trade-off. It is SURFACED, not
+# gated — it never affects the exit code. Phrased conditionally so trivial specs are not forced to
+# invent alternatives (review/#58's no-uniform-weight lesson): no genuine choice -> leave it empty.
+DESIGN_ALTERNATIVES_DIRECTIVE = (
+    "DESIGN ALTERNATIVES (surface, do NOT gate): When the spec carries a genuine design choice "
+    "with NO single right answer (e.g. include vs exclude an item from a count, one data shape vs "
+    "another, a lean vs a complete approach), populate the `design_alternatives` list with the "
+    "leading options — each with its trade-off and a `recommended` boolean on the one you chose — "
+    "and make the recommendation's rationale clear. This surfaces the call for an auto or human "
+    "reviewer (the class of choice a consistency check cannot catch). If there is NO real design "
+    "choice, leave `design_alternatives` as an empty list — do not invent alternatives for a "
+    "trivial spec. This is informational and never a blocking risk on its own.\n"
+)
+
 # AC#2/#4 (#58): markers of a plan-risky spec, in two families:
 #   (A) REMEDIATION  — the change adds a user-facing instruction/remediation (the broken
 #                      promise->action class), and
@@ -112,10 +131,12 @@ def build_prompt(spec):
         "You are a planning assistant. Read the issue/spec below and emit ONE JSON object "
         "matching this schema exactly:\n"
         '{"status":"completed","approach":"...","simpler_alternative":"...",'
+        '"design_alternatives":[{"option":"...","tradeoff":"...","recommended":true}],'
         '"acceptance_criteria":[...],"test_plan":[{"behavior":"...","test":"..."}],'
         '"risks":[{"severity":"CRITICAL|HIGH|MEDIUM|LOW","area":"design|security|scope|other",'
         '"issue":"...","mitigation":"..."}],"scope":{"in":[...],"out":[...]},"summary":"..."}\n'
         + CONSISTENCY_SELF_CHECK
+        + DESIGN_ALTERNATIVES_DIRECTIVE
         + "Return JSON only.\n\n"
         "=== SPEC ===\n"
         f"{spec}\n"
@@ -292,6 +313,7 @@ def run_plan(target, run_dir=None, advisory=False, plan_adversary=False):
             "status": "error",
             "approach": parsed.get("approach", ""),
             "simpler_alternative": parsed.get("simpler_alternative", ""),
+            "design_alternatives": parsed.get("design_alternatives", []),
             "acceptance_criteria": parsed.get("acceptance_criteria", []),
             "test_plan": parsed.get("test_plan", []),
             "risks": parsed.get("risks", []),
@@ -304,6 +326,7 @@ def run_plan(target, run_dir=None, advisory=False, plan_adversary=False):
             "status": "error",
             "approach": "",
             "simpler_alternative": "",
+            "design_alternatives": [],
             "acceptance_criteria": [],
             "test_plan": [],
             "risks": [],
@@ -315,6 +338,7 @@ def run_plan(target, run_dir=None, advisory=False, plan_adversary=False):
             "status": "error" if backend_error else "completed",
             "approach": parsed.get("approach", ""),
             "simpler_alternative": parsed.get("simpler_alternative", ""),
+            "design_alternatives": parsed.get("design_alternatives", []),
             "acceptance_criteria": parsed.get("acceptance_criteria", []),
             "test_plan": parsed.get("test_plan", []),
             "risks": parsed.get("risks", []),
