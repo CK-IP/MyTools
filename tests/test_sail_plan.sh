@@ -310,4 +310,56 @@ if grep -q 'plan-adversary: backend error' "$RD18/decision-log.md"; then
 fi
 echo "PASS T18: adversary skipped when author plan already blocking (R1 LOW lens1)"
 
+# --- T19 (#61 AC#1): the plan prompt instructs the planner to surface key design
+# ALTERNATIVES, a recommended choice, and the trade-off — gated on a genuine
+# no-single-right-answer design choice (the #55 N=8-vs-N=9 miss the consistency
+# self-check cannot catch). It must also tell trivial specs to leave it empty. ---
+python3 - <<'PY' || fail "T19: plan prompt missing the design-alternatives directive"
+from sail.plan import build_prompt
+p = build_prompt("some spec").lower()
+ok = (
+    "alternativ" in p          # surface alternatives
+    and "recommend" in p       # a recommended choice
+    and "trade" in p           # the trade-off
+    and "design_alternatives" in p  # the structured field is named in the schema
+    # conditional: do not force trivial specs to invent alternatives (AC against MEDIUM risk)
+    and ("empty" in p or "no " in p)
+)
+raise SystemExit(0 if ok else 1)
+PY
+echo "PASS T19: plan prompt includes the design-alternatives directive (#61 AC#1)"
+
+# --- T20 (#61 AC#2): a backend that emits a non-empty design_alternatives value must
+# have it ROUND-TRIP into the written plan.json — proving run_plan's explicit-key payload
+# rebuild does not drop the field (closes the plan's HIGH consistency risk). ---
+RD20="$WORK/rd20"
+DA_JSON='{"status":"completed","approach":"outline","simpler_alternative":"none","design_alternatives":[{"option":"N=8 exclude per-project pytest","tradeoff":"simpler honest count","recommended":true},{"option":"N=9 include + split remediation","tradeoff":"complete but messier","recommended":false}],"acceptance_criteria":["a"],"test_plan":["b"],"risks":[{"severity":"LOW","area":"scope","issue":"minor","mitigation":"watch"}],"scope":{"in":["x"],"out":["y"]},"summary":"clean"}'
+set +e; SAIL_PLAN_CMD="bash $MOCK" MOCK_OUT="$DA_JSON" run_plan "$SPEC" "$RD20" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "0" ] || fail "T20: clean plan with design_alternatives should exit 0, got $rc"
+python3 - "$RD20/plan.json" <<'PY' || fail "T20: design_alternatives did not round-trip into plan.json"
+import json, sys
+d = json.load(open(sys.argv[1]))
+da = d.get("design_alternatives")
+if not isinstance(da, list) or len(da) != 2:
+    raise SystemExit(1)
+if da[0].get("option") != "N=8 exclude per-project pytest" or da[0].get("recommended") is not True:
+    raise SystemExit(1)
+if "tradeoff" not in da[1]:
+    raise SystemExit(1)
+PY
+echo "PASS T20: design_alternatives round-trips into plan.json (#61 AC#2)"
+
+# --- T21 (#61 AC#2 default): a planner that OMITS design_alternatives is not a hard
+# error — plan.json carries the field as the documented default (empty list), exit 0. ---
+RD21="$WORK/rd21"
+set +e; SAIL_PLAN_CMD="bash $MOCK" MOCK_OUT="$CLEAN_JSON" run_plan "$SPEC" "$RD21" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "0" ] || fail "T21: clean plan without design_alternatives should exit 0, got $rc"
+python3 - "$RD21/plan.json" <<'PY' || fail "T21: omitted design_alternatives should default to an empty list"
+import json, sys
+d = json.load(open(sys.argv[1]))
+if d.get("design_alternatives") != []:
+    raise SystemExit(1)
+PY
+echo "PASS T21: omitted design_alternatives defaults to [] (#61 AC#2)"
+
 echo "PASS: sail plan contract verified"

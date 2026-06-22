@@ -197,6 +197,13 @@ run-dir.
   exact action that fulfills every user-facing instruction/remediation the change adds — a
   promise with no matching delivered action (an unresolvable loop) becomes a blocking risk.
   Free; no extra agent.
+- **Design-alternatives surfacing (#61):** the same single pass also populates a
+  `design_alternatives` list (`option` / `tradeoff` / `recommended`) whenever the spec carries a
+  genuine design choice with no single right answer (the #55 doctor count: N=8 vs N=9). This
+  surfaces the call — and the trade-off — for an auto or human reviewer; the consistency
+  self-check catches *bugs* but is blind to design-*quality* choices. It is **informational, never
+  blocking** (it does not change the exit code) and is left an empty list for trivial specs (no
+  invented alternatives — the no-uniform-weight discipline of #58).
 - **`--plan-adversary` risk-gated escalation (#58):** for a plan-risky spec, `/sail` escalates to
   a one-shot adversarial plan pass — an independent second pass over the same spec via a second
   backend `SAIL_PLAN_CMD2` (like `--dual-lens`'s second lens), unioning its **explicitly**
