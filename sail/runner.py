@@ -113,6 +113,28 @@ def _remove_worktree(target, path):
         shutil.rmtree(path, ignore_errors=True)
 
 
+def _resolve_diff_base(target, diff_ref):
+    """Pin a diff ref to the merge-base SHA of (diff_ref, HEAD).
+
+    Called once at run-start so the diff base is immutable for the entire run —
+    concurrent main movement cannot enter the diff mid-run (#87). Using merge-base
+    (not raw rev-parse) means a moved base ref still resolves to the branch-point
+    the run was isolated from, not the new tip.
+
+    Returns the full 40-char SHA. Raises ValueError on an unknown ref.
+    """
+    result = subprocess.run(
+        ["git", "-C", target, "merge-base", diff_ref, "HEAD"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise ValueError(
+            f"sail --diff: cannot compute merge-base for {diff_ref!r} "
+            f"(rc={result.returncode}): {result.stderr.strip()}"
+        )
+    return result.stdout.strip()
+
+
 def _sweep_stale_baseline_src(target):
     # Diff-mode only: reap any <target>/.sail/runs/*/baseline-src checkouts before the
     # current-tree gate scan. bandit -r ignores .gitignore, so a stale baseline-src left
@@ -234,6 +256,15 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
         target = "."
     target_root = os.path.abspath(target)
     state.data["target"] = target_root
+
+    if diff_ref is not None:
+        # Pin to the merge-base SHA so the diff base is immutable for the entire run.
+        # Concurrent main movement cannot mutate a SHA; merge-base resolves to the
+        # branch-point even after the base ref moves forward (#87).
+        # On resume: if --diff is unchanged the resolved SHA equals prior_diff_ref so
+        # scope_match stays True and the prior review is reused; if --diff changed the
+        # SHA differs and scope_match is False → re-review (T14 regression preserved).
+        diff_ref = _resolve_diff_base(target_root, diff_ref)
 
     mode = "diff" if diff_ref else "baseline" if baseline_dir else "whole-repo"
     state.data["mode"] = mode
