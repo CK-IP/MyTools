@@ -19,6 +19,45 @@ mkdir -p "$SESSION_DIR"
 
 Pass `--run-dir "$SESSION_DIR"` to **both** `sail plan` and `sail run --diff` below.
 
+### Stage 0.5 — Isolate (opening git bookend, #65)
+
+`/sail`'s **opening bookend**: by default isolate the run on its own git worktree + branch so it never collides with a separate ongoing run in the shared working tree (the live `/surf` incident in #65 was exactly this collision). This is the OPENING bookend; the **commit** lands at the end of Stage 3 (after green), and #59 (land/merge) is the closing bookend.
+
+Compute the spec (Stage 1 fetches it; do it here so the decision can reuse `is_plan_risky`), detect a concurrent run, then ask the engine for the decision. The **decision + rationale is written to the decision-log on every path** by `sail isolate`:
+
+```bash
+# (RAW/SPEC are fetched as in Stage 1 — assemble once, reuse here and in plan.)
+# Guard the source (set -e safe): ship-resume-safety.sh is an EXTERNAL cc-dotfiles dep —
+# a bare `.` of a missing file aborts rc=127. If it's absent, sail_setup_isolation's
+# `command -v ship_safe_cleanup_orphan_dir` check fails closed and falls back to in-place.
+[ -f "$HOME/.claude/lib/ship-resume-safety.sh" ] && . "$HOME/.claude/lib/ship-resume-safety.sh"  # #125 orphan-safety guard (reused, not reinvented)
+[ -f "$HOME/.claude/lib/sail-git-lifecycle.sh" ] && . "$HOME/.claude/lib/sail-git-lifecycle.sh"   # #65 git mechanics (plain git worktree)
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)"
+CONCURRENT=""; sail_concurrent_run "$REPO_ROOT" <issue> && CONCURRENT="--concurrent"
+DECISION="$(printf '%s' "$SPEC" | python3 -m sail isolate \
+  --run-dir "$SESSION_DIR" --branch "$BRANCH" --default-branch main $CONCURRENT)"
+MODE="$(printf '%s' "$DECISION" | cut -f1)"    # isolate | in-place
+COMMIT="$(printf '%s' "$DECISION" | cut -f2)"  # yes | no
+
+WORK_DIR="$REPO_ROOT"
+if [ "$MODE" = "isolate" ]; then
+  WORK_DIR="$(sail_setup_isolation "$REPO_ROOT" <issue>)" \
+    || { echo "sail: could not isolate (parallel run holds sail/<issue>?) — falling back to in-place"; WORK_DIR="$REPO_ROOT"; COMMIT="no"; }
+  cd "$WORK_DIR"
+fi
+```
+
+**Decision contract (mirrors `--dual-lens`/`--plan-adversary` risk-gating):**
+
+- **Isolate by default** on the default branch → worktree `.claude/worktrees/sail-<issue>` on a fresh `sail/<issue>` branch.
+- **On a feature branch already** (e.g. `/surf`'s `surf/<issue>`) → stay in place and commit on **that** branch — by design (forcing a `sail/<issue>` checkout would fight `/surf`); the `sail/<issue>` name applies only to the from-default isolate path.
+- **Risk-gated skip** (`--in-place`): work in place with **no commit** ONLY when not plan-risky AND no concurrent run; either condition flips it back to isolate. `--isolate` forces isolation (the two flags are mutually exclusive).
+- **Concurrency-safe:** `sail_setup_isolation` idempotently **reuses** an existing clean `sail/<issue>` worktree (rerun-safe) and never destroys unsaved work — a true parallel-run collision makes it fail, and the driver falls back to in-place rather than clobbering the other run (autonomous `/surf` never pauses).
+
+All of plan → build → review then run **inside `$WORK_DIR`** (`--target .` from there). The mechanism is **plain `git worktree`** so it works in the autonomous/pinned-cwd `/surf` subagent (native `EnterWorktree(create)` is rejected there).
+
 ### Stage 1 — Plan (auto-fires; bounded convergence loop)
 
 Fetch the issue, **checking `gh`'s exit code before feeding the planner** (a bare pipe would not), then run the plan stage:
@@ -99,6 +138,20 @@ SAIL_TIDINESS_CMD="codex exec -m gpt-5.4-mini -c model_reasoning_effort=low" \
 SAIL_TIDINESS_MIN_LINES=40 \
   python3 -m sail run --target . --diff <base-ref> --run-dir "$SESSION_DIR" --round N --tidiness
 ```
+
+### Stage 4 — Commit (closing the opening bookend, #65)
+
+**The commit is gated strictly on GREEN.** Only after the Stage 3 convergence loop reports green — the final `sail run` exited **0** (0 CRITICAL / 0 HIGH and no unmet AC) — commit the change. **Never commit on a red review.** When Stage 0.5 chose to isolate or to stay on a feature branch (`COMMIT=yes`), commit on the branch; when it granted a risk-gated in-place skip (`COMMIT=no`), do not auto-commit (the operator owns the tiny inline fix).
+
+```bash
+# Only reachable after the convergence loop confirms `sail run ... ` exited 0.
+if [ "$COMMIT" = "yes" ]; then
+  TITLE="$(printf '%s' "$RAW" | python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])')"
+  sail_commit_on_branch "$WORK_DIR" <issue> "$TITLE"   # conventional subject + (#<issue>); no-op on a clean tree
+fi
+```
+
+Supervised runs may show/approve the message first; the autonomous `/surf` path commits without pausing (never break `/surf`). The branch now carries the committed change for #59 (land/merge) to close. (Note: a `git commit` here is subject to the global `delivery-gate.sh` hook only when a `~/.ship/ship-state-*.json` exists — `/sail`/`/surf` runs have none, so the gate is inert; see `.ship/domain.md`.)
 
 ## Calibration (operator validation — deferred to a live run)
 
