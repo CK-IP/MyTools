@@ -296,4 +296,17 @@ print("reconcile unit OK")
 PY
 echo "PASS T13b: _reconcile_ac_results unit verified"
 
-echo "PASS: sail LLM-reviewer (#38) + plan-spine (#47 step 1) + resolution-ids (#47 step 2) + dual-lens (#47 step 3) + Gate-F fixes (HIGH-1/2) verified"
+# --- T20: test-adequacy probe (#70) — REVIEW_PROMPT carries the mutation-survival probe and
+#          the 'test-adequacy' category, and the no-op-on-test-free-diff instruction. ---
+python3 - << 'PY'
+import sail.review as r
+p = r.build_prompt("--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-old\n+new\n", acs=["AC one"])
+assert "test-adequacy" in p, "category enum must list test-adequacy"
+assert "mutation" in p.lower(), "probe must name a plausible mutation"
+assert "vacuous" in p.lower() and "tautological" in p.lower(), "probe must flag vacuous/tautological tests"
+assert "changes no test behavior" in p, "probe must no-op on test-free diffs"
+print("test-adequacy probe OK")
+PY
+echo "PASS T20: test-adequacy probe (#70) present in REVIEW_PROMPT"
+
+echo "PASS: sail LLM-reviewer (#38) + plan-spine (#47 step 1) + resolution-ids (#47 step 2) + dual-lens (#47 step 3) + Gate-F fixes (HIGH-1/2) + test-adequacy probe (#70) verified"
