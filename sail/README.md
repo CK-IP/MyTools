@@ -234,8 +234,13 @@ python3 -m sail review --target DIR --diff <git-ref> [--run-dir DIR] [--advisory
   **`SAIL_REVIEW_CMD`** (e.g. `codex exec ...`, or a mock for tests) — parsed with `shlex` and run
   as an argv list (no shell); the prompt + diff are passed on **stdin**, never on a command line.
   **Availability-gated:** if the backend is not installed, the review skips cleanly (exit 0).
-- **Findings** (`severity` ∈ CRITICAL/HIGH/MEDIUM/LOW, `category`, `file`, `line`, `issue`,
+- **Findings** (`severity` ∈ CRITICAL/HIGH/MEDIUM/LOW, `category` ∈
+  design/correctness/security/scope/test-adequacy/other, `file`, `line`, `issue`,
   `recommendation`) are written to `review.json` in the run-dir and summarized in `decision-log.md`.
+- **Test-adequacy probe (#70):** the same review pass also asks whether a plausible mutation of the
+  diff's core behavior change would be caught by the new/changed tests, flagging a vacuous/tautological
+  test as a `category: test-adequacy` finding (severity reviewer-assigned; no second LLM call). It
+  no-ops on test-free diffs. The heavyweight mutation-testing tool run is deferred to `/fortify`.
 - **Gate semantics:** exits **1** when any CRITICAL/HIGH finding is present (or when the backend
   response is unusable on a non-empty diff — errors never silently pass); exits **0** under
   `--advisory` (findings still recorded) or when there are no blocking findings.

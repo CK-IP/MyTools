@@ -22,7 +22,7 @@ correctness bugs, security issues, and scope/spec problems. Be specific and skep
 
 Output a single JSON object (a ```json fenced block is fine) of this shape:
 {{"findings": [{{"severity": "CRITICAL|HIGH|MEDIUM|LOW", "category": \
-"design|correctness|security|scope|other", "file": "<path or null>", "line": "<int or null>", \
+"design|correctness|security|scope|test-adequacy|other", "file": "<path or null>", "line": "<int or null>", \
 "issue": "<what is wrong>", "recommendation": "<how to fix>"}}], "summary": "<one line>"}}
 If there are no issues, return {{"findings": [], "summary": "no issues"}}.
 Apply this review craft:
@@ -30,6 +30,7 @@ Bias self-guards — actively resist these LLM failure modes: verification avoid
 Confidence threshold — only report a finding when you are >80% confident it is a real defect. Do NOT flag: style preferences, "could be more efficient" without concrete impact, error handling for impossible states, theoretical issues with no practical failure mode, or run_in_background on a harness tool call (only shell-level backgrounding with a trailing ampersand matters).
 File-type strategy matrix — review by file type: shell scripts and hooks (unquoted variables, heredoc expansion of external data, PPID assumptions, exit codes, jq validation of untrusted JSON); test files (assertions that truly verify the behavior, isolation and cleanup, false-positive risk); config files (missing keys, schema drift, entries referencing things that do not exist); prompt/spec text (contradictions, ambiguity an LLM could misread, missing terminal-path handling); installers (idempotency, backup before overwrite, platform-varying paths).
 Required adversarial probes — actively probe for concurrency hazards, boundary conditions (empty input, missing files, corrupt JSON, zero-length strings), idempotency violations (safe to run twice), and injection vectors (external text flowing unsafely into shell, JSON, or file paths).
+Test-adequacy probe — for the diff's core behavior change, name a plausible mutation (a realistic bug a developer could introduce in the changed code: a flipped comparison, an off-by-one, a dropped guard, a wrong constant) and ask whether the diff's new or changed tests would FAIL under it. If a test would still pass — because it asserts nothing about the behavior, only checks a tautology or its own mock/stub, re-implements the code it claims to verify, or pins an incidental detail rather than the contract — report it with category "test-adequacy" as a vacuous/tautological test (severity reflects how central the unverified behavior is; a NEW feature whose only test is vacuous is HIGH). Emit NO test-adequacy finding when the diff changes no test behavior (a code-only or docs-only diff is not a finding here — do not invent missing-test complaints). This is a cheap heuristic proxy, not a mutation run: a full mutation-testing tool is deferred to the /fortify stage, so stay within the >80%-confidence bar and flag only when a concretely-named mutation would demonstrably survive.
 
 === DIFF ===
 {diff}
