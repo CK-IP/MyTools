@@ -618,6 +618,14 @@ session can't wake itself, so the trigger is **external**.
 - Every user choice is an **interactive selection prompt — never a `--flag`**.
 - **Auto-merge only on `python3 -m sail run --diff main` exit 0.** Any other exit code is parked.
   The review is fail-closed, so a missing backend parks; it never auto-merges.
+- **Autonomous mode = fix, don't wait.** When something is broken or a fix is needed and the fix is
+  reversible, in-scope, and unambiguous (a broken/non-hermetic test, a clear code-quality fix,
+  inserting a discovered fix-issue into the build order, a merge/park call, finishing a stalled
+  teammate's already-green work), the orchestrator **makes the call and executes it — decide-and-log,
+  never pause for the human.** Waiting defeats an unattended run. **Park is the only "stop"** and is
+  reserved for the genuinely irreversible (cannot be undone by `git revert`), the genuinely ambiguous
+  (no defensible default), or a non-code judgment that is truly the human's. Supervised mode asks
+  within the deadline (§11); autonomous mode decides. (See #57 for the mode-banner treatment.)
 - One `--no-ff` merge commit per green issue; log every merge SHA so each is `git revert`-able.
 - **Sandbox repo only. No force-push or destructive git.** Park anything irreversible.
 - **Supervised:** visible `Agent(team_name)` teammates; never create tmux sessions manually.
