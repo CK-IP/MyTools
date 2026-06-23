@@ -762,6 +762,16 @@ These are non-negotiable for every `/surf` run, autonomous or supervised:
   `git revert`, or the situation is genuinely ambiguous and the charter doesn't authorize a call,
   **park it with a written recommendation** rather than guessing. When in doubt, park — a parked
   issue costs a follow-up; a bad irreversible merge costs the board.
+- **Convergence discipline is `/sail`'s, and it is codified (#77).** Each issue's plan/review
+  convergence loops run inside `/sail`, which has no human to answer "continue / abort / proceed"
+  unattended. `/sail` owns the autonomous-mode convergence rubric — see **`commands/sail.md` §
+  Autonomous-mode convergence rubric**: (a) a plan risk the plan itself already mitigates is recorded
+  (`disposition: self-mitigated` + rationale) and proceeds rather than burning rounds; (b) `exit 0`
+  is the stop signal — non-blocking LOWs are never chased past green; (c) the driver consults the
+  deterministic `sail converge` oracle (`proceed | revise | park`) with a 3-round-cap PARK as the
+  genuine-non-convergence backstop. `/surf` relies on this discipline so a single issue can neither
+  burn its round budget nor park sound work; when `sail converge` returns `park`, `/surf` parks the
+  issue per the rule above.
 
 ---
 

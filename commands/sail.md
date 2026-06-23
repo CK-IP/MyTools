@@ -265,6 +265,59 @@ gh pr create --base main --head sail/<issue> --title "$TITLE" --body-file "$RD/l
 
 > **Keep in sync:** this orchestration is intentionally identical to `commands/surf.md`'s post-merge land step — both consume the same `sail land` output. Change one, change the other.
 
+## Autonomous-mode convergence rubric (#77)
+
+Both bounded convergence loops above (Stage 1 plan, Stage 3 review) end "ask the user: continue /
+abort / proceed-advisory." In the **autonomous `/surf → /sail` path there is no human** to answer
+that. This rubric codifies the non-clean-converge judgment a human used to make, so the driver
+neither burns its round budget pointlessly nor PARKs sound work. The exit-code contract is
+unchanged (**exit 0 = green**); what follows is driver discipline, enforced by tested `sail/` Python
+so it cannot drift run-to-run.
+
+**(a) A plan risk the plan itself already mitigates → record the disposition and proceed.** The
+free consistency self-check (#58), `--plan-adversary` (#62), and the grounded pass (#93) can each
+flag a blocking HIGH/CRITICAL that is the issue's own crux — and the plan's *own approach + ACs
+already deliver the remedy* (the documented #55-v2 code-seam escape hatch). Blindly re-running
+`sail plan` just regenerates the same self-consistent plan: wasted rounds, or a parked-yet-sound
+plan. Instead, when the driver judges a flagged risk **self-mitigated by the plan's own
+approach/ACs**, it records that disposition **on the risk** (`"disposition": "self-mitigated"` plus a
+non-empty `"rationale"` naming the delivering action) and **proceeds to build**. The `sail plan`
+gate then defuses it deterministically via `effective_blocking_risks` (`sail/plan.py`): a validly
+self-mitigated risk no longer blocks (exit 0), and is recorded for audit in `plan.json`'s
+`self_mitigated` list and the decision log.
+  - **Fail-safe (no laundering):** the disposition defuses **only** with a non-empty `rationale`; a
+    bare `self-mitigated` tag with no rationale still blocks. The `disposition` field is
+    **driver-territory only** — the author/grounded/adversary plan prompts never emit it, so the
+    engine never auto-defuses its own first-pass risk (an author cannot clear its own flagged risk;
+    that would re-create the self-consistent-plan trap). This is exactly the call a human supervisor
+    made; the driver, an independent agent holding the issue context, stands where the human stood.
+
+**(b) `exit 0` is the stop signal — LOWs never block and are not chased past green.** Review LOW
+(and MEDIUM) findings are non-blocking by construction (`review.has_blocking` blocks only on
+CRITICAL/HIGH), so they never flip the exit code. Once `sail run --diff` exits **0**, the gate is
+green — **stop. Do not run another review round to chase LOW/tidiness nits** (a genuine-but-
+self-referential LOW chain — e.g. one subsumed-substring grep nit begetting the next — is an
+infinite tail otherwise). Green is done.
+
+**(c) The driver consults a deterministic oracle, not its own eyeballs.** At each convergence loop
+(plan or review), after a round's `sail …` exits, the driver asks the oracle what to do:
+
+```bash
+python3 -m sail converge --rc "$RC" --round "$ROUND"   # default --max-rounds 3
+# prints exactly one of: proceed | revise | park
+```
+
+- `proceed` — `rc == 0`; green, stop (rule **b**: never chase non-blocking LOWs past green).
+- `revise` — `rc != 0` and under the cap; fix the surfaced blocking findings and re-run.
+- `park`   — `rc != 0` at the **3-round cap**; this is genuine non-convergence — **PARK to the WIP
+  handoff** for a human rather than loop forever. The 3-round cap + PARK is the backstop; any
+  non-zero rc (1, 127, …) is treated uniformly as "not green."
+
+Together: **(a)** stops the driver burning rounds on a risk the plan already resolves, **(b)** stops
+it chasing LOWs past green, and **(c)** the `sail converge` oracle + 3-round-cap PARK is the
+deterministic backstop for true non-convergence — keeping the autonomous path `/surf` depends on
+from wasting rounds or parking sound work.
+
 ## Calibration (operator validation — deferred to a live run)
 
 The calibration acceptance criterion — *run looped `/sail` against issues `/ship` already handled (#32/#33 have full artifacts) and confirm the loop surfaces what `/ship`'s multi-round + dual-lens surfaced* — is an **operator validation step**, not a hermetic test: it needs a live LLM review backend (`SAIL_REVIEW_CMD` / `SAIL_REVIEW_CMD2`) and the merged #32/#33 artifacts. Run it once those are available and record the parity result in the ship's log (mirrors the #32 AC#7/#8 trial-runbook precedent). The build above delivers items 1–4 (plan-verification, resolution log, dual-lens, convergence) with hermetic tests; calibration is the live-run demonstration on top.

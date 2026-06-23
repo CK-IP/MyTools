@@ -58,6 +58,11 @@ def main() -> int:
     land_parser.add_argument("--prefix", default="sail")
     land_parser.add_argument("--pr", action="store_true")
 
+    converge_parser = subparsers.add_parser("converge")
+    converge_parser.add_argument("--rc", type=int, required=True)
+    converge_parser.add_argument("--round", type=int, required=True)
+    converge_parser.add_argument("--max-rounds", type=int, default=3)
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -88,6 +93,10 @@ def main() -> int:
     if args.command == "land":
         from sail.lifecycle import run_land
         return run_land(args.run_dir, args.issue, args.title, args.pr, args.prefix)
+    if args.command == "converge":
+        from sail.convergence import loop_decision
+        print(loop_decision(args.rc, args.round, args.max_rounds))
+        return 0
 
     return 1
 
