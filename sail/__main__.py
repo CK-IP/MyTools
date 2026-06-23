@@ -41,6 +41,12 @@ def main() -> int:
     plan_parser.add_argument("--plan-adversary", action="store_true")
     plan_parser.add_argument("--grounded-plan", action="store_true")
 
+    build_parser = subparsers.add_parser("build")
+    build_parser.add_argument("--target")
+    build_parser.add_argument("--run-dir")
+    build_parser.add_argument("--mode", choices=["build", "fix"], default="build")
+    build_parser.add_argument("--round", type=int, default=1)
+
     subparsers.add_parser("spec")
 
     isolate_parser = subparsers.add_parser("isolate")
@@ -80,6 +86,9 @@ def main() -> int:
     if args.command == "plan":
         from sail.plan import run_plan
         return run_plan(args.target or ".", args.run_dir, args.advisory, plan_adversary=args.plan_adversary, grounded_plan=args.grounded_plan)
+    if args.command == "build":
+        from sail.build import run_build
+        return run_build(args.target or ".", args.run_dir, mode=args.mode, round=args.round)
     if args.command == "spec":
         from sail.spec import run_spec
         return run_spec()
