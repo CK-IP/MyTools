@@ -131,4 +131,45 @@ grep -qE -- '^- resolution: \[lens2-12345678\] rejected — false positive$' "$D
   || fail "rejected resolution line malformed"
 echo "PASS: per-finding resolution log (#47 step 2) verified"
 
+if ! RUN_DIR="$RUN_DIR" python3 - <<'PY' >"$LOG_FILE" 2>&1
+import os
+from sail.decisionlog import DecisionLog
+
+run_dir = os.environ["RUN_DIR"]
+log = DecisionLog(run_dir)
+log.finding_resolution("lens3-roundtag", "deferred", "follow-up", round=2)
+log.finding_resolution("lens3-roundtag", "addressed", "fixed later", round=3)
+log.finding_resolution("lens3-legacy", "rejected", "legacy reason")
+
+all_res = log.read_resolutions()
+assert all_res["lens3-roundtag"]["disposition"] == "addressed", all_res["lens3-roundtag"]
+assert all_res["lens3-roundtag"]["rationale"] == "fixed later", all_res["lens3-roundtag"]
+assert all_res["lens3-roundtag"]["round"] == 3, all_res["lens3-roundtag"]
+assert all_res["lens3-legacy"]["round"] is None, all_res["lens3-legacy"]
+
+round2 = log.read_resolutions(round=2)
+assert round2 == {
+    "lens3-roundtag": {"disposition": "deferred", "rationale": "follow-up", "round": 2}
+}, round2
+
+before3 = log.read_resolutions(before=3)
+assert before3["lens3-roundtag"] == {
+    "disposition": "deferred",
+    "rationale": "follow-up",
+    "round": 2,
+}, before3["lens3-roundtag"]
+assert before3["lens3-legacy"]["round"] is None, before3["lens3-legacy"]
+print("ok")
+PY
+then
+  fail "round-tagged resolution parsing failed"
+fi
+
+grep -qF -- '- resolution: [lens3-roundtag] deferred — follow-up [round=2]' "$DECISION_LOG" \
+  || fail "round-tagged deferred resolution line malformed"
+grep -qF -- '- resolution: [lens3-roundtag] addressed — fixed later [round=3]' "$DECISION_LOG" \
+  || fail "round-tagged addressed resolution line malformed"
+grep -qF -- '- resolution: [lens3-legacy] rejected — legacy reason' "$DECISION_LOG" \
+  || fail "legacy roundless resolution line malformed"
+
 echo "PASS: decision log append/idempotent/append-only contract verified"

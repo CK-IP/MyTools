@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from sail.runner import run, run_tests
@@ -69,6 +70,7 @@ def main() -> int:
     converge_parser.add_argument("--round", type=int, required=True)
     converge_parser.add_argument("--max-rounds", type=int, default=3)
     converge_parser.add_argument("--run-dir")
+    converge_parser.add_argument("--target")
 
     args = parser.parse_args()
 
@@ -104,10 +106,19 @@ def main() -> int:
         from sail.lifecycle import run_land
         return run_land(args.run_dir, args.issue, args.title, args.pr, args.prefix)
     if args.command == "converge":
-        from sail.convergence import PARK, REVISE, loop_decision, reappeared_dispositioned
+        from sail.convergence import (
+            PARK,
+            loop_decision,
+            materiality_floor,
+            reappeared_dispositioned,
+        )
+
+        if args.rc == 0:
+            print("proceed")
+            return 0
 
         decision = loop_decision(args.rc, args.round, args.max_rounds)
-        if decision == REVISE and args.run_dir:
+        if args.run_dir:
             reappeared = reappeared_dispositioned(args.run_dir, args.round)
             if reappeared:
                 print(
@@ -115,7 +126,19 @@ def main() -> int:
                     + ",".join(reappeared),
                     file=sys.stderr,
                 )
-                decision = PARK
+                print(PARK)
+                return 0
+            eligible, ids = materiality_floor(
+                args.rc, args.run_dir, args.target or os.getcwd(), args.round
+            )
+            if eligible:
+                print(
+                    f"materiality-floor: committing with {len(ids)} beyond-diff hardening finding(s) logged as follow-ups: "
+                    + ",".join(ids),
+                    file=sys.stderr,
+                )
+                print("proceed-hardening")
+                return 0
         print(decision)
         return 0
 
