@@ -6,6 +6,8 @@
 .sail/
 .surf/
 .coverage
+__pycache__/
+*.pyc
 
 .ship/review/
 .ship/state/

@@ -334,6 +334,46 @@ def has_blocking_risk(risks):
     )
 
 
+def _is_self_mitigated(risk):
+    # A blocking risk is defused only when the autonomous driver has explicitly recorded a
+    # self-mitigation disposition WITH a rationale (#77 Gap 1). The fail-safe (non-empty string
+    # rationale required) prevents laundering a real HIGH into a pass with an empty hand-wave; a
+    # tag without a rationale still blocks. The `disposition` field is DRIVER-territory only — the
+    # author/grounded/adversary plan prompts are never taught to emit it, so the engine never
+    # auto-defuses its own first-pass risk (which would re-create the self-consistent-plan trap).
+    if not isinstance(risk, dict):
+        return False
+    if str(risk.get("disposition", "")).strip().lower() != "self-mitigated":
+        return False
+    rationale = risk.get("rationale")
+    return isinstance(rationale, str) and bool(rationale.strip())
+
+
+def effective_blocking_risks(risks):
+    # The CRITICAL/HIGH risks that still block AFTER honoring driver-recorded self-mitigation
+    # dispositions (#77). A validly self-mitigated risk is excluded; everything else with
+    # CRITICAL/HIGH severity blocks. LOW/MEDIUM never block (mirrors review.has_blocking).
+    return [
+        risk
+        for risk in risks
+        if isinstance(risk, dict)
+        and risk.get("severity") in ("CRITICAL", "HIGH")
+        and not _is_self_mitigated(risk)
+    ]
+
+
+def self_mitigated_risks(risks):
+    # The CRITICAL/HIGH risks defused by a valid self-mitigation disposition — recorded for audit
+    # (decision log + plan.json payload) so a deferred-to-human review can see what was waved past.
+    return [
+        risk
+        for risk in risks
+        if isinstance(risk, dict)
+        and risk.get("severity") in ("CRITICAL", "HIGH")
+        and _is_self_mitigated(risk)
+    ]
+
+
 def _explicit_blocking_risks(stdout):
     # Adversary union filter (#58, review R1 MEDIUM lens1): unlike the author plan, an adversary
     # risk only blocks when its severity is EXPLICITLY "CRITICAL"/"HIGH". This deliberately does
@@ -602,6 +642,18 @@ def run_plan(target, run_dir=None, advisory=False, plan_adversary=False, grounde
     elif grounded_escalate and not run_grounded and author_ok:
         log.plan_marker("grounded plan requested/triggered but no backend (SAIL_PLAN_GROUNDED_CMD / claude) — blind plan stands")
 
+    # #77 Gap 1: honor driver-recorded self-mitigation dispositions. A blocking risk the driver
+    # explicitly marked self-mitigated (with a rationale) is defused from the gate but recorded for
+    # audit — in payload["self_mitigated"] and the decision log — so a human review can see what was
+    # waved past. Only meaningful on a usable (completed) plan; error paths fail closed regardless.
+    if payload.get("status") == "completed":
+        defused = self_mitigated_risks(payload.get("risks", []))
+        payload["self_mitigated"] = defused
+        for r in defused:
+            log.plan_marker(
+                f"self-mitigated risk recorded: {r.get('issue', '')} — {r.get('rationale', '')}"
+            )
+
     with open(artifact_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)
 
@@ -640,4 +692,6 @@ def run_plan(target, run_dir=None, advisory=False, plan_adversary=False, grounde
         return 1
     if advisory:
         return 0
-    return 1 if has_blocking_risk(payload["risks"]) else 0
+    # #77: gate on the risks that still block AFTER honoring self-mitigation dispositions, so the
+    # autonomous driver doesn't burn rounds (or PARK sound work) on a risk the plan already resolves.
+    return 1 if effective_blocking_risks(payload["risks"]) else 0
