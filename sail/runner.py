@@ -320,6 +320,72 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
     if backfilled:
         state.save()
 
+    # #79: a resumed run-dir carries each gate's terminal status from the prior round. In
+    # --diff mode that status is valid only for the diff content it was computed against; if
+    # the diff changed since (the convergence loop fixed a gate finding), the cached terminal
+    # status is stale and would mask the fix. Mirror the review block's reuse gate (below):
+    # store the diff fingerprint when gates run, and on resume reset every terminal gate to
+    # pending when the diff scope (target/diff_ref) or content changed — or when the fingerprint
+    # is missing/uncomputable (fail-safe toward re-running, never toward reusing a stale green).
+    # Scoped to diff mode; baseline/whole-repo resume keeps its terminal-preserving behavior.
+    if mode == "diff":
+        from sail import review as review_mod
+        try:
+            gate_fp = review_mod.diff_fingerprint(target_root, diff_ref)
+        except Exception:
+            # diff_fingerprint runs `git diff diff_ref`; an unresolvable comparison ref on
+            # resume (deleted branch, rewritten history) would normally abort _generate_baseline
+            # above, but if the fingerprint is ever uncomputable here, treat it as None and force
+            # a re-run rather than aborting — never reuse a stale green on uncertainty (AC#3).
+            gate_fp = None
+        # Reset terminal gate status on resume when ANY input the gate results depend on changed:
+        # the diff SCOPE (target or resolved diff_ref) OR the diff CONTENT fingerprint — or when
+        # the fingerprint is missing/uncomputable. Mirrors the review block's scope_match
+        # (prior_target/prior_diff_ref) PLUS its diff_hash reuse gate, so a same-content diff
+        # against a different target/base can't preserve a stale gate (redteam-1fd74a2b0c7e).
+        stored_fp = state.data.get("gates_diff_hash")
+        scope_changed = prior_target != target_root or prior_diff_ref != diff_ref
+        stale = gate_fp is None or scope_changed or stored_fp != gate_fp
+        if scope_changed:
+            reset_reason = "diff scope (target/diff_ref) changed since prior round"
+        elif gate_fp is None:
+            reset_reason = "diff fingerprint uncomputable (fail-safe re-run)"
+        elif stored_fp is None:
+            reset_reason = "no stored gate fingerprint (fail-safe re-run)"
+        else:
+            reset_reason = "diff content changed since prior round"
+        if resumed and stale:
+            # Assign each reset gate a fresh, strictly-INCREASING seq drawn from the high-water
+            # mark of all current seqs — never None. The decision-log keys entries by
+            # [gate=<name> seq=<n>] and de-dups, so a re-used seq suppresses the re-run's verdict
+            # and leaves the audit log showing the stale (pre-fix) decision. Clearing to None
+            # would collapse next_seq back to 1 when every gate is terminal (the normal
+            # completed-round case), re-colliding with the prior round's keys — so monotonic
+            # high-water seqs are required, not None (redteam-4c2dc5a2a662).
+            reset_seq = max((gate.get("seq") or 0 for gate in state.gates), default=0)
+            reset_count = 0
+            registry_names = {checker.name for checker in registry}
+            for gate in state.gates:
+                # Reset only gates the current registry will actually re-run. A gate left over from a
+                # wider prior registry (e.g. a since-narrowed SAIL_CHECKERS) is never visited by the
+                # per-checker loop, so resetting it to pending would strand it permanently non-green
+                # and inflate the rerun count (lens2-da384f98abcb).
+                if gate.get("status") in terminal_statuses and gate["name"] in registry_names:
+                    gate["status"] = "pending"
+                    gate["rc"] = None
+                    gate["reason"] = None
+                    gate["artifact"] = None
+                    gate["new_findings_count"] = None
+                    gate["started_at"] = None
+                    gate["finished_at"] = None
+                    reset_seq += 1
+                    gate["seq"] = reset_seq
+                    reset_count += 1
+            if reset_count:
+                decision_log.gate_reset_marker(reset_count, reset_reason)
+        state.data["gates_diff_hash"] = gate_fp
+        state.save()
+
     next_seq = max((gate.get("seq") or 0 for gate in state.gates), default=0) + 1
 
     # Scanner-triage context (#69): collect each diff-mode gate's already-computed `new`
