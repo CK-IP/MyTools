@@ -113,6 +113,16 @@ class DecisionLog:
     def plan_marker(self, summary):
         self._append_marker(f"- plan: {_sanitize_text(summary)}")
 
+    def gate_reset_marker(self, count, reason="diff content changed since prior round"):
+        # #79: on a resumed run-dir where the gates' inputs changed since they last ran (the
+        # convergence loop fixed a gate finding, or the diff scope/fingerprint changed), every
+        # terminal gate is reset to pending and re-run so the fix is re-evaluated rather than
+        # masked by the stale terminal status. `reason` records the actual trigger (content vs
+        # scope vs missing/uncomputable fingerprint) so the audit trail is accurate, not generic.
+        self._append_marker(
+            f"- gate-reset: {int(count)} terminal gate(s) re-run ({_sanitize_text(reason)})"
+        )
+
     def finding_resolution(self, finding_id, disposition, rationale, round=None):
         # Per-finding resolution log (#47): records the driver's disposition of one review
         # finding across the convergence loop. disposition is expected to be one of
