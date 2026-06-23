@@ -62,6 +62,7 @@ def main() -> int:
     converge_parser.add_argument("--rc", type=int, required=True)
     converge_parser.add_argument("--round", type=int, required=True)
     converge_parser.add_argument("--max-rounds", type=int, default=3)
+    converge_parser.add_argument("--run-dir")
 
     args = parser.parse_args()
 
@@ -94,8 +95,19 @@ def main() -> int:
         from sail.lifecycle import run_land
         return run_land(args.run_dir, args.issue, args.title, args.pr, args.prefix)
     if args.command == "converge":
-        from sail.convergence import loop_decision
-        print(loop_decision(args.rc, args.round, args.max_rounds))
+        from sail.convergence import PARK, REVISE, loop_decision, reappeared_dispositioned
+
+        decision = loop_decision(args.rc, args.round, args.max_rounds)
+        if decision == REVISE and args.run_dir:
+            reappeared = reappeared_dispositioned(args.run_dir, args.round)
+            if reappeared:
+                print(
+                    "non-convergence: blocking finding re-flagged after rejected/deferred disposition: "
+                    + ",".join(reappeared),
+                    file=sys.stderr,
+                )
+                decision = PARK
+        print(decision)
         return 0
 
     return 1

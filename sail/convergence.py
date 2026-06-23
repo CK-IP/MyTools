@@ -18,6 +18,54 @@ This encodes the discipline:
 
 from __future__ import annotations
 
+import json
+import os
+
+from sail.decisionlog import DecisionLog
+
+
+_DISPOSITIONED = {"rejected", "deferred"}
+_BLOCKING = {"CRITICAL", "HIGH"}
+
+
+def reappeared_dispositioned(run_dir, round_num):
+    """Return sorted blocking ids that were dispositioned rejected/deferred before.
+
+    [] on any missing, malformed, or unparseable input.
+    """
+    if not run_dir:
+        return []
+
+    try:
+        resolutions = DecisionLog(run_dir).read_resolutions()
+        dispositioned = {
+            finding_id
+            for finding_id, resolution in resolutions.items()
+            if isinstance(resolution, dict) and resolution.get("disposition") in _DISPOSITIONED
+        }
+        if not dispositioned:
+            return []
+
+        with open(os.path.join(run_dir, "review.json"), encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict) or data.get("round") != round_num:
+            return []
+        findings = data.get("findings") if isinstance(data, dict) else []
+        if not isinstance(findings, list):
+            findings = []
+
+        current_blocking = {
+            finding.get("id")
+            for finding in findings
+            if isinstance(finding, dict)
+            and finding.get("id")
+            and str(finding.get("severity", "")).strip().upper() in _BLOCKING
+        }
+        return sorted(current_blocking & dispositioned)
+    except Exception:
+        return []
+
+
 PROCEED = "proceed"
 REVISE = "revise"
 PARK = "park"
