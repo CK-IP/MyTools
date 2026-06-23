@@ -323,7 +323,7 @@ infinite tail otherwise). Green is done.
 (plan or review), after a round's `sail …` exits, the driver asks the oracle what to do:
 
 ```bash
-python3 -m sail converge --rc "$RC" --round "$ROUND"   # default --max-rounds 3
+python3 -m sail converge --rc "$RC" --round "$ROUND" --run-dir "$SESSION_DIR"   # default --max-rounds 3
 # prints exactly one of: proceed | revise | park
 ```
 
@@ -332,6 +332,16 @@ python3 -m sail converge --rc "$RC" --round "$ROUND"   # default --max-rounds 3
 - `park`   — `rc != 0` at the **3-round cap**; this is genuine non-convergence — **PARK to the WIP
   handoff** for a human rather than loop forever. The 3-round cap + PARK is the backstop; any
   non-zero rc (1, 127, …) is treated uniformly as "not green."
+
+- Guard the red-path only: when `revise` would apply, `sail converge` also checks the shared
+  `decision-log.md`/`review.json` run-dir for a blocking finding that was already dispositioned as
+  `rejected` or `deferred`. If that exact finding id re-appears in the current round, the oracle
+  upgrades to `park` and emits `non-convergence: blocking finding re-flagged after rejected/deferred
+  disposition: <sorted ids>`. This check runs **before** the driver records the current round's
+  new dispositions, so `decision-log.md` only contains prior-round resolutions at converge time.
+  Limitation: matching is by exact finding id only, so line drift, severity/category changes, and
+  cross-lens re-flags are not caught here; the 3-round PARK cap remains the backstop for those
+  cases.
 
 Together: **(a)** stops the driver burning rounds on a risk the plan already resolves, **(b)** stops
 it chasing LOWs past green, and **(c)** the `sail converge` oracle + 3-round-cap PARK is the
