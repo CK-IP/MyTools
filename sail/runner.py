@@ -135,6 +135,57 @@ def _resolve_diff_base(target, diff_ref):
     return result.stdout.strip()
 
 
+def _prestage_untracked(target, run_dir=None):
+    # Diff-mode pre-stage (#76): `git diff diff_ref` omits untracked files, so a brand-new
+    # test/source file the build just created is invisible to the diff-scoped gates and the
+    # T6 scope-guard until it is staged. Mirror /ship's precedent — list untracked, non-ignored
+    # paths NUL-safe (`-z`) and `git add -N` them, so they appear as zero→full additions in the
+    # diff and get scanned. Intent-to-add stages no content; the eventual commit normalizes the
+    # index, so no teardown is needed (same as /ship relies on). Best-effort: a non-zero git rc
+    # or an OSError (e.g. git absent) must never abort the run — the gates still run on the tracked
+    # changes — so failures here are swallowed.
+    try:
+        listed = subprocess.run(
+            ["git", "-C", target, "ls-files", "-z", "--others", "--exclude-standard"],
+            capture_output=True, text=True,
+        )
+        if listed.returncode != 0 or not listed.stdout:
+            return
+        paths = [p for p in listed.stdout.split("\0") if p]
+        # Never pre-stage Sail's own run artifacts (run-state.json, review.json, baseline/, …):
+        # they live under run_dir, and if the target repo does NOT ignore that path they would
+        # otherwise be intent-to-added into the reviewed diff — polluting gate/review scope and
+        # leaking run state / absolute paths to the review backend (#76 round-3). Exclude anything
+        # at or under run_dir. Guard: only exclude when run_dir is a STRICT subpath of target —
+        # if run_dir IS the target root (a misconfiguration), excluding everything under it would
+        # filter out every user file and silently disable the pre-stage, so skip the exclusion.
+        if run_dir:
+            rd = os.path.abspath(run_dir)
+            target_abs = os.path.abspath(target)
+            if rd != target_abs and rd.startswith(target_abs + os.sep):
+                paths = [
+                    p for p in paths
+                    if (ap := os.path.abspath(os.path.join(target, p))) != rd
+                    and not ap.startswith(rd + os.sep)
+                ]
+        if not paths:
+            return
+        # Feed the NUL-delimited path list to `git add -N` via stdin (--pathspec-from-file=-
+        # --pathspec-file-nul) rather than as argv. This is genuinely NUL-safe — it handles spaces
+        # AND newlines in pathnames (AC#4) — and, crucially, has no ARG_MAX ceiling: a repo with
+        # very many untracked files can never overflow the argv and silently skip pre-staging,
+        # which would leave new files invisible to the diff-scoped gates (the hole this closes).
+        # --literal-pathspecs: each line is a literal path, never Git pathspec magic — a file named
+        # e.g. ":(glob)foo.py" must not be parsed as a pathspec signature and silently skipped.
+        subprocess.run(
+            ["git", "-C", target, "--literal-pathspecs", "add", "-N",
+             "--pathspec-from-file=-", "--pathspec-file-nul"],
+            input="\0".join(paths) + "\0", capture_output=True, text=True,
+        )
+    except OSError:
+        return
+
+
 def _sweep_stale_baseline_src(target):
     # Diff-mode only: reap any <target>/.sail/runs/*/baseline-src checkouts before the
     # current-tree gate scan. bandit -r ignores .gitignore, so a stale baseline-src left
@@ -278,6 +329,14 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
     baseline_root = None
     if mode == "diff":
         decision_log.mode_marker(mode, diff_ref)
+        # Pre-stage untracked, non-ignored files (#76) BEFORE the diff is computed — both the
+        # current-tree gate scan and review_mod.diff_fingerprint derive scope from `git diff
+        # diff_ref`, which omits untracked files. Runs on fresh and resumed --diff invocations
+        # (this branch executes every time), so a file created between rounds is picked up next
+        # round; it is idempotent, so the re-run is a clean no-op. run_dir is excluded so Sail's
+        # own artifacts under it never enter the reviewed diff (matters when the target does not
+        # ignore the run-dir path).
+        _prestage_untracked(target_root, run_dir)
         baseline_dir, baseline_root = _generate_baseline(registry, target_root, diff_ref, run_dir)
         # Reap any stale .sail/runs/*/baseline-src remnants now that the baseline artifacts
         # are captured — before the current-tree scan, so bandit (which ignores .gitignore)
