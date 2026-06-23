@@ -251,11 +251,45 @@ gitleaks version && shellcheck --version | head -2
 
 You can install tools later — `/fortify` and `/sail` gracefully skip any tool that is not installed.
 
+### Recommended sail Codex setup (optional — if you have Codex)
+
+`/sail`'s smarter lenses (grounded planning, plan-adversary, cross-family review, red-team, tidiness) shell out to a **codex CLI**. They are configured by environment variables in `~/.claude/settings.json` — *not* in the repo, so a fresh clone needs this set up locally. **All of it is optional:** with no codex backend, `/sail` degrades cleanly (grounded planning falls back to Claude then to a blind plan; dual-lens/red-team fall back to single-lens; tidiness falls back to the default review backend — Claude — and skips only if that is unavailable) — nothing errors.
+
+**Model policy — two tiers.** Pick by task type, and treat the model names as *illustrative* (they change over time — the durable part is the tier):
+- **Reasoning tier** (planning, grounding a plan against the code, adversarial/cross-family review, red-team) → your **reasoning-tier** codex model, e.g. `gpt-5.5`, with `-c model_reasoning_effort=high`.
+- **Quick tier** (cleanup/tidiness, low-stakes confirmations) → your **quick-tier** codex model, e.g. `gpt-5.4-mini`.
+
+Add this `env` block to `~/.claude/settings.json` (merge into any existing `env` — see Step 4 for the merge pattern), substituting your own model names:
+
+```json
+{
+  "env": {
+    "SAIL_PLAN_GROUNDED_CMD": "codex exec -m gpt-5.5 -c model_reasoning_effort=high",
+    "SAIL_PLAN_CMD2":         "codex exec -m gpt-5.5 -c model_reasoning_effort=high",
+    "SAIL_REVIEW_CMD2":       "codex exec -m gpt-5.5 -c model_reasoning_effort=high",
+    "SAIL_REDTEAM_CMD":       "codex exec -m gpt-5.5 -c model_reasoning_effort=high",
+    "SAIL_TIDINESS_CMD":        "codex exec -m gpt-5.4-mini -c model_reasoning_effort=low",
+    "SAIL_TIDINESS_VERIFY_CMD": "codex exec -m gpt-5.4-mini"
+  }
+}
+```
+
+What each knob powers:
+- `SAIL_PLAN_GROUNDED_CMD` — the **grounded plan pass** (reads the real code before planning, on plan-risky specs).
+- `SAIL_PLAN_CMD2` — the **plan-adversary** (independent second pass that tries to break the plan).
+- `SAIL_REVIEW_CMD2` — the **`--dual-lens`** cross-family second review (also required for `/surf` to land work — see below).
+- `SAIL_REDTEAM_CMD` — the repo-exploring **red-team** review on high-stakes diffs.
+- `SAIL_TIDINESS_CMD` / `SAIL_TIDINESS_VERIFY_CMD` — the code-health/cleanup lens and its cross-family confirmation.
+
+The **primary** review lens (`SAIL_REVIEW_CMD`) is intentionally left unset so it stays on Claude — the codex lenses are the *cross-family second opinion*, and keeping the primary on a different family is the point. `settings.json` `env` is read at session start (same as the Step 4 `env` pattern below).
+
+The two subsections that follow detail the two most consequential of these knobs.
+
 ### Cross-family dual-lens second backend (codex — required for `/surf` per-teammate review, #74)
 
 `/surf` delegates every issue build to a teammate that runs `/sail` with `--dual-lens` and a
-**second review lens** pointed at a codex CLI via `SAIL_REVIEW_CMD2` (e.g.
-`SAIL_REVIEW_CMD2="codex exec -m gpt-5.4-mini"`). These are ordinary CLI-subprocess lenses — *not*
+**second review lens** pointed at a codex CLI via `SAIL_REVIEW_CMD2` (a reasoning-tier model — e.g.
+`SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c model_reasoning_effort=high"`; see the model policy above). These are ordinary CLI-subprocess lenses — *not*
 the session-bound `advisor()` tool — so the second lens is reachable inside a nested teammate where
 `advisor()` is not. Install a codex CLI and ensure it is on `PATH`. Without a codex (or other
 `SAIL_REVIEW_CMD2`) backend reachable from **both** the teammate and the orchestrator, `/sail`'s
@@ -266,7 +300,7 @@ yourself (which degrade cleanly to single-lens).
 
 ### Grounded plan backend (codex — risk-gated, optional)
 
-On a **plan-risky** spec (a remediation/instruction signal co-occurring with a file/list-reconciliation signal, per `is_plan_risky`), `/sail`'s plan stage can run a **grounded plan pass**: a tool-using backend that explores the repo (`cwd=target`, Read/Grep) and grounds the plan against the real code, citing concrete file/line **evidence** for every risk it raises (unevidenced risks are dropped, never block — mirrors the `--red-team` contract). Point it at a codex CLI via `SAIL_PLAN_GROUNDED_CMD` (e.g. `SAIL_PLAN_GROUNDED_CMD="codex exec -m gpt-5.4-mini"`). Backend selection falls back **Codex → Claude → blind**: the explicit `SAIL_PLAN_GROUNDED_CMD` if runnable, else the default author backend (`claude`) run in grounded mode, else (neither available) the run degrades cleanly to today's blind plan (logged, not an error). Ordinary (non-risky) specs never trigger it — no token or latency cost. Force it on any spec with `sail plan --grounded-plan`. Its evidenced CRITICAL/HIGH risks union into the plan gate (tagged `lens: grounded`); a grounding-backend error fails closed (`status: error`, exit 1).
+On a **plan-risky** spec (a remediation/instruction signal co-occurring with a file/list-reconciliation signal, per `is_plan_risky`), `/sail`'s plan stage can run a **grounded plan pass**: a tool-using backend that explores the repo (`cwd=target`, Read/Grep) and grounds the plan against the real code, citing concrete file/line **evidence** for every risk it raises (unevidenced risks are dropped, never block — mirrors the `--red-team` contract). Point it at a codex CLI via `SAIL_PLAN_GROUNDED_CMD` (a reasoning-tier model — e.g. `SAIL_PLAN_GROUNDED_CMD="codex exec -m gpt-5.5 -c model_reasoning_effort=high"`; see the model policy above). Backend selection falls back **Codex → Claude → blind**: the explicit `SAIL_PLAN_GROUNDED_CMD` if runnable, else the default author backend (`claude`) run in grounded mode, else (neither available) the run degrades cleanly to today's blind plan (logged, not an error). Ordinary (non-risky) specs never trigger it — no token or latency cost. Force it on any spec with `sail plan --grounded-plan`. Its evidenced CRITICAL/HIGH risks union into the plan gate (tagged `lens: grounded`); a grounding-backend error fails closed (`status: error`, exit 1).
 
 ---
 
