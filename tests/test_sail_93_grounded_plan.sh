@@ -109,6 +109,7 @@ set +e
 SAIL_PLAN_CMD="$GROUNDED" GROUNDED_OUT="$GROUNDED_EVIDENCED" GROUNDED_SENTINEL="$SEN" AUTHOR_OUT="$GROUNDED_EVIDENCED" \
   python3 -m sail plan --target "$TARGET" --run-dir "$RD" <<< "$RISKY_SPEC" >/dev/null 2>&1
 RC=$?; set -e
+[ "$RC" = "1" ] || fail "T4: evidenced HIGH via author-fallback must block (exit 1), got $RC"
 { [ -f "$SEN" ] && grep -qx "$TARGET" "$SEN"; } || fail "T4: grounded must run via author fallback with cwd=target"
 src=$(jget "$RD/plan.json" grounded.source); [ "$src" = "\"author-fallback\"" ] || fail "T4: grounded.source expected author-fallback got $src"
 echo "PASS T4"
