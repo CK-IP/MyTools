@@ -121,7 +121,7 @@ python3 -m sail plan --target . --run-dir "$SESSION_DIR" <<< "$SPEC"
 **`--plan-adversary` risk-gated escalation (#58).** Default plan is **single-pass** (the self-check above is free; most plans stay 1-pass — no uniform weight). When the change is **plan-risky** — it touches user-facing instructions/remediation, or reconciles multiple files/lists — `/sail` escalates to a **one-shot adversarial plan pass**: an independent second pass over the same spec with adversarial framing (it re-derives the gaps a careless author would miss; like `--dual-lens`'s second lens, it reviews independently rather than grading the first pass's output). The auto-trigger fires only on the strong #55 failure shape — a remediation/instruction signal **and** a file/list-reconciliation signal co-occurring, or an unambiguous failure phrase — so ordinary specs ("run the tests", "improve the error message") stay single-pass. Escalation fires when `--plan-adversary` is passed **or** the auto-trigger heuristic (`is_plan_risky`) detects a plan-risky spec, mirroring the review stage's `--dual-lens` escalation:
 
 ```bash
-SAIL_PLAN_CMD2="codex exec -m gpt-5.4-mini" \
+SAIL_PLAN_CMD2="codex exec -m gpt-5.5 -c model_reasoning_effort=high" \
   python3 -m sail plan --target . --run-dir "$SESSION_DIR" --plan-adversary <<< "$SPEC"
 ```
 
@@ -130,7 +130,7 @@ The adversary runs as a second independent backend (`SAIL_PLAN_CMD2`); its **exp
 **`--grounded-plan` / `SAIL_PLAN_GROUNDED_CMD` risk-gated grounding (#93).** Default plan is **blind** — the author pass sees only the spec text. On a **plan-risky** spec (`is_plan_risky`) — or when `--grounded-plan` forces it — `/sail` escalates to a **grounded** pass: a tool-using backend (`cwd=target`) that Read/Greps the repo to verify the spec's assumptions against the real code (does each named function/file/constant exist? what is the real count/list to reconcile? does any code re-derive state internally so a planned test would be silently defeated?), and is **evidence-required** — every risk cites concrete tool-execution evidence or is dropped. Backend selection falls back **Codex → Claude → blind**: `SAIL_PLAN_GROUNDED_CMD` (e.g. `codex exec`) if runnable, else the default author backend run grounded, else degrade to the blind plan (logged, not an error). Because the grounded pass emits the full plan schema, when the author backend is absent it serves as the planner itself (`grounded.role: planner`); otherwise its evidenced CRITICAL/HIGH risks union into the plan gate tagged `lens: grounded` (`grounded.role: union`). A grounding-backend error fails closed (`status: error`, exit 1), mirroring `--dual-lens`. Ordinary non-risky specs stay single-pass (no grounding call).
 
 ```bash
-SAIL_PLAN_GROUNDED_CMD="codex exec -m gpt-5.4-mini" \
+SAIL_PLAN_GROUNDED_CMD="codex exec -m gpt-5.5 -c model_reasoning_effort=high" \
   python3 -m sail plan --target . --run-dir "$SESSION_DIR" --grounded-plan <<< "$SPEC"
 ```
 
@@ -169,7 +169,7 @@ This runs the deterministic gates (ruff, mypy, pytest, bandit, semgrep, pip-audi
 **`--dual-lens` risk-gated escalation (#47).** Default review is **single-lens** (industry norm; convergence is the quality mechanism). For a high-stakes diff — or when you simply want a cross-family second opinion — pass `--dual-lens` and set `SAIL_REVIEW_CMD2` to a second backend (e.g. a codex CLI):
 
 ```bash
-SAIL_REVIEW_CMD2="codex exec -m gpt-5.4-mini" \
+SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c model_reasoning_effort=high" \
   python3 -m sail run --target . --diff <base-ref> --run-dir "$SESSION_DIR" --dual-lens
 ```
 

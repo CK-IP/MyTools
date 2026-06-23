@@ -383,7 +383,7 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
    # the TEAMMATE runs this (the orchestrator only receives the exit code + summary):
    git checkout main
    git checkout -b surf/<issue>
-   SAIL_REVIEW_CMD2="codex exec -m gpt-5.4-mini" \
+   SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c model_reasoning_effort=high" \
      python3 -m sail run --diff main --dual-lens --run-dir .surf/runs/<issue>
    ```
    This is the one-pass `/sail` mode (the teammate's default engine; `/ship` is the optional
@@ -435,7 +435,7 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
         RD=.surf/runs/<issue>
         git checkout surf/<issue>
         [ -n "$(git diff main --name-only)" ] || { echo "empty diff — park, do NOT merge"; exit 1; }
-        SAIL_REVIEW_CMD2="codex exec -m gpt-5.4-mini" \
+        SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c model_reasoning_effort=high" \
           python3 -m sail review --target . --diff main --run-dir "$RD" --dual-lens
         rc=$?
         { [ "$rc" -eq 0 ] && python3 -c 'import json,sys; from sail.review import dual_lens_status; sys.exit(0 if dual_lens_status(json.load(open(sys.argv[1])))=="ok" else 1)' "$RD/review.json"; } \
@@ -540,7 +540,7 @@ in both modes — there is no subagent path.
 > a human is watching the panes (Step 0).
 
 **Engine: `/sail` by default, `/ship` optional.** The teammate runs **`/sail`**
-(`SAIL_REVIEW_CMD2="codex exec -m gpt-5.4-mini" python3 -m sail run --diff main --dual-lens
+(`SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c model_reasoning_effort=high" python3 -m sail run --diff main --dual-lens
 --run-dir .surf/runs/<n>`) as its default engine — `--dual-lens` + `SAIL_REVIEW_CMD2` give the
 delegated build a real cross-family review via **CLI-subprocess lenses** (codex + `claude`), with
 no `advisor()` dependency, so the second lens is available even in a nested teammate (#74; see
