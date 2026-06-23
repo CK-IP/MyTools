@@ -93,17 +93,26 @@ Immediately after the mode is chosen — **and again at the top of every issue's
 (Step 7) — `/surf` prints a one-line **mode banner** so the active mode **and its
 decide-vs-ask behavior** are unmistakable with **zero user memory required**. The banner is
 a single mechanism whose purpose is to make the mode-dependent behavior visible at a glance;
-it states the **active mode** plus an **inline escape instruction on the same line** (the way
-to flip modes is always shown, never memorized — consistent with the no-flags principle):
+it states the **active mode**, the **active scope** (Step 4 #2 — `selected-set` or `whole-board`,
+so what the run will pick up is visible at a glance and "what's left" is never a surprise), plus
+an **inline escape instruction on the same line** (the way to flip modes is always shown, never
+memorized — consistent with the no-flags principle). **Scope is chosen at Step 5**, *after* this
+first banner, so the very first (startup) banner shows `scope: pending` and the scope token
+resolves to the chosen mode from the Step 5 selection onward — and at every Step 7 re-anchor (the
+banner's main reprint point), the resolved scope is always shown:
+
+In both templates below the renderer substitutes a **single resolved scope value** — exactly one
+of `selected-set` / `whole-board` (or `pending` before Step 5) — the same way it picks the AUTO vs
+SUPERVISED stanza; `scope: <…>` is a placeholder, not a literal menu of alternatives:
 
 - **Autonomous:**
-  > ▶ `/surf` running in **AUTO** — code decisions are made-and-logged, never waited on; an
-  > unresolved domain call gets a bounded window then best-bet-and-record. *Press Esc / type
-  > `supervise` to switch to checkpoints.*
+  > ▶ `/surf` running in **AUTO** · **scope: `<selected-set | whole-board | pending>`** — code
+  > decisions are made-and-logged, never waited on; an unresolved domain call gets a bounded
+  > window then best-bet-and-record. *Press Esc / type `supervise` to switch to checkpoints.*
 - **Supervised:**
-  > ▶ `/surf` running in **SUPERVISED** — domain calls pause for you (up to the Step 11
-  > deadline); code decisions still auto-proceed. *Press Esc / type `autonomous` to stop being
-  > asked.*
+  > ▶ `/surf` running in **SUPERVISED** · **scope: `<selected-set | whole-board | pending>`** —
+  > domain calls pause for you (up to the Step 11 deadline); code decisions still auto-proceed.
+  > *Press Esc / type `autonomous` to stop being asked.*
 
 The banner exists so a non-programmer never has to remember which mode is live or what it will
 and won't ask about. The load-bearing distinction it makes plain: **AUTO means "don't bug me
@@ -235,7 +244,14 @@ Ask, via `AskUserQuestion` and follow-ups, and record:
 
 1. **Mission** — one or two sentences: what is this run for? (e.g. "Clear the bug backlog on
    the sandbox repo before the demo.")
-2. **Issue selection** — the whole board or a subset (resolved in Step 5).
+2. **Issue selection + scope mode** — the whole board or a subset, **and** an explicit **scope
+   mode** that names how the run treats issues created *while it runs* (resolved in Step 5):
+   **(a) selected-set** — build only the issues picked here, then stop (this is the **default**,
+   and it preserves today's behavior — a fixed work list); **(b) whole-board** — build the whole
+   board *including issues filed during the run*, re-listing the board each pass until no
+   build-appropriate issue remains (the auto-pickup loop, Step 7c). This **names** a scope choice
+   that used to be improvised per run; it does not change what selected-set does — it adds the
+   whole-board auto-pickup behavior as an explicit, operator-chosen mode.
 3. **Ordering guidance (optional)** — any dependencies, sequencing constraints, or priorities
    the user already knows — especially **domain-knowledge ordering only the user can supply**
    (e.g. "the demo needs #50 working first", "#44 must land before #45"). This is *guidance*,
@@ -253,6 +269,14 @@ Ask, via `AskUserQuestion` and follow-ups, and record:
 Write the charter, show it to the user in plain language, and get a "yes, go" before starting
 the loop. The charter is the single source of intent — if it's wrong, fix it here, not mid-run.
 
+**Whole-board scope adds two charter fields (Step 7c anti-regress wiring).** When the scope mode
+is **whole-board**, the charter also records: (a) the **refinement label** that marks run-filed
+issues (default `surf-pilot`), and (b) the **generation-set file path**
+`.surf/created-issues-<charter-timestamp>.md`. **Once whole-board scope is chosen at Step 5**,
+`/surf` **creates that file empty** (and writes both fields back to the charter), so the
+issue-filing site (Step 7c) only ever appends to an existing file and Resume (Step 15) can locate
+it from the charter. Selected-set scope needs neither field.
+
 ---
 
 ## Issue selection
@@ -264,9 +288,12 @@ project board is in use, `gh project item-list`. Present them as a readable list
 title, and any dependency note from the charter).
 
 Then let the user pick interactively — **the whole board or a subset** — via `AskUserQuestion`
-(this is an interactive selection prompt, never a flag). Record the selected **issue set** in
-the charter. The *order* is not fixed here — **Step 5b** analyzes those issues and proposes the
-build sequence for approval.
+(this is an interactive selection prompt, never a flag). In the **same** interactive prompt,
+record the **scope mode** (Step 4 #2): **(a) selected-set** (build only the issues picked) or
+**(b) whole-board** (the auto-pickup loop — build the whole board *including issues filed during
+the run*). Record the selected **issue set** *and the scope mode* in the charter; the per-issue
+loop (Step 7) reads the scope mode to decide whether to re-scan the board each pass. The *order*
+is not fixed here — **Step 5b** analyzes those issues and proposes the build sequence for approval.
 
 ---
 
@@ -309,7 +336,11 @@ order. For the selected issues:
    re-present). Write the approved **ordered work list** — plus the per-issue dependency notes —
    to the charter. This recorded order is the single source the per-issue loop (Step 7) and
    dependent-issue handling (Step 10) read; re-anchoring at the top of every issue reads it from
-   the charter, so the analysis is done **once, up front**, not re-derived mid-run.
+   the charter, so the analysis is done **once, up front**, not re-derived mid-run. **Exception —
+   whole-board scope (Step 4 #2b):** when the run picks up issues filed *during* the run, this
+   same analysis re-runs as an **intake transaction** (Step 7c #3) over the remaining + newly-
+   admitted issues, rewriting the ordered work list in the charter. Selected-set mode keeps the
+   once-up-front guarantee; whole-board mode re-triages per intake because its work list is open.
 
 ---
 
@@ -505,6 +536,99 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
 
    A fresh teammate is spawned per issue (see Worker delegation); never carry one across issues.
    Any teammate not individually cleaned here is still swept at teardown by `TeamDelete` (Step 14b).
+
+### Step 7c: Auto-pickup — re-scan the board each pass until it is truly empty (whole-board mode)
+
+This step runs **only when the charter's scope mode (Step 4 #2 / Step 5) is (b) whole-board**. In
+**(a) selected-set** mode the work list is fixed at Step 5b and this step is skipped — the run ends
+when that set is exhausted. In **whole-board** mode the work list is *open*: the run keeps building
+until the board is **truly empty**, picking up issues filed *during* the run — but under an
+**anti-regress guard** so it provably terminates and never auto-builds work it shouldn't.
+
+After each issue resolves (and before declaring the board exhausted at Step 14), **re-scan the
+board**:
+
+```bash
+# Re-list open issues WITH labels hydrated — the anti-regress classifier (below) decides
+# build-vs-defer by label, so labels MUST be present BEFORE that decision, not fetched after.
+# A bare summary list is insufficient; --json …labels is REQUIRED.
+gh issue list --state open --json number,title,labels
+```
+
+The cheap list above **only enumerates** candidate issue numbers and their anti-regress labels —
+it is sufficient for the label half of the anti-regress guard (#1 below) but **not** for the
+build-appropriate / park-class / dependency decision, whose signals (domain, irreversibility,
+needs-validation, "depends on #N") live in the **body and comments**, not the title/labels. So
+**before deciding build-vs-defer for any candidate, hydrate it** with the Step 5b issue-view data
+**including comments** — `gh issue view <n> --json title,body,labels,comments` — since a
+dependency, irreversibility, or needs-validation signal can live in a comment, not just the
+body/labels. Then, for every open issue **not already in the work list**, decide build-vs-defer
+on the **hydrated** issue:
+
+1. **Anti-regress guard (load-bearing).** An issue the run *itself* filed as a refinement is
+   **deferred to the backlog — not auto-built — without explicit operator opt-in.** Two signals
+   classify it, used together:
+   - **Charter-named label** — the human-legible classifier: any issue carrying a refinement label
+     the charter names (default **`surf-pilot`**) is a run-filed refinement. This is read from the
+     hydrated `labels` field above.
+   - **Generation-set** — the provable-termination backstop: the set of issue **numbers the run
+     created this session**. Any issue in that set is treated as run-filed even if its label is
+     missing or mislabelled, so termination never depends on labelling discipline alone.
+
+   **Where the generation-set lives, and how it is populated (load-bearing — the guard is inert
+   without it).** The generation-set is a **durable file** under the gitignored `.surf/`, named by
+   the **charter timestamp** so it is resume-discoverable: `.surf/created-issues-<charter-timestamp>.md`
+   (one issue number per line). Its exact path is **recorded in the charter at creation**, so
+   Resume (Step 15) — which already restores the latest `.surf/charter-*` — locates the run's own
+   generation-set unambiguously (never a stale or merged set). **The orchestrator owns population
+   deterministically** — not the ephemeral per-issue teammate, which may die before it records
+   anything: **after each issue resolves, the orchestrator records into the generation-set every
+   issue the run filed that pass** (whether the orchestrator or a teammate ran the `gh issue
+   create`), **before the next board re-scan**. Step 7c reads the file each pass; **Resume
+   (Step 15) re-loads it before any re-scan** so a run cut off mid-board does not lose its
+   generation-set and re-admit its own refinements on resume. An **empty** file means the run has
+   filed nothing yet (the guard then rests on the charter-named label); a **missing** file on a
+   whole-board charter — which created it at scope-selection time — is **corruption, not an empty
+   set**: treat it as recovery (recompute the likely run-created issues and recreate the file), not
+   a silent disabling of the backstop.
+
+   A new issue matching **either** signal goes to the backlog (recorded for Step 14's wrap-up),
+   never into the auto-build queue.
+
+2. **Generation cap — bounded termination.** Issues filed by the run **do not re-enter the same
+   run** (the generation-set guarantees this). This **provably bounds the run's own
+   self-regeneration**: a board that regenerates *its own* refinements faster than it drains still
+   terminates, because each pass only admits issues from *outside* the run's generation set — the
+   refinement feedback loop cannot run forever. **Issues filed by *others* (users/bots) during the
+   run** are a separate, genuinely-open input: they are admitted (that is the point of whole-board
+   scope) and are bounded **not** by the generation-set but by the **cost/time cap** (a terminal
+   state the wrap-up records as cap-hit). So the proof is precise: self-created refinements
+   provably terminate; externally-created work terminates at the cap or when the board drains.
+
+3. **Re-triage on intake (same rules) — an explicit intake transaction.** A genuinely-new,
+   build-appropriate issue (not run-filed, not park-class) is **run through the same Step 5b
+   triage + ranking** as the original selection before it is built — appended issues are **not**
+   tacked onto the queue tail in arrival order, so the priority/dependency ordering "triaged by
+   the same rules" implies is preserved. Concretely, whole-board mode performs an **intake
+   transaction**: re-run the Step 5b analysis over **the not-yet-built remaining issues plus the
+   newly-admitted ones**, write the **revised ordered work list** (plus dependency notes) back to
+   the charter, and append the change to the decision-log (Step 12). This is the **one whole-board
+   exception** to Step 5b's "analysis is done once, up front" rule — which still holds for
+   selected-set mode; whole-board mode re-runs that same analysis per intake because its work list
+   is open by definition.
+
+4. **Park-class unchanged.** This step changes **nothing** about parking: a domain / irreversible /
+   needs-validation issue still **parks** (Step 9, Step 11b), never best-bet-built — auto-pickup only
+   decides *whether a new issue enters the build queue*, never relaxes the merge/park gate it then
+   faces.
+
+**Terminate when the board is truly empty.** "Truly empty" here means **no build-appropriate open
+issue remains outside the full anti-regress predicate** — i.e. outside **both** the run's
+generation-set **and** the charter-named refinement label(s) — not literally zero open issues. The
+loop ends when a re-scan finds no such issue — i.e. every remaining open issue is either run-filed
+(backlog, by either anti-regress signal), park-class (parked), or already resolved.
+Record the **termination cause** — **board-empty** (no build-appropriate issues left) vs a
+**cost/time cap** hit — for the wrap-up, so a capped run is never mistaken for a drained board.
 
 ---
 
@@ -721,7 +845,11 @@ unattended (more training → fewer windows → closer to fully autonomous).
 
 ### Step 12: Append-only journal + structured decision-log
 
-Every run keeps two artifacts under `.surf/` (gitignored):
+Every run keeps two artifacts under `.surf/` (gitignored). **One run timestamp, generated once at
+charter creation (Step 4), names all of the run's files** — `charter-<timestamp>.md`,
+`journal-<timestamp>.md`, `decision-log-<timestamp>.md`, and (whole-board scope)
+`created-issues-<timestamp>.md` — so a charter is unambiguously paired with its own journal and
+generation-set by the shared suffix (the revive watcher and Resume rely on this pairing):
 
 - **An append-only journal** at `.surf/journal-<timestamp>.md` — a running narrative of the run:
   which issue was picked, what `/sail` returned, what was merged or parked, and why. Append only;
@@ -787,6 +915,12 @@ user — who is a non-programmer, so keep it plain and concrete. Include:
   revert map is the single most important deliverable of the summary.
 - **What was parked and why.** Read from `.surf/parked-issues.md`: each parked issue, the reason it
   didn't go green, and the branch it lives on (`surf/<issue>`) so it can be picked up later.
+- **Active scope + what was deferred to the backlog.** State which **scope mode** was active
+  (`selected-set` or `whole-board`, Step 4 #2) and the **termination cause** (board-empty vs a
+  cost/time cap). In whole-board mode, list the explicit **issue numbers deferred to the backlog**
+  by the anti-regress guard (Step 7c) — run-filed refinements (e.g. `surf-pilot`-labelled) that were
+  *not* auto-built — so "what's left" is never a surprise and the next run reconciles cleanly by
+  re-listing `gh issue list --state open`.
 - **Open questions left.** Anything from `.surf/open-questions.md` that was decided-by-deadline
   (with the decision and that it's reversible) or is still genuinely open.
 - **Recommended next steps.** In plain language: what to look at first, what to re-run, what to
@@ -795,8 +929,13 @@ user — who is a non-programmer, so keep it plain and concrete. Include:
 Point the user at the journal and decision-log (`.surf/journal-<timestamp>.md`) for the full
 detail behind the summary.
 
-**Mark the run done.** When the board is exhausted — every selected issue has a terminal outcome
-(merged, parked, or won't-fix) — record that this run is finished so the auto-resume watcher
+**Mark the run done (scope-aware).** Exhaustion is defined **per the charter's scope mode**:
+in **selected-set** mode the board is exhausted when **every selected issue** has a terminal
+outcome (merged, parked, or won't-fix); in **whole-board** mode it is exhausted only when a
+**Step 7c re-scan finds no build-appropriate open issue remaining** (per Step 7c's termination
+test — outside **both** the generation-set and the charter-named refinement label(s)) *and* the
+run was not stopped by a cost/time cap or the user (a cap-hit run is **not** done — it is left
+resumable). When exhausted, record that this run is finished so the auto-resume watcher
 (Step 16) goes quiet: append a `- done: board exhausted <ISO>` line to the journal **and** write a
 marker file `.surf/<charter>-done`. The done-marker is the **authoritative quiet signal**: the
 work-remaining gate in Step 16 treats it as "nothing to resume," so the watcher stops reviving
@@ -866,17 +1005,24 @@ pick the board back up. Resume reads those, not chat history.
   a note rather than prompting — a permission prompt would hang an unattended resume forever. (The
   documented manual restart launches with the flag — see Step 16.)
 - **Re-entry reconstruction.** Read the latest `.surf/charter-*`, its journal, `.surf/decision-log-*`,
-  and `.surf/parked-issues.md`, then **cross-check against git**: for each issue the journal says was
+  `.surf/parked-issues.md`, **and — for a whole-board-scope run — the run's generation-set file
+  `.surf/created-issues-<charter-timestamp>.md`** (its path is recorded in the charter; load it
+  **before** any Step 7c re-scan so the run does not re-admit its own refinements). Then
+  **cross-check against git**: for each issue the journal says was
   merged, confirm `surf/<issue>` is actually merged into `main` (capture the SHA); for each in-flight
   issue, check whether the `surf/<issue>` branch exists. From that, rebuild the merged-issue→SHA map,
-  the parked set, and the **next unfinished issue**. Append `- ↺ resume <ISO>` to the journal
+  the parked set, the **generation-set + deferred-backlog set** (whole-board mode), and the **next
+  unfinished issue**. Append `- ↺ resume <ISO>` to the journal
   (mirroring `/sail`'s decision-log resume marker), then re-enter the Step 7 per-issue loop at the
   next unfinished issue — **without** re-charter. As in a fresh run, write `.surf/active` with this
   process's PID before re-entering the loop, and remove it on clean exit (this is the live-session
   marker the revive watcher checks; see Step 16).
-- **Self-heal an already-exhausted board.** If reconstruction finds the board is **already
-  exhausted** — no remaining unbuilt issues, every selected issue at a terminal outcome — write the
-  done-marker (`.surf/<charter>-done` and a `- done: board exhausted <ISO>` journal line) and **exit
+- **Self-heal an already-exhausted board (scope-aware).** If reconstruction finds the board is
+  **already exhausted** — for **selected-set** scope, every selected issue at a terminal outcome;
+  for **whole-board** scope, a Step 7c re-scan (with the generation-set loaded) finds no
+  build-appropriate open issue remaining (per Step 7c's termination test — outside both the
+  generation-set and the charter-named refinement label(s)) — write the done-marker
+  (`.surf/<charter>-done` and a `- done: board exhausted <ISO>` journal line) and **exit
   cleanly without re-entering the loop**. This covers a crash that happened after the board was done
   but before Wrap-up (Step 14) wrote the marker: the simplified Step 16 gate (charter present + no
   done-marker → work remains) would otherwise keep treating the run as revivable, so writing the

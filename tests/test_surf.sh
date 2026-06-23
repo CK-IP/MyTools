@@ -267,6 +267,145 @@ grep -qiE "guess .{0,12}(at )?my domain|guess at my domain" "$TARGET" && pass "n
 # D9. An irreversible / no-defensible-default domain call is parked, not guessed
 grep -qiE 'irreversible|no defensible default' "$TARGET" && pass "irreversible-domain-call parks present" || fail "irreversible-domain park missing"
 
+# --- #86: auto-pickup until the board is truly empty + scope toggle + anti-regress guard ---
+
+# Extract the Step 7c (auto-pickup) section once; several assertions bind to it so a keyword
+# living elsewhere in the doc can't satisfy a Step-7c-specific contract.
+STEP7C=$(awk '/### Step 7c:/{s=1} /^## Worker delegation/{s=0} s' "$TARGET")
+
+# S1. Scope choice named explicitly at charter time (the policy is named, not improvised per run)
+grep -qiE 'scope (mode|choice|toggle)' "$TARGET" && pass "scope choice named" || fail "scope choice naming missing"
+grep -qiE 'selected.set|only the selected' "$TARGET" && pass "scope (a) selected-set named" || fail "scope (a) selected-set missing"
+grep -qiE 'whole.board.*(filed during the run|including .*run)|including issues filed during the run' "$TARGET" && pass "scope (b) whole-board-including-run-filed named" || fail "scope (b) whole-board missing"
+
+# S2. Auto-pickup re-scan loop in whole-board mode: re-list each pass, terminate when truly empty
+grep -qiE 're-?scan|re-?list the board each pass|re-list .*open' "$TARGET" && pass "re-scan-each-pass loop present" || fail "re-scan loop missing"
+grep -qiE 'truly empty|board is (truly )?empty|until the board is empty' "$TARGET" && pass "terminate-when-truly-empty present" || fail "terminate-when-empty missing"
+# Re-scan must hydrate labels BEFORE the build/defer decision (resolves the HIGH plan risk).
+# Bind to Step 7c AND require the hydrated command to appear before the build-vs-defer decision text.
+printf '%s' "$STEP7C" | grep -qF 'gh issue list --state open --json number,title,labels' && pass "Step 7c re-scan hydrates labels (--json …labels)" || fail "Step 7c label-hydration command missing"
+printf '%s' "$STEP7C" | awk '/gh issue list --state open --json number,title,labels/{h=NR} /build-?vs-?defer|build-vs-defer|decide build/{if(h && NR>=h) d=1} END{exit d?0:1}' && pass "label-hydration precedes the build/defer decision" || fail "label-hydration not ordered before build/defer decision"
+
+# S3. Anti-regress guard (load-bearing): run-filed refinements go to backlog, not auto-build
+grep -qiE 'anti-regress' "$TARGET" && pass "anti-regress guard named" || fail "anti-regress guard missing"
+grep -qF 'surf-pilot' "$TARGET" && pass "charter-named refinement label (surf-pilot) pinned" || fail "charter-named label missing"
+grep -qiE 'backlog' "$TARGET" && pass "run-filed refinements routed to backlog" || fail "backlog routing missing"
+grep -qiE 'not (be )?auto-built|never auto-built|without explicit opt-in' "$TARGET" && pass "not-auto-built-without-opt-in pinned" || fail "opt-in gate missing"
+
+# S4. Generation-set backstop guarantees termination: the load-bearing clause is that issues
+# filed by the run do NOT re-enter the same run. Bind to Step 7c and require that specific clause
+# (a bare 'generation-set' keyword elsewhere must not satisfy the termination guarantee).
+printf '%s' "$STEP7C" | grep -qiE 'generation.set' && printf '%s' "$STEP7C" | grep -qiE 'do not re-enter|don.t re-enter|not re-enter the same run' && pass "generation-set re-entry/termination clause pinned in Step 7c" || fail "generation-set re-entry clause missing"
+
+# S5. New build-appropriate issues are re-triaged on intake (same rules / Step 5b), not tacked on
+grep -qiE 'triaged by the same rules|re-triage.*intake|same triage|run through the same' "$TARGET" && pass "re-triage-on-intake pinned" || fail "re-triage-on-intake missing"
+
+# S6. Park-class unchanged: domain/irreversible/needs-validation still park, never best-bet-built
+grep -qiE 'park-class (is )?unchanged|park.class .*unchanged|needs-validation' "$TARGET" && pass "park-class-unchanged pinned" || fail "park-class-unchanged missing"
+
+# S7. Wrap-up reports the active scope, termination cause, and deferred backlog issue numbers
+WRAPUP=$(awk '/### Step 14:/{s=1} s&&/### Step 14b:/{s=0} s' "$TARGET")
+printf '%s' "$WRAPUP" | grep -qiE 'active scope|scope (that )?was active|which scope' && pass "wrap-up reports active scope" || fail "wrap-up active-scope report missing"
+printf '%s' "$WRAPUP" | grep -qiE 'issue numbers deferred to the backlog' && pass "wrap-up lists explicit deferred backlog issue numbers" || fail "wrap-up deferral issue-numbers list missing"
+
+# S8. Mode banner also surfaces the active scope (so what's left is never a surprise)
+grep -qiE 'banner.*scope|scope.*banner|states.*active scope' "$TARGET" && pass "banner surfaces active scope" || fail "banner scope-surfacing missing"
+# S8b. The scope token is in the actual banner TEMPLATES, not only the intro prose (lens1 fix).
+# Bind to the Step-0b blockquotes so a regression that drops it from the rendered banner fails.
+AUTO_B=$(awk '/### Step 0b:/{s=1} /^## Start gate/{s=0} s&&/\*\*Autonomous:\*\*/{f=1} s&&/\*\*Supervised:\*\*/{f=0} f' "$TARGET")
+SUP_B=$(awk '/### Step 0b:/{s=1} /^## Start gate/{s=0} s&&/\*\*Supervised:\*\*/{f=1} s&&/^The banner exists/{f=0} f' "$TARGET")
+printf '%s' "$AUTO_B" | grep -qiE 'scope:' && pass "AUTO banner template carries scope token" || fail "AUTO banner scope token missing"
+printf '%s' "$SUP_B" | grep -qiE 'scope:' && pass "SUPERVISED banner template carries scope token" || fail "SUPERVISED banner scope token missing"
+# S8c. Scope is chosen at Step 5 (after the first banner) — startup banner shows pending (ordering fix)
+grep -qiE 'scope is chosen at Step 5|shows .?pending.? until Step 5|scope: pending' "$TARGET" && pass "banner scope-pending ordering pinned" || fail "banner scope-ordering missing"
+
+# S9. Generation-set is DEFINED: durable storage + populated at the issue-filing site (HIGH redteam fix)
+grep -qF '.surf/created-issues' "$TARGET" && pass "generation-set durable storage path pinned" || fail "generation-set storage path missing"
+grep -qiE 'issue-filing|appends? the new issue number' "$TARGET" && pass "generation-set populated at issue-filing site" || fail "generation-set population instruction missing"
+
+# S10. Anti-regress guard ties BOTH signals together (label + generation-set), with an OR/either
+# rule (matching EITHER signal defers). Reuse the STEP7C block (no re-extract). Guard against a
+# wrong boolean: require the 'either' rule, not 'both signals'/'all signals'.
+printf '%s' "$STEP7C" | grep -qiE 'matching .{0,6}either.{0,8}signal' && pass "anti-regress: matching either signal defers" || fail "anti-regress either-signal rule missing"
+printf '%s' "$STEP7C" | grep -qiE 'matching .{0,6}both signals|all signals' && fail "anti-regress wrongly requires BOTH/ALL signals (should be either)" || pass "anti-regress does not require both/all signals"
+printf '%s' "$STEP7C" | grep -qF 'surf-pilot' && printf '%s' "$STEP7C" | grep -qiE 'generation.set' && pass "anti-regress ties label AND generation-set" || fail "anti-regress both-signals tie missing"
+
+# S11. Re-triage intake is an explicit transaction reconciled with Step 5b's once-up-front rule
+grep -qiE 'intake transaction' "$TARGET" && pass "intake transaction named" || fail "intake transaction missing"
+grep -qiE 'whole-board (exception|mode re-runs)|exception .* whole-board' "$TARGET" && pass "Step 5b once-up-front whole-board exception reconciled" || fail "Step 5b reconciliation missing"
+
+# S12. Wrap-up records the termination cause (board-empty vs cost/time cap) (lens1+lens2 fix)
+printf '%s' "$WRAPUP" | grep -qiE 'termination cause|board-empty|cost/time cap' && pass "wrap-up records termination cause" || fail "wrap-up termination-cause missing"
+
+# S13. Resume (Step 15) loads the generation-set before any re-scan (HIGH lens2/redteam fix)
+STEP15=$(awk '/### Step 15:/{s=1} /### Step 16:/{s=0} s' "$TARGET")
+printf '%s' "$STEP15" | grep -qF '.surf/created-issues-' && pass "Step 15 loads the generation-set file" || fail "Step 15 generation-set load missing"
+printf '%s' "$STEP15" | grep -qiE 'before.{0,4}any.{0,20}re-?scan' && pass "generation-set loaded before re-scan on resume" || fail "resume load-before-rescan ordering missing"
+
+# S14. Exhaustion / done-marker is scope-aware (selected-set vs whole-board re-scan) (HIGH lens2 fix)
+grep -qiE 'mark the run done \(scope-aware\)|exhaustion is defined .*per the charter.s scope|scope-aware' "$TARGET" && pass "done-marker exhaustion is scope-aware" || fail "scope-aware exhaustion missing"
+
+# S15. Step 7c hydrates each candidate (body AND comments) BEFORE the build-vs-defer decision — the
+# cheap list only enumerates; build-appropriate/park-class signals live in body/comments (HIGH redteam).
+# Require comments in the hydration command (a signal can live in a comment).
+printf '%s' "$STEP7C" | grep -qF 'gh issue view <n> --json title,body,labels,comments' && pass "Step 7c hydration fetches comments" || fail "Step 7c hydration omits comments"
+# Order-sensitive: the per-candidate `gh issue view` hydration must precede the actual
+# 'decide build-vs-defer on' decision instruction (a keyword-anywhere grep would miss a reordering).
+# Anchor the decision on 'decide build-vs-defer' (the final decision step), NOT 'deciding'
+# (the earlier hydrate-first directive), so the hydration command must precede the real decision.
+printf '%s' "$STEP7C" | awk '/gh issue view <n> --json title,body,labels,comments/{h=NR} /decide build-?vs-?defer/{if(h && NR>=h) d=1} END{exit d?0:1}' && pass "Step 7c hydration precedes the build/defer decision" || fail "Step 7c hydrate-before-decision ordering missing"
+
+# S16. The revive watcher's journal-done check is scoped to the LATEST charter's journal, not a
+# global grep across all journals (#86 — an old completed run must not silence a new charter).
+RESUME_SH="$REPO_ROOT/config/surf-resume.sh"
+[ -f "$RESUME_SH" ] && grep -qF 'journal-${charter_ts}.md' "$RESUME_SH" && pass "watcher journal-done check scoped to latest charter's journal" || fail "watcher charter-scoped journal-done check missing"
+[ -f "$RESUME_SH" ] && ! grep -qE 'grep -rqsiE .*journal-\*\.md' "$RESUME_SH" && pass "watcher no longer greps journals globally for done:" || fail "watcher still greps journals globally"
+# S16b. BEHAVIORAL: source the watcher (SURF_RESUME_DIR override + sourcing guard make this possible)
+# and prove work_remains() is charter-scoped — an OLD completed run's journal must NOT silence a
+# NEWER unfinished charter, while the latest charter's OWN done journal still silences (#86 core fix).
+s16b() {
+  local tmpw; tmpw="$(mktemp -d)"
+  export SURF_RESUME_DIR="$tmpw" SURF_RESUME_LOG="$tmpw/log"
+  : > "$tmpw/charter-20260101T000000.md"; printf -- '- done: board exhausted\n' > "$tmpw/journal-20260101T000000.md"
+  : > "$tmpw/charter-20260202T000000.md"; printf -- '- start\n' > "$tmpw/journal-20260202T000000.md"
+  touch -t 202601010000 "$tmpw"/charter-20260101T000000.md "$tmpw"/journal-20260101T000000.md
+  touch -t 202602020000 "$tmpw"/charter-20260202T000000.md "$tmpw"/journal-20260202T000000.md
+  # shellcheck source=/dev/null
+  source "$RESUME_SH"
+  work_remains; local r1=$?               # newer charter unfinished → expect 0 (work remains)
+  printf -- '- done: board exhausted\n' >> "$tmpw/journal-20260202T000000.md"
+  work_remains; local r2=$?               # latest charter's own journal done → expect 1 (quiet)
+  rm -rf "$tmpw"
+  [ "$r1" -eq 0 ] && [ "$r2" -eq 1 ]
+}
+( s16b ) && pass "watcher work_remains() charter-scoped (behavioral: old done journal does not silence new charter)" || fail "watcher charter-scoping behavioral test failed"
+
+# S16c. Latest charter is chosen by the SORTABLE timestamp suffix, not mtime — a `touch` on an OLD
+# (done) charter must not make it look newest and silence a genuinely-newer unfinished run (redteam fix).
+[ -f "$RESUME_SH" ] && ! grep -qE 'mt="\$\(mtime_of "\$charter"\)"' "$RESUME_SH" && pass "watcher charter selection no longer uses mtime" || fail "watcher still selects charter by mtime"
+s16c() {
+  local tmpw; tmpw="$(mktemp -d)"
+  export SURF_RESUME_DIR="$tmpw" SURF_RESUME_LOG="$tmpw/log"
+  : > "$tmpw/charter-20260101T000000.md"; printf -- '- done: board exhausted\n' > "$tmpw/journal-20260101T000000.md"
+  : > "$tmpw/charter-20260202T000000.md"; printf -- '- start\n' > "$tmpw/journal-20260202T000000.md"
+  # INVERT mtimes: the OLD (done) charter is touched MORE recently than the NEW unfinished one.
+  touch -t 202602020000 "$tmpw"/charter-20260202T000000.md "$tmpw"/journal-20260202T000000.md
+  touch -t 202612310000 "$tmpw"/charter-20260101T000000.md "$tmpw"/journal-20260101T000000.md
+  # shellcheck source=/dev/null
+  source "$RESUME_SH"
+  work_remains; local r=$?    # lexical selection picks 20260202 (unfinished) → expect 0 (work remains)
+  rm -rf "$tmpw"
+  [ "$r" -eq 0 ]
+}
+( s16c ) && pass "watcher selects latest charter by timestamp suffix even when mtimes are inverted" || fail "watcher mtime-inversion regression failed"
+
+# S17. Generation-set population is owned by the durable orchestrator, not the ephemeral teammate (lens1 fix)
+printf '%s' "$STEP7C" | grep -qiE 'orchestrator owns population|orchestrator records into the generation-set' && pass "orchestrator owns generation-set population" || fail "orchestrator-owns-generation-set missing"
+# S18. A missing generation-set file on a whole-board charter is recovery/corruption, not a silent empty set (lens2 fix)
+printf '%s' "$STEP7C" | grep -qiE 'corruption, not an empty' && pass "missing generation-set treated as recovery, not empty" || fail "missing-file recovery handling missing"
+# S19. Termination proof is narrowed to self-created refinements; external work bounded by the cap (lens2 fix)
+printf '%s' "$STEP7C" | grep -qiE 'self-created refinements provably terminate|filed by \*?others\*?' && pass "termination proof narrowed (self vs external)" || fail "termination-proof narrowing missing"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 

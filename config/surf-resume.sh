@@ -28,7 +28,7 @@ MAX_RUN_AGE="${SURF_RESUME_MAX_RUN_AGE:-7200}"       # a lockdir older than 2h i
 SESSION="${SURF_RESUME_SESSION:-surf}"               # the canonical named tmux session
 LOG="${SURF_RESUME_LOG:-/tmp/surf-resume.log}"
 
-SURF_DIR="$REPO_ROOT/.surf"
+SURF_DIR="${SURF_RESUME_DIR:-$REPO_ROOT/.surf}"   # overridable so the functional test can point at a fixture dir
 RESUME_AFTER="$SURF_DIR/resume-after"
 LOCKDIR="$SURF_DIR/resume.lock"
 ACTIVE="$SURF_DIR/active"
@@ -67,17 +67,18 @@ mtime_of() {
 }
 
 # Is there real unfinished board work? The done-marker is the authoritative "quiet"
-# signal: a charter exists (newest by mtime) AND there is no done-marker → work remains.
-# A finished or abandoned run is silenced by writing the done-marker at Wrap-up (or by a
-# self-healing resume that finds the board already exhausted); see surf.md Steps 14–16.
+# signal: a charter exists (latest by its sortable `<timestamp>` suffix) AND there is no
+# done-marker → work remains. A finished or abandoned run is silenced by writing the done-marker at
+# Wrap-up (or by a self-healing resume that finds the board already exhausted); see surf.md Steps 14–16.
 work_remains() {
-  local charter latest_charter="" newest=0 mt
+  # Pick the latest charter by the SORTABLE `charter-<timestamp>.md` suffix, not mtime: timestamps
+  # are ISO-like (lexical order == chronological), and a `touch` on an OLD charter must not make it
+  # look newest and silence a genuinely-newer unfinished run (#86). The paired journal/done-marker
+  # are then derived from this charter's own suffix below.
+  local charter latest_charter=""
   shopt -s nullglob
   for charter in "$SURF_DIR"/charter-*.md; do
-    mt="$(mtime_of "$charter")"
-    [ -n "$mt" ] || mt=0
-    if [ "$mt" -ge "$newest" ]; then
-      newest="$mt"
+    if [ -z "$latest_charter" ] || [ "$charter" \> "$latest_charter" ]; then
       latest_charter="$charter"
     fi
   done
@@ -91,9 +92,15 @@ work_remains() {
     return 1
   fi
 
-  # A `done:` line in any journal also marks the board exhausted.
-  if grep -rqsiE '^- done:|done: board exhausted' "$SURF_DIR"/journal-*.md 2>/dev/null; then
-    log "journal done: line present — nothing to revive"
+  # A `done:` line in the LATEST charter's OWN journal also marks the board exhausted.
+  # Scope this to the journal paired with the latest charter (same `<timestamp>` suffix:
+  # `charter-<timestamp>.md` ↔ `journal-<timestamp>.md`); a GLOBAL grep across all journals
+  # would let an OLD completed run's journal silence a NEWER unfinished charter (#86).
+  local charter_ts latest_journal
+  charter_ts="$(basename "$latest_charter" .md)"; charter_ts="${charter_ts#charter-}"
+  latest_journal="$SURF_DIR/journal-${charter_ts}.md"
+  if [ -f "$latest_journal" ] && grep -qsiE '^- done:|done: board exhausted' "$latest_journal" 2>/dev/null; then
+    log "journal done: line present for $(basename "$latest_journal") — nothing to revive"
     return 1
   fi
 
@@ -286,4 +293,8 @@ main() {
   # lockdir + tmp removed by the EXIT trap.
 }
 
-main "$@"
+# Run main only when executed directly — sourcing (e.g. the functional test) gets the functions
+# without firing the watcher.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
