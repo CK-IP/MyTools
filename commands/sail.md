@@ -230,7 +230,7 @@ SAIL_TIDINESS_MIN_LINES=40 \
 
 ### Stage 4 — Commit (closing the opening bookend, #65)
 
-**The commit is gated strictly on GREEN.** Only after the Stage 3 convergence loop reports green — the final `sail run` exited **0** (0 CRITICAL / 0 HIGH and no unmet AC) — commit the change. **Never commit on a red review.** When Stage 0.5 chose to isolate or to stay on a feature branch (`COMMIT=yes`), commit on the branch; when it granted a risk-gated in-place skip (`COMMIT=no`), do not auto-commit (the operator owns the tiny inline fix).
+**The commit is gated strictly on convergence safety.** Normally that means green: only after the Stage 3 convergence loop reports green — the final `sail run` exited **0** (0 CRITICAL / 0 HIGH and no unmet AC) — commit the change. The one exception is `proceed-hardening`: the red-but-eligible materiality floor may also commit after the deferred follow-ups are logged, but only when the deterministic audit is green and the independent materiality judge has said each current-round deferred blocking finding is immaterial. **Never commit on a red review except that explicit hardening exception.** When Stage 0.5 chose to isolate or to stay on a feature branch (`COMMIT=yes`), commit on the branch; when it granted a risk-gated in-place skip (`COMMIT=no`), do not auto-commit (the operator owns the tiny inline fix).
 
 ```bash
 # Only reachable after the convergence loop confirms `sail run ... ` exited 0.
@@ -324,24 +324,51 @@ infinite tail otherwise). Green is done.
 
 ```bash
 python3 -m sail converge --rc "$RC" --round "$ROUND" --run-dir "$SESSION_DIR"   # default --max-rounds 3
-# prints exactly one of: proceed | revise | park
+# prints exactly one of: proceed | revise | park | proceed-hardening
 ```
 
-- `proceed` — `rc == 0`; green, stop (rule **b**: never chase non-blocking LOWs past green).
-- `revise` — `rc != 0` and under the cap; fix the surfaced blocking findings and re-run.
-- `park`   — `rc != 0` at the **3-round cap**; this is genuine non-convergence — **PARK to the WIP
-  handoff** for a human rather than loop forever. The 3-round cap + PARK is the backstop; any
-  non-zero rc (1, 127, …) is treated uniformly as "not green."
+- `converged-green` → `proceed` — `rc == 0`; green, stop (rule **b**: never chase non-blocking
+  LOWs past green).
+- `genuine-oscillation` → `park` — a blocking finding was dispositioned `rejected` or `deferred`
+  in a prior round and reappears by id in the current round; **PARK to the WIP handoff** rather
+  than loop forever.
+- `never-dry-hardening` → `proceed-hardening` — `rc != 0`, the deterministic audit is clean,
+  `review.json` is current for the exact `target` / `diff_ref` / `diff_hash` / `plan_hash` /
+  `round`, tidiness has no blocking list, every AC is `met`, and every blocking finding is
+  dispositioned `deferred` in this round. Materiality is then decided by
+  `SAIL_MATERIALITY_CMD`, an independent cross-family second opinion that reads the finding plus
+  the full diff and answers material / immaterial; default to material and fail closed.
+  Legitimately-skipped deterministic tool gates do not block the hardening floor (assurance then
+  rests on the clean+fresh review, the met ACs, and the independent cross-family judge); a missing
+  or malformed run-state fails closed. The driver
+  logs the deferred ids as follow-ups, then commits the red-but-eligible hardening change instead
+  of parking it. With no backend, the floor never fires.
+- `revise` — `rc != 0` and none of the named stop reasons above apply; fix the surfaced blocking
+  findings and re-run. The 3-round cap remains the backstop for true non-convergence.
 
-- Guard the red-path only: when `revise` would apply, `sail converge` also checks the shared
-  `decision-log.md`/`review.json` run-dir for a blocking finding that was already dispositioned as
-  `rejected` or `deferred`. If that exact finding id re-appears in the current round, the oracle
-  upgrades to `park` and emits `non-convergence: blocking finding re-flagged after rejected/deferred
-  disposition: <sorted ids>`. This check runs **before** the driver records the current round's
-  new dispositions, so `decision-log.md` only contains prior-round resolutions at converge time.
-  Limitation: matching is by exact finding id only, so line drift, severity/category changes, and
-  cross-lens re-flags are not caught here; the 3-round PARK cap remains the backstop for those
-  cases.
+- **Disposition-before-converge ordering is load-bearing.** The driver records current-round
+  dispositions before it asks the oracle. The oracle then reads the shared `decision-log.md`/
+  `review.json` run-dir in two different ways: current-round dispositions for the hardening floor,
+  and strictly prior-round dispositions for oscillation. That split is the sequencing primitive
+  that keeps the two decisions distinct.
+
+- **Deferred-only rule.** Hardening counts only when the current round recorded `deferred`. A
+  `rejected` finding is not follow-up work, and an `addressed` finding is a fix already done.
+
+- **The deterministic audit is the safety floor.** The hardening floor stays shut unless deterministic gates are green, `review.json` is current for the exact `target` / `diff_ref` / `diff_hash` / `plan_hash` / `round`, tidiness has no blocking list, every AC is `met`, and the current round has current-round `deferred` dispositions for every blocking finding. No backend, backend error, non-zero backend rc, malformed JSON, missing `material` field, or any uncertainty means the floor stays shut. The judge reasons about whether the finding pertains to the edited change itself, not whether a path string overlaps.
+
+- **Lens B — independent judgment.** `SAIL_MATERIALITY_CMD` is the sole materiality decider. It must be a different model family than `SAIL_REVIEW_CMD` / `SAIL_REVIEW_CMD2` (#83) so it does not rubber-stamp the review lens. It reads the blocking finding plus the full diff (`git -C target diff diff_ref`) and answers whether the finding is material in the change itself or immaterial adjacent hardening. Default to material and fail closed. With no backend, the floor never fires and the driver falls back to revise / park as before.
+
+- **Path/location classification is intentionally removed.** The old path-overlap heuristic was fragile and fail-opened; the safety decision now uses the audit plus the independent judge only. A beyond-diff caller break is still a real defect to FIX (`addressed`), never defer. If an AC is stuck `unknown` (#81) the floor stays conservatively shut.
+
+- **What `proceed-hardening` does.** On that result, the driver files each stderr-listed deferred
+  finding as a follow-up, then commits the branch. The red review is intentional and auditable, not
+  a free pass.
+
+Together: `converged-green` and `genuine-oscillation` are the two park/stop reasons for ordinary
+convergence, while `never-dry-hardening` is the red-but-eligible commit exception. `sail converge`
+still fails closed on malformed or mismatched audit state; the 3-round PARK cap remains the backstop
+for true non-convergence on any path not covered by those named reasons.
 
 Together: **(a)** stops the driver burning rounds on a risk the plan already resolves, **(b)** stops
 it chasing LOWs past green, and **(c)** the `sail converge` oracle + 3-round-cap PARK is the

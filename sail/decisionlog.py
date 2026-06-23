@@ -113,17 +113,18 @@ class DecisionLog:
     def plan_marker(self, summary):
         self._append_marker(f"- plan: {_sanitize_text(summary)}")
 
-    def finding_resolution(self, finding_id, disposition, rationale):
+    def finding_resolution(self, finding_id, disposition, rationale, round=None):
         # Per-finding resolution log (#47): records the driver's disposition of one review
         # finding across the convergence loop. disposition is expected to be one of
         # addressed|deferred|rejected, but is recorded verbatim (sanitized) — never crashes
         # on an unexpected value.
+        suffix = f" [round={round}]" if round is not None else ""
         self._append_marker(
             f"- resolution: [{_sanitize_text(finding_id)}] "
-            f"{_sanitize_text(disposition)} — {_sanitize_text(rationale)}"
+            f"{_sanitize_text(disposition)} — {_sanitize_text(rationale)}{suffix}"
         )
 
-    def read_resolutions(self):
+    def read_resolutions(self, round=None, before=None):
         # Read the resolution trail back into a dict keyed by finding id. Later markers
         # override earlier ones so the last recorded disposition wins.
         out = {}
@@ -145,5 +146,20 @@ class DecisionLog:
                 continue
             disposition = remainder[:split_at]
             rationale = remainder[split_at + len(sep) :]
-            out[finding_id] = {"disposition": disposition, "rationale": rationale}
+            parsed_round = None
+            round_match = re.match(r"^(.*) \[round=(\d+)\]$", rationale)
+            if round_match:
+                rationale = round_match.group(1)
+                parsed_round = int(round_match.group(2))
+            if round is not None:
+                if parsed_round != round:
+                    continue
+            elif before is not None:
+                if parsed_round is not None and parsed_round >= before:
+                    continue
+            out[finding_id] = {
+                "disposition": disposition,
+                "rationale": rationale,
+                "round": parsed_round,
+            }
         return out
