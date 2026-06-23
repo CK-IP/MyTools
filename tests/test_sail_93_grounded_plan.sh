@@ -15,6 +15,12 @@ export PATH="$HOME/Library/Python/3.9/bin:$PATH"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cd "$REPO_ROOT"
 
+# Hermetic (.ship/domain.md): a real shell exports SAIL_* codex knobs (settings.json) — the
+# grounded backend (SAIL_PLAN_GROUNDED_CMD) and the plan adversary (SAIL_PLAN_CMD2) would invoke
+# LIVE codex and flake the risky-spec subtests. Subtests that need a backend set it explicitly in
+# their command prefix; clear everything else so the test controls its own backends.
+unset "${!SAIL_@}"
+
 fail() { echo "FAIL: $*"; exit 1; }
 
 TARGET="$WORK/target"; mkdir -p "$TARGET"
