@@ -25,6 +25,7 @@ import subprocess
 
 from sail.decisionlog import DecisionLog
 from sail import review as review_mod
+from sail import codexlatch
 
 
 _DISPOSITIONED = {"rejected", "deferred"}
@@ -109,6 +110,7 @@ def finding_is_immaterial(finding, run_dir, target):
             cwd=os.path.abspath(target),
             timeout=60,
         )
+        codexlatch.observe(argv, backend.returncode, backend.stderr)
         if backend.returncode != 0:
             return False
 

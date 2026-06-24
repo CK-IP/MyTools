@@ -4,13 +4,13 @@ import hashlib
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import uuid
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 import tempfile
 
+from sail import codexlatch
 from sail.decisionlog import DecisionLog
 
 DEFAULT_BACKEND = ["claude", "-p"]
@@ -298,15 +298,7 @@ def tidiness_min_lines():
 
 
 def _argv_runnable(argv):
-    if not argv:
-        return False
-    prog = argv[0]
-    if shutil.which(prog) is not None:
-        return True
-    # An explicit path must be an executable file — a non-executable file or a
-    # directory is not a runnable backend. Without this, subprocess.run() crashes
-    # with a traceback instead of the caller's clean fail-closed / skip path.
-    return os.path.isfile(prog) and os.access(prog, os.X_OK)
+    return codexlatch.runnable(argv)
 
 
 def backend_available():
@@ -800,7 +792,9 @@ def _invoke(prompt, argv=None, cwd=None):
         # (bad shebang, missing interpreter, noexec mount, removed after the probe).
         # Signal an unusable backend (non-zero rc) so callers fail closed via the
         # backend_error path instead of crashing with a traceback.
+        codexlatch.observe(argv, 127, f"backend exec failed: {exc}")
         return 127, "", f"backend exec failed: {exc}"
+    codexlatch.observe(argv, result.returncode, result.stderr)
     return result.returncode, result.stdout, result.stderr
 
 
