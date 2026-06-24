@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import uuid
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
+from sail import codexlatch
 from sail.decisionlog import DecisionLog
 
 DEFAULT_BACKEND = ["claude", "-p"]
@@ -155,12 +155,7 @@ def _grounded_backend():
 
 
 def _argv_runnable(argv):
-    if not argv:
-        return False
-    prog = argv[0]
-    if shutil.which(prog) is not None:
-        return True
-    return os.path.isfile(prog) and os.access(prog, os.X_OK)
+    return codexlatch.runnable(argv)
 
 
 def backend_available():
@@ -434,7 +429,9 @@ def _invoke(prompt, argv=None, cwd=None):
     try:
         result = subprocess.run(argv, input=prompt, capture_output=True, text=True, cwd=cwd, env=env)
     except OSError as exc:
+        codexlatch.observe(argv, 127, f"backend exec failed: {exc}")
         return 127, "", f"backend exec failed: {exc}"
+    codexlatch.observe(argv, result.returncode, result.stderr)
     return result.returncode, result.stdout, result.stderr
 
 

@@ -6,6 +6,7 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+export SAIL_STATE_DIR="$WORK/sail-state"   # isolate the #107 codex-down latch to this test's throwaway dir
 cd "$REPO_ROOT"
 
 fail() { echo "FAIL: $*"; exit 1; }
