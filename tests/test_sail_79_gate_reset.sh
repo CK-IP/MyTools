@@ -12,10 +12,20 @@ cd "$REPO_ROOT"
 # Hermetic (.ship/domain.md #102): a real shell exports SAIL_* codex knobs (settings.json);
 # clear them so each subtest controls its own backend (subtests set theirs via command prefix).
 unset "${!SAIL_@}"
+# #105 made gate reset PER-GATE: a same-scope diff move resets only the gates whose dependency
+# file-types changed (the rest are reused). #79's regression target is unchanged — a RESET gate
+# must get a fresh, non-colliding seq. To keep that invariant directly testable, pin the registry
+# to gates a .py change affects (ruff + pytest), so this test's working-tree .py edit still resets
+# EVERY gate here. The per-gate reuse behavior itself lives in test_sail_105_gate_reuse.sh.
+export SAIL_CHECKERS=ruff,pytest
 
 mk_target() {  # $1 = dir — a git repo with mod.py committed clean, then a working-tree change
   local d="$1"; mkdir -p "$d"
   printf 'print("hi")\n' > "$d/mod.py"
+  # #105: real repos gitignore gate side-artifacts (.coverage from the pytest gate); without this
+  # the untracked .coverage is prestaged into the next round's diff, perturbing the changed-file
+  # set. Ignore it so this test isolates the seq-reset invariant, not artifact churn.
+  printf '.coverage\n__pycache__/\n' > "$d/.gitignore"
   git -C "$d" init -q
   git -C "$d" config user.email t@t.t
   git -C "$d" config user.name t

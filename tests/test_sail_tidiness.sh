@@ -29,6 +29,11 @@ TIDY_MOCK="$WORK/tidy_mock.sh";     mk_mock "$TIDY_MOCK"   TIDY_OUT
 new_target() { # $1=dir
   mkdir -p "$1"
   printf 'def f():\n    return 1\n' > "$1/mod.py"
+  # #105: a real repo gitignores gate side-artifacts; without this the pytest/coverage gate's
+  # .coverage is untracked -> _prestage_untracked hydrates it into the next round's diff ->
+  # the diff-content reuse gate (#45) fires BEFORE the tidiness reuse-invalidation guard, so
+  # T7 never sees its marker. Ignoring them (as production targets do) is the real T7 fix.
+  printf '.coverage\n__pycache__/\n' > "$1/.gitignore"
   git -C "$1" init -q
   git -C "$1" add -A
   git -C "$1" -c user.email=t@t -c user.name=t commit -qm base

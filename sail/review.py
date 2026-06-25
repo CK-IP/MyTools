@@ -771,6 +771,27 @@ def diff_fingerprint(target, diff_ref):
     return _sha256(_git_diff(target, diff_ref))
 
 
+def changed_files(target, diff_ref):
+    # Repo-relative paths changed in `git diff diff_ref`, for the #105 per-gate reuse gate
+    # (Checker.affected_by decides which already-green gates a same-scope resume may skip).
+    # `--name-only -z` is NUL-delimited so paths with spaces, quotes, or renames cannot be
+    # misparsed — a wrong path parse could wrongly SKIP a gate (a stale all-clear), so this
+    # is deliberately not a reparse of the unified-diff headers. `--no-renames` forces a
+    # rename to surface as a delete+add (BOTH paths), so a `.py -> .md` rename under a repo's
+    # `diff.renames=true` cannot hide the lost Python source and reuse a stale green gate.
+    # Raises ValueError on git failure so the caller fails SAFE (reset all gates).
+    result = subprocess.run(
+        ["git", "-C", target, "diff", "--no-renames", "--name-only", "-z", diff_ref],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise ValueError(
+            f"sail review: `git -C {target} diff --name-only {diff_ref}` failed "
+            f"(rc={result.returncode}): {result.stderr.strip()}"
+        )
+    return [p for p in result.stdout.split("\0") if p]
+
+
 def plan_fingerprint(run_dir):
     # SHA-256 of the plan's acceptance criteria for this run-dir (HIGH-1, Gate F). The reuse
     # gate compares this against the value stored in review.json so a CHANGED plan (new/edited

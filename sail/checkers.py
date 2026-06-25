@@ -121,6 +121,38 @@ def _resolve_pytest_paths(target):
 
 _NODE_MANIFESTS = ("package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock")
 
+# #105: file suffixes treated as inert (cannot change a CODE scanner's verdict) for the broad
+# scanners' "re-run unless EVERY changed file is doc-only" rule. Deliberately narrow — ONLY
+# unambiguous prose (.md/.rst). `.txt` is intentionally EXCLUDED: it is just as often a test
+# fixture / golden file as prose, so treating it as inert could reuse a stale-green pytest when
+# a fixture changed. Anything ambiguous falls through to "re-run", never to a skip. NB: gitleaks
+# (a SECRETS scanner) is excluded from this rule entirely and always re-runs (see affected_by).
+_DOC_SUFFIXES = (".md", ".rst")
+
+# #105: a narrow gate's verdict depends not only on its source files but on its TOOL CONFIG and
+# (for ruff) its IGNORE files — editing these on a same-scope resume can tighten/loosen rules or
+# change the scanned file set and flip a prior green, so each narrow gate must re-run when its own
+# config/ignore files change (matched by basename). The broad scanners (bandit/semgrep/pytest)
+# need no entry here: their config files (.toml/.cfg/.yml/…) are non-doc, so the doc-only rule
+# already re-runs them on any such edit.
+_RUFF_CONFIGS = ("pyproject.toml", "ruff.toml", ".ruff.toml", "setup.cfg",
+                 ".gitignore", ".ignore", ".ruffignore")
+_MYPY_CONFIGS = ("pyproject.toml", "mypy.ini", ".mypy.ini", "setup.cfg")
+_SHELLCHECK_CONFIGS = (".shellcheckrc",)
+
+
+def _is_pip_manifest(path: str) -> bool:
+    # pip-audit's dependency inputs. Covers `pyproject.toml`, top-level `requirements*.txt`, AND
+    # the pip-tools layout where files live under a `requirements/` dir as `base.txt`, `dev.txt`,
+    # … (basename loses the `requirements` prefix, so match on a path component too).
+    base = os.path.basename(path)
+    if base == "pyproject.toml":
+        return True
+    if base.startswith("requirements") and path.endswith(".txt"):
+        return True
+    parts = path.replace("\\", "/").split("/")
+    return path.endswith(".txt") and "requirements" in parts[:-1]
+
 
 def _has_node_manifest(target: str) -> bool:
     # npm-audit must only invoke `npm audit` when the target actually has a Node manifest.
@@ -166,6 +198,40 @@ class Checker:
 
     def available(self) -> bool:
         return shutil.which(self.tool) is not None
+
+    def affected_by(self, changed_files) -> bool:
+        # #105 per-gate reuse rule: could this gate's verdict change given the set of files
+        # changed in the diff? On a same-scope resume the runner reuses an already-green gate
+        # only when this returns False. CONSERVATIVE BY DESIGN — any uncertainty returns True
+        # (re-run), never a skip, keeping a stale all-clear off the source/config inputs each
+        # gate is known to read:
+        #   * empty/unknown changed set => True (the runner could not compute the diff);
+        #   * narrow gates (ruff/mypy/shellcheck/pip-audit/npm-audit) re-run when one of their
+        #     own source files OR their own tool-config file changed;
+        #   * gitleaks, pytest and diff-coverage cannot be scoped by file-type => re-run on ANY
+        #     change when the diff moved (a secret can hide in a doc; pytest can collect doctests
+        #     /fixtures from .md/.rst/.txt via --doctest-glob; coverage is the diff itself);
+        #   * pure code scanners (bandit/semgrep, and any unknown gate) only analyze .py, so they
+        #     re-run unless EVERY changed file is inert/prose — a single code file forces a re-run.
+        if not changed_files:
+            return True
+        name = self.name
+        if name == "ruff":
+            # ruff lints .py, .pyi stubs, and (config permitting) .ipynb notebooks.
+            return any(f.endswith((".py", ".pyi", ".ipynb")) or os.path.basename(f) in _RUFF_CONFIGS for f in changed_files)
+        if name == "mypy":
+            # mypy type-checks .py and .pyi stubs.
+            return any(f.endswith((".py", ".pyi")) or os.path.basename(f) in _MYPY_CONFIGS for f in changed_files)
+        if name == "shellcheck":
+            return any(f.endswith(".sh") or os.path.basename(f) in _SHELLCHECK_CONFIGS for f in changed_files)
+        if name == "pip-audit":
+            return any(_is_pip_manifest(f) for f in changed_files)
+        if name == "npm-audit":
+            return any(os.path.basename(f) in _NODE_MANIFESTS for f in changed_files)
+        if name in ("gitleaks", "pytest", "diff-coverage"):
+            return True
+        # bandit / semgrep (and any unknown gate): pure code-scan of .py.
+        return not all(f.endswith(_DOC_SUFFIXES) for f in changed_files)
 
     def is_blocking(self, target: str, mode: str) -> bool:
         # Runtime blocking decision. Defaults to the static `blocking` field (the prior
