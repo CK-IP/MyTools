@@ -423,13 +423,45 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
             # high-water seqs are required, not None (redteam-4c2dc5a2a662).
             reset_seq = max((gate.get("seq") or 0 for gate in state.gates), default=0)
             reset_count = 0
+            reuse_count = 0
             registry_names = {checker.name for checker in registry}
+            checker_by_name = {checker.name: checker for checker in registry}
+            # #105 per-gate reuse: when the ONLY stale trigger is a same-scope diff MOVE (scope
+            # unchanged AND both fingerprints present), reset only the gates whose dependency
+            # file-types appear in the changed-file set; keep the rest green (reused) — the
+            # efficiency win. EVERY other stale trigger (scope change / missing / uncomputable
+            # fingerprint) is uncertainty -> reset ALL terminal gates (the #79 fail-safe,
+            # unchanged). The changed-file list is computed ONCE here, from the same `git diff
+            # diff_ref` the gates scan — after _prestage_untracked (line 339) has already
+            # hydrated new/untracked files into that diff, so a newly-relevant file is seen.
+            selective = (not scope_changed) and gate_fp is not None and stored_fp is not None
+            changed = None
+            if selective:
+                try:
+                    changed = review_mod.changed_files(target_root, diff_ref)
+                except Exception:
+                    # Could not compute the changed set -> fail safe: reset everything.
+                    selective = False
             for gate in state.gates:
                 # Reset only gates the current registry will actually re-run. A gate left over from a
                 # wider prior registry (e.g. a since-narrowed SAIL_CHECKERS) is never visited by the
                 # per-checker loop, so resetting it to pending would strand it permanently non-green
                 # and inflate the rerun count (lens2-da384f98abcb).
                 if gate.get("status") in terminal_statuses and gate["name"] in registry_names:
+                    # Reuse ONLY an already-green (passed) gate: a failed gate must re-run to
+                    # confirm the fix, and a skipped/tool-unavailable gate is cheap to re-evaluate
+                    # and must not preserve a transient skip — so both always reset (#105 review:
+                    # the optimization is "skip already-green gates", never "preserve any verdict").
+                    if selective and gate.get("status") == "passed":
+                        checker = checker_by_name.get(gate["name"])
+                        # affected_by fails safe (True) on an empty/unknown changed set, so a None
+                        # `changed` here would have flipped selective off above. Reuse ONLY when the
+                        # gate's own inputs are provably absent from the diff -> its green verdict
+                        # cannot have changed; leave its status/seq intact so the prior verdict and
+                        # its decision-log entry still stand.
+                        if checker is not None and not checker.affected_by(changed):
+                            reuse_count += 1
+                            continue
                     gate["status"] = "pending"
                     gate["rc"] = None
                     gate["reason"] = None
@@ -442,6 +474,8 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
                     reset_count += 1
             if reset_count:
                 decision_log.gate_reset_marker(reset_count, reset_reason)
+            if reuse_count:
+                decision_log.gate_reuse_marker(reuse_count)
         state.data["gates_diff_hash"] = gate_fp
         state.save()
 

@@ -126,6 +126,16 @@ class DecisionLog:
             f"- gate-reset: {int(count)} terminal gate(s) re-run ({_sanitize_text(reason)})"
         )
 
+    def gate_reuse_marker(self, count, reason="inputs absent from diff (per-gate reuse)"):
+        # #105: on a same-scope resume where the diff merely MOVED, an already-green gate whose
+        # dependency file-types are absent from the changed-file set is REUSED (skipped), not
+        # re-run — the efficiency optimization. Mirrors gate_reset_marker so the audit trail
+        # shows exactly how many gates were skipped and why. Reuse is re-decided from the live
+        # diff each resume (no stored per-gate cache to go stale); any uncertainty resets instead.
+        self._append_marker(
+            f"- gate-reuse: {int(count)} already-green gate(s) reused ({_sanitize_text(reason)})"
+        )
+
     def finding_resolution(self, finding_id, disposition, rationale, round=None):
         # Per-finding resolution log (#47): records the driver's disposition of one review
         # finding across the convergence loop. disposition is expected to be one of
