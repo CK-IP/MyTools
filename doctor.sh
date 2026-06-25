@@ -89,6 +89,26 @@ fi
 info "pytest + coverage are per-project (install in each project venv: pip install pytest coverage)."
 
 echo ""
+echo "Bandit SARIF formatter (the sail bandit gate runs 'bandit -f sarif'):"
+# A bare `command -v bandit` (gate loop above) passes even when the SARIF formatter is broken —
+# then every `sail run` parks on the bandit gate (rc=2, artifact-unreadable). So exercise the
+# formatter for real: a clean temp file scans to rc 0; a missing 'sarif' formatter makes argparse
+# reject `-f sarif` (rc 2). Single `if command -v bandit` guard — deliberately NOT a `for t in`
+# loop (the #104 sync guard parses doctor.sh's `for t in` lines; a new one would corrupt it).
+if command -v bandit >/dev/null 2>&1; then
+  _b_src="$(mktemp -t ck-bandit-sarif.XXXXXX 2>/dev/null || mktemp)"
+  _b_out="$(mktemp -t ck-bandit-out.XXXXXX 2>/dev/null || mktemp)"
+  if bandit -f sarif -q -o "$_b_out" "$_b_src" >/dev/null 2>&1; then
+    green "bandit -f sarif works (formatter available)"
+  else
+    red "bandit present but 'bandit -f sarif' fails — the sail bandit gate will error (rc=2). Upgrade bandit (built-in SARIF in current versions) or 'pipx inject bandit bandit-sarif-formatter'."
+  fi
+  rm -f "$_b_src" "$_b_out"
+else
+  info "bandit not installed — SARIF capability check skipped (gate is availability-gated)."
+fi
+
+echo ""
 echo "Background agents + /surf readiness (informational — never blocks):"
 if [ "$(uname -s)" = "Darwin" ]; then
   for la in com.crg.daemon com.crg.refresh-reminder com.surf.resume; do

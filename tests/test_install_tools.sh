@@ -14,6 +14,13 @@
 # Deliberate EXCLUSIONS (must NOT be in the canonical installer set):
 #   pytest, coverage — per-project (installed in each project venv), not globally supplied.
 #   radon, pylint    — optional /fortify analysis extras, not sail gates.
+#
+# Scope boundary (#106): this guard syncs TOP-LEVEL tools only. Injected plugins and per-tool
+# formatter *capabilities* (e.g. bandit's `-f sarif` output, once supplied by the separate
+# bandit-sarif-formatter plugin) are intentionally out of scope here — they are owned by
+# doctor.sh's capability checks (see the "Bandit SARIF formatter" section in doctor.sh and
+# tests/test_bandit_sarif.sh). Do not add bandit-sarif-formatter to CANONICAL: it is a plugin,
+# not a top-level tool, and current bandit ships SARIF built-in.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
