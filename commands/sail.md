@@ -266,15 +266,20 @@ python3 -m sail land --run-dir .surf/runs/<issue> --issue <issue> --title "$TITL
 
 ```bash
 RD=.surf/runs/<issue>
-git checkout main
-git merge sail/<issue> --no-ff -F "$RD/land-commit-msg.txt"   # `Closes #<issue>` lives in the merge message
+[ -f "$HOME/.claude/lib/sail-git-lifecycle.sh" ] && . "$HOME/.claude/lib/sail-git-lifecycle.sh"  # in scope from Stage 0.5; re-source defensively
+# LOCAL mechanics are single-sourced tested code (#82): --no-ff merge onto default + safe prune.
+# NOTE (#115): in the default ISOLATED flow this block must run from the PRIMARY worktree (where
+# `main` is checked out) with an ABSOLUTE run-dir — the cd/run-dir orchestration is tracked in #115,
+# not here. The functions themselves are correct and worktree-aware (sail_prune_merged_branch removes
+# the branch's linked worktree before deleting it).
+sail_merge_to_default . sail/<issue> main "$RD/land-commit-msg.txt"   # checkout main + --no-ff merge; `Closes #<issue>` rides the msg file; prints the merge SHA
 git push origin main                                         # REQUIRED: the merge must reach origin's DEFAULT branch — only then does GitHub auto-close the issue and fire the board's Item-closed→Done automation; a local-only merge does neither
 git rev-parse HEAD                                            # record the merge SHA
 gh issue comment <issue> -F "$RD/land-comment.md"            # publish review evidence (reused, not re-derived)
 # Prune the merged branch ONLY after the merge is on origin/main (auto-delete-head-branch is
 # PR-only — it won't fire on a direct merge). Order matters: `git push origin --delete` ignores
 # merge state, so deleting the remote branch before main is pushed could drop unmerged work.
-git branch -d sail/<issue>                                    # safe local delete: refuses if not fully merged
+sail_prune_merged_branch . sail/<issue>                      # `git branch -d` (never -D): refuses an unmerged branch
 git ls-remote --exit-code --heads origin sail/<issue> >/dev/null 2>&1 && git push origin --delete sail/<issue> || true
 ```
 
@@ -287,7 +292,7 @@ gh pr create --base main --head sail/<issue> --title "$TITLE" --body-file "$RD/l
 
 **Preconditions (document, don't assume).** The merge must be **pushed to origin's default branch** — a local-only merge triggers neither GitHub's auto-close nor the board automation. Board → Done then relies on the repo's *Item closed → Done* Projects automation staying enabled; `Closes #<issue>` auto-closes **only** on the default branch; `git branch -d` refuses an unmerged branch, and the remote delete is guarded on the branch having been pushed **and** sequenced after `git push origin main` so it never drops unmerged work. If any precondition fails, land surfaces it rather than silently no-op'ing.
 
-> **Keep in sync:** this orchestration is intentionally identical to `commands/surf.md`'s post-merge land step — both consume the same `sail land` output. Change one, change the other.
+> **Keep in sync:** the LOCAL git mechanics are now single-sourced as `sail_merge_to_default` / `sail_prune_merged_branch` in `home/lib/sail-git-lifecycle.sh` (tested by `tests/test_sail_82_land_lifecycle.sh`) — edit there, not inline. Only the residual **network sequence** below stays duplicated with `commands/surf.md`'s land step and must be kept identical: `git push origin main` → `git rev-parse HEAD` → `gh issue comment` → the ls-remote-guarded `git push origin --delete` (and `--pr` mode). Both consume the same `sail land` output. Change one, change the other.
 
 ## Autonomous-mode convergence rubric (#77)
 

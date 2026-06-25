@@ -95,6 +95,9 @@ rm -f ~/.claude/commands/sail.md
 ln -s "$(pwd)/commands/sail.md" ~/.claude/commands/sail.md
 
 # /sail git "opening bookend" library (#65) — sourced by commands/sail.md Stage 0.5.
+# Also carries the land "closing bookend" local mechanics (#82): sail_merge_to_default /
+# sail_prune_merged_branch. These live in the SAME already-symlinked file, so #82 needs no
+# new symlink line — the link below covers them.
 # Depends on ~/.claude/lib/ship-resume-safety.sh (from cc-dotfiles) being installed too.
 mkdir -p ~/.claude/lib
 rm -f ~/.claude/lib/sail-git-lifecycle.sh
