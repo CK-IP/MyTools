@@ -46,9 +46,14 @@ with open(log.path, "a", encoding="utf-8") as fh:
     fh.write("- resolution: garbled addressed — missing brackets\n")
 
 assert log.read_resolutions() == {
-    "f1": {"disposition": "addressed", "rationale": "fixed it"},
-    "f2": {"disposition": "deferred", "rationale": "tracked #99"},
+    "f1": {"disposition": "addressed", "rationale": "fixed it", "round": None},
+    "f2": {"disposition": "deferred", "rationale": "tracked #99", "round": None},
 }, log.read_resolutions()
+
+# #109: pin the #100 round-parse path — a [round=N] marker round-trips to round.
+log.finding_resolution("f3", "addressed", "round tagged", round=2)
+resolved = log.read_resolutions()
+assert resolved["f3"] == {"disposition": "addressed", "rationale": "round tagged", "round": 2}, resolved
 '; then
   echo "PASS T2: round-trip multiple findings and skip non-markers"
 else
@@ -395,6 +400,12 @@ TGT13="$WORK/target13"
 mkdir -p "$TGT13"
 printf 'def f():\n    return 1\n' > "$TGT13/mod.py"
 printf 'def test_smoke():\n    assert True\n' > "$TGT13/test_smoke.py"
+# #109: gitignore checker byproducts (a real repo would). Without this, run1's
+# pytest writes .coverage into the target after its pre-stage; run2's
+# _prestage_untracked then `git add -N`s it, changing `git diff <SHA>` content —
+# the #45 diff-content reuse gate then correctly invalidates reuse and the
+# same-diff resume premise this test asserts never actually holds.
+printf '%s\n' '.coverage' '.pytest_cache/' '__pycache__/' '*.pyc' > "$TGT13/.gitignore"
 git -C "$TGT13" init -q
 git -C "$TGT13" add -A
 git -C "$TGT13" -c user.email=t@t -c user.name=t commit -qm base
