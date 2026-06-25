@@ -4,6 +4,9 @@
 # with required top-level metadata and the expected gate schema/order.
 
 set -euo pipefail
+# Hermetic (.ship/domain.md #102): a real shell exports SAIL_* codex knobs (settings.json);
+# clear them so each subtest controls its own backend (subtests set theirs via command prefix).
+unset "${!SAIL_@}"
 
 TMP_ROOT="$(mktemp -d)"
 RUN_DIR="$TMP_ROOT/myrun"

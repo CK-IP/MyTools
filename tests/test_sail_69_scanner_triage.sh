@@ -10,6 +10,9 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="$HOME/Library/Python/3.9/bin:$PATH"
+# Hermetic (.ship/domain.md #102): a real shell exports SAIL_* codex knobs (settings.json);
+# clear them so each subtest controls its own backend (subtests set theirs via command prefix).
+unset "${!SAIL_@}"
 # Restrict the gate registry to the fast checkers these tests exercise (ruff is the scanner
 # under test; pytest keeps the diff-mode plumbing honest). Skips slow semgrep/bandit/mypy.
 export SAIL_CHECKERS=ruff,pytest

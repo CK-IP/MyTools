@@ -35,6 +35,9 @@ print("hello")
 PY
 
 cd "$REPO_ROOT"
+# Hermetic (.ship/domain.md #102): a real shell exports SAIL_* codex knobs (settings.json);
+# clear them so each subtest controls its own backend (subtests set theirs via command prefix).
+unset "${!SAIL_@}"
 
 # rc is environment-dependent; run-state + decision-log are written regardless.
 python3 -m sail run --run-dir "$R" --target "$TGT" >"$LOG_FILE" 2>&1 || true

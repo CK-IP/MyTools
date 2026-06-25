@@ -41,6 +41,9 @@ seed_run_dir() {
 }
 
 cd "$REPO_ROOT"
+# Hermetic (.ship/domain.md #102): a real shell exports SAIL_* codex knobs (settings.json);
+# clear them so each subtest controls its own backend (subtests set theirs via command prefix).
+unset "${!SAIL_@}"
 
 # 1. rejected finding reappears as HIGH -> park and name the id.
 RD1="$TMP_ROOT/rd1"

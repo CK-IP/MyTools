@@ -20,6 +20,9 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="$HOME/Library/Python/3.9/bin:$PATH"
+# Hermetic (.ship/domain.md #102): a real shell exports SAIL_* codex knobs (settings.json);
+# clear them so each subtest controls its own backend (subtests set theirs via command prefix).
+unset "${!SAIL_@}"
 # Keep the gate registry to one fast checker so the deterministic gates never mask the review arm
 # under test (the red-team pass is a review-stage concern).
 export SAIL_CHECKERS=ruff

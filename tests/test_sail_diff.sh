@@ -5,6 +5,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="$HOME/Library/Python/3.9/bin:$PATH"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cd "$REPO_ROOT"
+# Hermetic (.ship/domain.md #102): a real shell exports SAIL_* codex knobs (settings.json);
+# clear them so each subtest controls its own backend (subtests set theirs via command prefix).
+unset "${!SAIL_@}"
 
 # Tiny git target with a deliberate ruff finding so the whole-repo run is non-clean.
 TGT="$WORK/target"; mkdir -p "$TGT"

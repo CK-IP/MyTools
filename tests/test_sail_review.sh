@@ -5,6 +5,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export PATH="$HOME/Library/Python/3.9/bin:$PATH"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cd "$REPO_ROOT"
+# Hermetic (.ship/domain.md #102): a real shell exports SAIL_* codex knobs (settings.json);
+# clear them so each subtest controls its own backend (subtests set theirs via command prefix).
+unset "${!SAIL_@}"
 
 # Mock LLM CLI: ignores stdin, echoes $MOCK_OUT. Pointed at via SAIL_REVIEW_CMD.
 MOCK="$WORK/mock_llm.sh"

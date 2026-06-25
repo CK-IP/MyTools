@@ -28,6 +28,9 @@ fail() {
 mkdir -p "$RUN_DIR"
 
 cd "$REPO_ROOT"
+# Hermetic (.ship/domain.md #102): a real shell exports SAIL_* codex knobs (settings.json);
+# clear them so each subtest controls its own backend (subtests set theirs via command prefix).
+unset "${!SAIL_@}"
 
 if ! RUN_DIR="$RUN_DIR" python3 - <<'PY' >"$LOG_FILE" 2>&1
 import os
