@@ -311,6 +311,125 @@ def reappeared_dispositioned(run_dir, round_num):
 PROCEED = "proceed"
 REVISE = "revise"
 PARK = "park"
+PROCEED_DISSENT = "proceed-dissent"
+
+_SPEC_CONFLICT = "spec-conflict"
+
+
+def _is_spec_conflict(resolution):
+    # A blocking review finding is routed to proceed-with-tracked-dissent ONLY when the driver
+    # has explicitly recorded a `spec-conflict` disposition WITH a non-empty rationale — the same
+    # no-laundering fail-safe as plan-stage self-mitigation (#77): a bare tag with no rationale
+    # still blocks. `disposition` is DRIVER-territory only; the review/red-team prompts never emit
+    # it, so the engine never auto-classifies its own finding as a spec-conflict.
+    if not isinstance(resolution, dict):
+        return False
+    if str(resolution.get("disposition", "")).strip().lower() != _SPEC_CONFLICT:
+        return False
+    rationale = resolution.get("rationale")
+    return isinstance(rationale, str) and bool(rationale.strip())
+
+
+def spec_conflict_floor(rc, run_dir, target, round):
+    """Return (eligible, finding_ids) for the proceed-with-tracked-dissent terminus (#108).
+
+    A spec-premise conflict is a reviewer objecting to the design the issue itself MANDATED. It is
+    NOT covered by the #103 materiality floor (that floor is for immaterial beyond-diff hardening).
+    Eligibility is deliberately narrow and fails closed: the run must be mechanically sound — the
+    deterministic gate audit green, the review fresh for this exact target/diff/round, tidiness
+    clear, every AC met — AND every current-round blocking review finding validly dispositioned
+    `spec-conflict`. That bounds the exception to "tests pass, the mandated design's own ACs are
+    met, but a reviewer objects to the premise." Any other unresolved blocking finding (a real bug)
+    keeps the run on revise.
+    """
+    if rc == 0:
+        return False, []
+    try:
+        target_root = os.path.abspath(target)
+        if not (
+            gates_all_green(run_dir)
+            and review_current_and_clean(run_dir, target_root, round)
+            and tidiness_clear(run_dir)
+            and acs_all_met(run_dir)
+        ):
+            return False, []
+        data = _read_review_json(run_dir)
+        if data is None:
+            return False, []
+        findings = data.get("findings")
+        if not isinstance(findings, list):
+            return False, []
+        blocking = [
+            finding for finding in findings
+            if isinstance(finding, dict)
+            and str(finding.get("severity", "")).strip().upper() in _BLOCKING
+        ]
+        if not blocking:
+            return False, []
+        resolutions = DecisionLog(run_dir).read_resolutions(round=round)
+        ids = []
+        for finding in blocking:
+            finding_id = finding.get("id")
+            if not finding_id:
+                return False, []
+            if not _is_spec_conflict(resolutions.get(finding_id)):
+                return False, []
+            ids.append(finding_id)
+        return True, sorted(set(ids))
+    except Exception:
+        return False, []
+
+
+ASK = "ask"
+AUTO = "auto"
+PARK_LOUD = "park-loud"
+
+
+def terminus_action(unattended: bool, interactive: bool) -> str:
+    """Decide how a human-facing terminus resolves (#108) — never auto-select a recommended
+    option after a denied prompt.
+
+    unattended            -> 'auto'       (consult the `sail converge` oracle; issue no prompt)
+    interactive, hands-on -> 'ask'        (a human is present; AskUserQuestion is fine)
+    neither               -> 'park-loud'  (headless without --unattended: PARK + write a durable
+                                           handoff BEFORE prompting, never fall back to a default)
+    """
+    if unattended:
+        return AUTO
+    if interactive:
+        return ASK
+    return PARK_LOUD
+
+
+def write_handoff(run_dir, reason, resume_cmd, issue=None, finding_ids=None):
+    """Write a durable wip-handoff.md recording why the unattended run stopped, which findings
+    are outstanding, and the exact command to resume (#108 AC6). Returns the path written.
+    """
+    os.makedirs(run_dir, exist_ok=True)
+    ids = finding_ids if isinstance(finding_ids, (list, tuple)) else []
+    ids = [str(i).strip() for i in ids if str(i).strip()]
+    lines = [
+        "# /sail WIP handoff",
+        "",
+        f"- stop reason: {reason}",
+    ]
+    if issue is not None and str(issue).strip():
+        lines.append(f"- issue: #{str(issue).strip().lstrip('#')}")
+    if ids:
+        lines.append(f"- outstanding finding ids: {', '.join(ids)}")
+    lines += [
+        "",
+        "## Resume",
+        "",
+        "```",
+        str(resume_cmd),
+        "```",
+        "",
+    ]
+    path = os.path.join(run_dir, "wip-handoff.md")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+    return path
 
 
 def loop_decision(rc: int, round_num: int, max_rounds: int = 3) -> str:

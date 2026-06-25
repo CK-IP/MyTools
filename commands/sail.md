@@ -116,7 +116,7 @@ python3 -m sail plan --target . --run-dir "$SESSION_DIR" <<< "$SPEC"
 - **exit 0** — no blocking (CRITICAL/HIGH) risks → the plan is clean, proceed.
 - **exit 1** — blocking risks present (or an unusable backend on a non-empty spec, or an empty spec) → revise and re-run.
 
-**Bounded convergence loop (single lens, max 3 rounds):** while `sail plan` exits 1, present the plan + its blocking risks to the user, revise the spec/approach, and re-run — up to **3 rounds**. If still blocking after 3 rounds, present `plan.json` and its risks and ask the user: continue / abort / proceed-advisory (`--advisory`). Do not loop unbounded.
+**Bounded convergence loop (single lens, max 3 rounds):** while `sail plan` exits 1, present the plan + its blocking risks to the user, revise the spec/approach, and re-run — up to **3 rounds**. If still blocking after 3 rounds, resolve the terminus via the **terminus guard** (see § Unattended mode): compute `ACTION=$(python3 -m sail terminus --unattended "$UNATTENDED" --interactive "$INTERACTIVE")` and branch **before any prompt** — `ask` → present `plan.json` + its risks and ask the user (continue / abort / proceed-advisory `--advisory`); `auto` → consult `python3 -m sail converge` (no prompt); `park-loud` → `sail handoff` and stop. Do not loop unbounded, and never auto-select a recommended option on a denied/unrenderable prompt.
 
 **`--plan-adversary` risk-gated escalation (#58).** Default plan is **single-pass** (the self-check above is free; most plans stay 1-pass — no uniform weight). When the change is **plan-risky** — it touches user-facing instructions/remediation, or reconciles multiple files/lists — `/sail` escalates to a **one-shot adversarial plan pass**: an independent second pass over the same spec with adversarial framing (it re-derives the gaps a careless author would miss; like `--dual-lens`'s second lens, it reviews independently rather than grading the first pass's output). The auto-trigger fires only on the strong #55 failure shape — a remediation/instruction signal **and** a file/list-reconciliation signal co-occurring, or an unambiguous failure phrase — so ordinary specs ("run the tests", "improve the error message") stay single-pass. Escalation fires when `--plan-adversary` is passed **or** the auto-trigger heuristic (`is_plan_risky`) detects a plan-risky spec, mirroring the review stage's `--dual-lens` escalation:
 
@@ -171,7 +171,7 @@ This runs the deterministic gates (ruff, mypy, pytest, bandit, semgrep, pip-audi
 
 **Plan↔review traceability spine (#47).** Because Stage 0 put `plan.json` in this same run-dir, the review stage reads its `acceptance_criteria` and records per-criterion `met / unmet / unknown` in `review.json`'s `plan_verification` block (the define-at-plan → verify-at-review spine). An **unmet** AC blocks (the spine has teeth); an absent plan is non-blocking (`no-plan`); a malformed `plan.json` **fails closed** (`status: error`, blocks) — it is never silently treated as no-plan.
 
-**Bounded convergence loop (review stage; max 3 rounds — driver-owned).** A non-zero exit means a gate failed, the review found CRITICAL/HIGH findings, or an AC is unmet. Mirror the plan stage's loop: fix the surfaced findings, **record a per-finding disposition each round** (`addressed` / `deferred` / `rejected` + a one-line rationale, keyed by the finding's stable `id` from `review.json`), and re-run `sail run --diff` — up to **3 rounds**. If still blocking after 3 rounds, present `review.json`'s findings + `plan_verification` and ask the user: continue / abort / proceed-advisory. The single-invocation exit code is unchanged; the driver owns the re-run-after-fix loop.
+**Bounded convergence loop (review stage; max 3 rounds — driver-owned).** A non-zero exit means a gate failed, the review found CRITICAL/HIGH findings, or an AC is unmet. Mirror the plan stage's loop: fix the surfaced findings, **record a per-finding disposition each round** (`addressed` / `deferred` / `rejected` + a one-line rationale, keyed by the finding's stable `id` from `review.json`), and re-run `sail run --diff` — up to **3 rounds**. If still blocking after 3 rounds, resolve the terminus via the **terminus guard** (see § Unattended mode): compute `ACTION=$(python3 -m sail terminus --unattended "$UNATTENDED" --interactive "$INTERACTIVE")` and branch **before any prompt** — `ask` → present `review.json`'s findings + `plan_verification` and ask the user (continue / abort / proceed-advisory); `auto` → consult `python3 -m sail converge` (no prompt; honor `proceed`/`revise`/`park`/`proceed-hardening`/`proceed-dissent`); `park-loud` → `sail handoff` and stop. The single-invocation exit code is unchanged; the driver owns the re-run-after-fix loop, and never auto-selects a recommended option on a denied/unrenderable prompt.
 
 **Per-round fix delegation (`SAIL_BUILD_CMD`, #95).** When `SAIL_BUILD_CMD` is set, route each convergence round's fixes through the same build backend instead of re-implementing inline-on-Opus every round (the dominant per-round wall-clock cost the ab-86b A/B measured):
 
@@ -232,7 +232,7 @@ SAIL_TIDINESS_MIN_LINES=40 \
 
 ### Stage 4 — Commit (closing the opening bookend, #65)
 
-**The commit is gated strictly on convergence safety.** Normally that means green: only after the Stage 3 convergence loop reports green — the final `sail run` exited **0** (0 CRITICAL / 0 HIGH and no unmet AC) — commit the change. The one exception is `proceed-hardening`: the red-but-eligible materiality floor may also commit after the deferred follow-ups are logged, but only when the deterministic audit is green and the independent materiality judge has said each current-round deferred blocking finding is immaterial. **Never commit on a red review except that explicit hardening exception.** When Stage 0.5 chose to isolate or to stay on a feature branch (`COMMIT=yes`), commit on the branch; when it granted a risk-gated in-place skip (`COMMIT=no`), do not auto-commit (the operator owns the tiny inline fix).
+**The commit is gated strictly on convergence safety.** Normally that means green: only after the Stage 3 convergence loop reports green — the final `sail run` exited **0** (0 CRITICAL / 0 HIGH and no unmet AC) — commit the change. There are **two** red-but-eligible commit exceptions, each driven by an explicit `sail converge` result, never an eyeball judgment: (1) `proceed-hardening` — the materiality floor may commit after the deferred follow-ups are logged, when the deterministic audit is green and the independent materiality judge ruled each current-round deferred blocking finding immaterial; (2) `proceed-dissent` (#108) — a spec-premise conflict on a mechanically-sound run may commit, then route **immediately to the tracked-dissent terminus** (commit on branch → open the `human-review` issue → land-block the branch; fall back to park-with-handoff if the issue cannot be opened — see § Unattended mode), **not** the normal green land flow. **Never commit on a red review except those two explicit exceptions.** When Stage 0.5 chose to isolate or to stay on a feature branch (`COMMIT=yes`), commit on the branch; when it granted a risk-gated in-place skip (`COMMIT=no`), do not auto-commit (the operator owns the tiny inline fix).
 
 ```bash
 # Only reachable after the convergence loop confirms `sail run ... ` exited 0.
@@ -257,6 +257,8 @@ python3 -m sail land --run-dir .surf/runs/<issue> --issue <issue> --title "$TITL
 # writes:  .surf/runs/<issue>/land-comment.md      (AC verdicts + finding dispositions + gate counts)
 #          .surf/runs/<issue>/land-commit-msg.txt  (merge subject + a `Closes #<issue>` line)
 ```
+
+**Unattended runs never reach this stage's outward actions (#108).** When `--unattended` is set, the run is **local-only**: it stops after the Stage 4 commit, may emit the local land artifacts (`land-comment.md` / `land-commit-msg.txt`) and the WIP handoff, and performs **no** push/merge/close/board-write/prune (see § Unattended mode). The outward block below runs only on a hands-on `/sail` (or via `/surf`'s own autonomous loop).
 
 **Human-gated terminus (hands-on `/sail` runs only).** Before any outward action, **show what land will do** — print `land-comment.md` and `land-commit-msg.txt` and the exact merge/close/prune commands below — and **pause for approval**. Merge to `main` only after the operator approves. (`/surf` is unattended and does **not** pause — see below.)
 
@@ -326,7 +328,7 @@ infinite tail otherwise). Green is done.
 
 ```bash
 python3 -m sail converge --rc "$RC" --round "$ROUND" --run-dir "$SESSION_DIR"   # default --max-rounds 3
-# prints exactly one of: proceed | revise | park | proceed-hardening
+# prints exactly one of: proceed | revise | park | proceed-hardening | proceed-dissent
 ```
 
 - `converged-green` → `proceed` — `rc == 0`; green, stop (rule **b**: never chase non-blocking
@@ -345,6 +347,15 @@ python3 -m sail converge --rc "$RC" --round "$ROUND" --run-dir "$SESSION_DIR"   
   or malformed run-state fails closed. The driver
   logs the deferred ids as follow-ups, then commits the red-but-eligible hardening change instead
   of parking it. With no backend, the floor never fires.
+- `spec-premise-conflict` → `proceed-dissent` — `rc != 0`, the deterministic audit is clean
+  (same floor as hardening: gates green, review current for the exact `target`/`diff_ref`/
+  `diff_hash`/`plan_hash`/`round`, tidiness clear, every AC `met`), and **every** current-round
+  blocking finding is validly dispositioned `spec-conflict` (non-empty rationale, driver-territory
+  only — see the unattended section below). This is the NEW category the materiality floor does
+  **not** cover: a reviewer objecting to the design the issue itself MANDATED. The driver then runs
+  the **tracked-dissent terminus** (commit on branch → open a `human-review` issue → land-block the
+  branch; fall back to park-with-handoff if the issue cannot be opened). Any other unresolved
+  blocking finding keeps the run on `revise`.
 - `revise` — `rc != 0` and none of the named stop reasons above apply; fix the surfaced blocking
   findings and re-run. The 3-round cap remains the backstop for true non-convergence.
 
@@ -376,6 +387,113 @@ Together: **(a)** stops the driver burning rounds on a risk the plan already res
 it chasing LOWs past green, and **(c)** the `sail converge` oracle + 3-round-cap PARK is the
 deterministic backstop for true non-convergence — keeping the autonomous path `/surf` depends on
 from wasting rounds or parking sound work.
+
+## Unattended mode (standalone `/sail --unattended <issue>`, #108)
+
+`/surf` is already autonomous (it drives `/sail` and handles termini in its own loop). The gap #108
+closes is the **standalone** `/sail <issue>` invocation run in a headless `claude -p` session: its
+plan/review convergence termini and its Land terminus end in `AskUserQuestion`, which cannot render
+without an operator — and a *denied* prompt previously fell back to the agent's own recommended
+option (a silent auto-proceed). Unattended mode makes the standalone front door finish safely on its
+own.
+
+**Signal (explicit flag, never silent auto-detect).** `--unattended` is the sole enabler of
+unattended behavior. Auto-detecting a non-interactive session to silently switch behavior is
+rejected: it re-introduces the exact silent-auto-proceed class this issue kills. Non-interactivity
+is used only as a **fail-loud guard**, never to enable commit-only behavior.
+
+**Front-door argument split (do this first, at the top of the run).** Parse the slash args into the
+issue number plus the flags: set `UNATTENDED=1` iff `--unattended` is present (else `0`), and derive
+`INTERACTIVE` — `1` for a normal TTY/IDE session, `0` for a headless `claude -p` run (best-effort).
+These two variables feed every `python3 -m sail terminus` call in the stage termini below; the
+deterministic guard, not improvisation, then decides `auto | ask | park-loud`.
+
+**Every human-facing terminus routes through the tested decision FIRST** — so a non-renderable
+prompt is never reached by auto-selecting a default:
+
+```bash
+# INTERACTIVE=1 for a normal TTY/IDE session; 0 for a headless `claude -p` run (best-effort).
+ACTION="$(python3 -m sail terminus --unattended "$UNATTENDED" --interactive "$INTERACTIVE")"
+# prints exactly one of: auto | ask | park-loud
+```
+
+- `auto` (**`--unattended`**) → issue **no** `AskUserQuestion`; resolve plan/review convergence via
+  the `sail converge` oracle exactly as the `/surf` autonomous path does (honoring `proceed` /
+  `revise` / `park` / `proceed-hardening` / `proceed-dissent`).
+- `ask` (hands-on, interactive) → present the prompt as today; a human is present.
+- `park-loud` (**headless without `--unattended`**) → do **not** prompt. Write a durable handoff and
+  stop. This is AC5: a denied/unrenderable prompt never silently auto-proceeds.
+
+**No silent fallback (belt-and-suspenders).** Beyond the `terminus` guard: if an `AskUserQuestion` is
+ever issued and comes back **denied/unavailable**, the driver must `sail handoff` + PARK — it must
+**never** select the recommended option as a fallback.
+
+**Convergence termini (unattended).** Record current-round dispositions, then consult the oracle (no
+prompt). On `proceed` / `proceed-hardening` → commit (Stage 4). On `proceed-dissent` → the
+tracked-dissent terminus below. On `park` (oscillation / 3-round cap) → write the WIP handoff and
+stop.
+
+**Spec-premise-conflict → proceed-with-tracked-dissent (the #108 design decision).** When a red-team
+finding objects to the design the issue itself MANDATED (e.g. #76's mandated `/ship`-parity
+pre-staging), the driver — holding the full issue context — records a `spec-conflict` disposition on
+that finding (`sail`'s decision log; **non-empty rationale required**, driver-territory only, never
+engine-emitted). When the oracle returns `proceed-dissent`, the driver:
+
+1. **Commits on the branch** (unattended is local-only by construction — see Land below).
+2. **Opens a `human-review` issue** capturing the objection + the options. Ensure the label exists
+   first (create-if-missing — never a build-time repo mutation), then file it. To keep it out of an
+   **automated** whole-board `/surf` run, also apply `/surf`'s charter refinement label (default
+   `surf-pilot`), which its anti-regress guard already defers — `human-review` alone is a
+   human-legible marker, **not** an automatic `/surf` exclusion:
+   Write the body to a tempfile first and pass it via `--body-file` — **never inline the objection
+   text into a double-quoted shell argument**: red-team finding text is untrusted free-form input
+   (it can carry attacker-influenced diff content — OWASP LLM01) and embedded quotes/`$()` would be
+   a shell-injection surface (#108 review):
+   ```bash
+   gh label create human-review --description "Needs human judgment before automated pickup (e.g. an unattended /sail spec-conflict dissent)" --color D93F0B 2>/dev/null || true
+   gh label create surf-pilot --description "Workflow refinement observed during a live /surf board run" --color 1d76db 2>/dev/null || true   # create-if-missing too: standalone /sail may run where /surf never has, so its charter label may not exist yet — else the issue-create would hard-fail and spuriously park (#108 review)
+   BODY="$SESSION_DIR/human-review-body.md"   # objection/detail written here verbatim, not interpolated into the command line
+   gh issue create --label human-review --label surf-pilot \
+     --title "spec-conflict: human review required (from #<issue>)" --body-file "$BODY" \
+     || { echo "sail: could not open human-review issue — falling back to park"; FALLBACK_PARK=1; }
+   ```
+   The `--title` is a **fixed** string with only the numeric `<issue>` (the trusted slash arg)
+   interpolated — **no** review/finding text in the title (it would be a second shell-injection
+   surface); all untrusted objection text lives only in `$BODY`.
+   The body records: the objection (finding `<id>` + detail), the options (park-and-redesign /
+   accept-as-mandated / revise-issue), and that `sail/<issue>` is **LAND-BLOCKED** pending this issue.
+3. **Land-blocks the branch**: write `wip-handoff.md` (via `sail handoff`) recording the dissent, the
+   `human-review` issue number, and that the branch must **not** be landed until that issue is
+   resolved.
+4. **Fallback:** if the issue cannot be opened (no network/auth in a headless run), do **not** proceed
+   silently — fall back to park-with-handoff so the dissent is never lost.
+
+This is strictly scoped to genuine spec-conflicts: ordinary CRITICAL/HIGH correctness findings still
+block and are fixed (`addressed`) via the normal convergence loop. `proceed-with-logged-dissent`
+without the human-review issue + land-block is **not** the default (it would ship over a serious
+objection unattended); the tracked-dissent terminus is the chosen design.
+
+**Land terminus (unattended = local-only).** Unattended runs **commit on the branch and STOP**. They
+may emit the local land artifacts (`land-comment.md` / `land-commit-msg.txt` via `sail land`) and the
+WIP handoff, but perform **no** outward action — no push, no merge, no `gh issue close`, no board
+write, no branch prune. Those stay human-gated (Stage 5's human-gated terminus). Opening the
+`human-review` issue is the one permitted tracker write — it is additive, clearly marked for a human,
+and the opposite of a destructive outward action; if it fails the run parks rather than proceeding.
+
+**Durable handoff (AC6).** Every park (spec-conflict-fallback / oscillation / never-converged /
+headless-without-flag) writes a durable handoff naming the stop reason, the outstanding finding ids,
+and the **exact existing resume command** — no new resume command is invented:
+
+```bash
+python3 -m sail handoff --run-dir "$SESSION_DIR" --reason "<oscillation|spec-conflict|never-converged|park-loud>" \
+  --issue "<issue>" --finding-ids "<id1,id2>" \
+  --resume "python3 -m sail run --target . --diff <base-ref> --run-dir $SESSION_DIR --round <N>"
+```
+
+**Floor exercised live (#103).** The unattended terminus is where the materiality floor finally runs
+end-to-end: to exercise `proceed-hardening`, set `SAIL_MATERIALITY_CMD` to a backend in a family
+different from `SAIL_REVIEW_CMD` / `SAIL_REVIEW_CMD2` (#83). With it unset the floor never fires and a
+deferred blocking finding safely parks (no new `INSTALL.md` knob — reuses the existing one).
 
 ## Calibration (operator validation — deferred to a live run)
 

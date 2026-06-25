@@ -72,6 +72,17 @@ def main() -> int:
     converge_parser.add_argument("--run-dir")
     converge_parser.add_argument("--target")
 
+    terminus_parser = subparsers.add_parser("terminus")
+    terminus_parser.add_argument("--unattended", type=int, required=True, choices=(0, 1))
+    terminus_parser.add_argument("--interactive", type=int, required=True, choices=(0, 1))
+
+    handoff_parser = subparsers.add_parser("handoff")
+    handoff_parser.add_argument("--run-dir", required=True)
+    handoff_parser.add_argument("--reason", required=True)
+    handoff_parser.add_argument("--resume", required=True)
+    handoff_parser.add_argument("--issue")
+    handoff_parser.add_argument("--finding-ids", default="")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -111,6 +122,7 @@ def main() -> int:
             loop_decision,
             materiality_floor,
             reappeared_dispositioned,
+            spec_conflict_floor,
         )
 
         if args.rc == 0:
@@ -128,6 +140,19 @@ def main() -> int:
                 )
                 print(PARK)
                 return 0
+            conflict_ok, conflict_ids = spec_conflict_floor(
+                args.rc, args.run_dir, args.target or os.getcwd(), args.round
+            )
+            if conflict_ok:
+                print(
+                    "spec-conflict: proceeding with tracked dissent over "
+                    f"{len(conflict_ids)} blocking finding(s) objecting to the mandated design — "
+                    "commit on branch, open a human-review issue, land-block the branch: "
+                    + ",".join(conflict_ids),
+                    file=sys.stderr,
+                )
+                print("proceed-dissent")
+                return 0
             eligible, ids = materiality_floor(
                 args.rc, args.run_dir, args.target or os.getcwd(), args.round
             )
@@ -140,6 +165,22 @@ def main() -> int:
                 print("proceed-hardening")
                 return 0
         print(decision)
+        return 0
+
+    if args.command == "terminus":
+        from sail.convergence import terminus_action
+
+        print(terminus_action(bool(args.unattended), bool(args.interactive)))
+        return 0
+
+    if args.command == "handoff":
+        from sail.convergence import write_handoff
+
+        ids = [part.strip() for part in args.finding_ids.split(",") if part.strip()]
+        path = write_handoff(
+            args.run_dir, args.reason, args.resume, issue=args.issue, finding_ids=ids
+        )
+        print(path)
         return 0
 
     return 1
