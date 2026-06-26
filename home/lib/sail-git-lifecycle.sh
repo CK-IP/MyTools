@@ -175,3 +175,64 @@ sail_commit_on_branch() {
   fi
   git -C "$work_dir" commit -m "$msg" || return 1
 }
+
+# ---------------------------------------------------------------------------
+# sail_merge_to_default <repo> <branch> <default_branch> <msg_file>
+# ---------------------------------------------------------------------------
+# The LOCAL half of /sail's & /surf's closing "land" bookend: check out the default branch
+# and merge <branch> into it with `--no-ff` (ALWAYS a true merge commit, even on a
+# fast-forwardable history) carrying the engine-emitted message file (whose `Closes #<n>`
+# keyword rides along). Prints the resulting merge commit SHA on success. Fully
+# parameterized — no literal `sail/`, `surf/`, or `main` — so both prefixes can call it.
+# A merge conflict (or any git failure) surfaces non-zero; this never `--force`s or aborts
+# silently. The CALLER owns the network steps (push, gh comment, remote delete) AFTER this.
+# rc: 0 (merge SHA printed) | 2 (bad/missing args) | 1 (git/merge failure).
+sail_merge_to_default() {
+  local repo="$1" branch="$2" default_branch="$3" msg_file="$4"
+  if [ -z "$repo" ] || [ -z "$branch" ] || [ -z "$default_branch" ] || [ -z "$msg_file" ]; then
+    echo "sail-git-lifecycle: sail_merge_to_default <repo> <branch> <default_branch> <msg_file>" >&2
+    return 2
+  fi
+  [ -r "$msg_file" ] || { echo "sail-git-lifecycle: msg_file not readable: $msg_file" >&2; return 2; }
+  git -C "$repo" checkout "$default_branch" >&2 || return 1
+  git -C "$repo" merge "$branch" --no-ff -F "$msg_file" >&2 || return 1
+  git -C "$repo" rev-parse HEAD || return 1
+}
+
+# ---------------------------------------------------------------------------
+# sail_prune_merged_branch <repo> <branch>
+# ---------------------------------------------------------------------------
+# Delete a now-merged local branch with `git branch -d` (the SAFE delete — NEVER `-D`):
+# git refuses to remove a branch whose work is not fully merged, so an unmerged branch is
+# preserved and this returns non-zero. Parameterized for both `sail/<n>` and `surf/<n>`.
+#
+# `git branch -d` ALONE is not sufficient: for a branch with an upstream, git permits the
+# delete when it is merged to its UPSTREAM even if it is not merged into the current branch. So
+# first assert the branch is an ancestor of HEAD — i.e. genuinely merged into the branch we are
+# on (the land flow runs this right after sail_merge_to_default checked out the default branch
+# and merged, so HEAD is the default branch). That makes "refuses unmerged" hold for pushed/
+# tracking branches too, independent of upstream state; `branch -d` stays as a second guard.
+#
+# Worktree-aware (#82/#115): in the default isolated /sail flow the branch is still checked out
+# in its linked worktree (the #65 opening bookend), and `git branch -d` refuses a branch checked
+# out in a worktree. So if a linked worktree holds this branch, remove it FIRST. `git worktree
+# remove` refuses a DIRTY worktree, so any uncommitted work is preserved (no data loss) and the
+# prune surfaces non-zero. Runs only after the ancestry guard confirmed the branch is merged.
+# rc: 0 (branch deleted) | 2 (bad/missing args) | 1 (not merged into HEAD / dirty worktree / git refused).
+sail_prune_merged_branch() {
+  local repo="$1" branch="$2"
+  if [ -z "$repo" ] || [ -z "$branch" ]; then
+    echo "sail-git-lifecycle: sail_prune_merged_branch <repo> <branch>" >&2
+    return 2
+  fi
+  git -C "$repo" merge-base --is-ancestor "$branch" HEAD 2>/dev/null \
+    || { echo "sail-git-lifecycle: $branch is not merged into HEAD — refusing to prune (no data loss)" >&2; return 1; }
+  local wt
+  wt="$(git -C "$repo" worktree list --porcelain 2>/dev/null \
+        | awk -v b="refs/heads/$branch" '$1=="worktree"{p=$2} $1=="branch" && $2==b {print p; exit}')"
+  if [ -n "$wt" ]; then
+    git -C "$repo" worktree remove "$wt" >&2 \
+      || { echo "sail-git-lifecycle: worktree $wt holds $branch and could not be removed (dirty?) — refusing to prune (no data loss)" >&2; return 1; }
+  fi
+  git -C "$repo" branch -d "$branch" >&2 || return 1
+}
