@@ -76,6 +76,12 @@ def main() -> int:
     terminus_parser.add_argument("--unattended", type=int, required=True, choices=(0, 1))
     terminus_parser.add_argument("--interactive", type=int, required=True, choices=(0, 1))
 
+    degraded_parser = subparsers.add_parser("degraded-review")
+    degraded_parser.add_argument("--run-dir", required=True)
+    degraded_parser.add_argument("--target")
+    degraded_parser.add_argument("--round", type=int)
+    degraded_parser.add_argument("--sha")
+
     handoff_parser = subparsers.add_parser("handoff")
     handoff_parser.add_argument("--run-dir", required=True)
     handoff_parser.add_argument("--reason", required=True)
@@ -171,6 +177,54 @@ def main() -> int:
         from sail.convergence import terminus_action
 
         print(terminus_action(bool(args.unattended), bool(args.interactive)))
+        return 0
+
+    if args.command == "degraded-review":
+        # Detect a commit made under a DEGRADED review (#116) — a cross-family lens the diff gated
+        # for did not run. Deterministic decision (tested Python); the thin-shell driver does the
+        # ALERT/INFO log + any #108 issue-body enrichment. Prints `<TONE> <lens:cause,...>` when
+        # degraded (empty when full-strength / non-gating) and writes a durable `degraded-review.md`
+        # note (SHA + lenses) for the report/enrichment to consume. Always exits 0 — visibility, not
+        # a gate (the maintainer refinement: degradation alone never blocks or files).
+        import json as _json
+        from sail.review import degraded_lenses, degraded_tone, format_degraded_note
+
+        # ALWAYS clear any prior note FIRST (before any early return). The note is the issue-body
+        # enrichment source, keyed only by file presence; a note left over from an earlier degraded
+        # round would otherwise be appended to a LATER clean commit's issue (the round-1 stale-note
+        # bug). It is re-derived from scratch below, only when the current round is degraded.
+        note_path = os.path.join(args.run_dir, "degraded-review.md")
+        try:
+            os.unlink(note_path)
+        except OSError:
+            pass
+
+        try:
+            with open(os.path.join(args.run_dir, "review.json"), encoding="utf-8") as fh:
+                review = _json.load(fh)
+        except (OSError, ValueError):
+            return 0
+        # Freshness: when the committing round/target are given, refuse to credit a review.json that
+        # is not current for THIS exact target/round AND whose stored diff_hash+plan_hash still match
+        # the reviewed content (catches reviewed-content drift, not just a round mismatch). This is
+        # correct AFTER the commit because the runner pins diff_ref to a base SHA (#87): `git diff
+        # <SHA>` is identical before and after the commit lands (verified), so the re-diff does NOT
+        # go empty post-commit the way a moving `HEAD` ref would. /sail Stage 3 always diffs against
+        # the pinned base, so this never sees a moving ref in the documented flow.
+        if args.round is not None and args.target is not None:
+            from sail.convergence import review_current_and_clean
+            if not review_current_and_clean(args.run_dir, os.path.abspath(args.target), args.round):
+                return 0
+        degraded = degraded_lenses(review)
+        if not degraded:
+            return 0
+        pairs = ",".join(f"{d['lens']}:{d['cause']}" for d in degraded)
+        print(f"{degraded_tone(degraded)} {pairs}")
+        try:
+            with open(note_path, "w", encoding="utf-8") as fh:
+                fh.write(format_degraded_note(degraded, sha=args.sha, round=args.round))
+        except OSError:
+            pass
         return 0
 
     if args.command == "handoff":
