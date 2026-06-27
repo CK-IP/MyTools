@@ -324,6 +324,112 @@ def dual_lens_status(review):
     return "ok" if review.get("lens2_ran") else "degraded"
 
 
+# Cross-family-lens degradation at the autonomous commit terminus (#116). Generalizes
+# dual_lens_status() to ALL cross-family lenses (lens2 + red-team) so the driver can detect a
+# commit made under a review weaker than the diff GATED FOR. Maintainer refinement (overrides the
+# issue's original AC2): degradation alone never files an issue — not every operator runs codex, so
+# single-lens is many users' NORMAL setup. The deliverables are (1) VISIBILITY — a callout + log
+# line, never silent — and (2) ENRICHMENT of an issue ONLY when an existing #108 terminus
+# (deferred-blocking / spec-conflict) independently fires. The latched/unconfigured cause decides
+# the #112 tone: a CONFIGURED backend that did not run is a real deviation (ALERT); an UNSET backend
+# is expected (INFO). Keyed off the explicit per-round booleans in review.json (never len(lenses)).
+_CROSS_FAMILY_LENSES = (
+    # (lens, requested_key, ran_key, configured_key, latched_key)
+    ("lens2", "dual_lens_requested", "lens2_ran", "lens2_configured", "lens2_latched"),
+    ("redteam", "redteam_requested", "redteam_ran", "redteam_configured", "redteam_latched"),
+)
+
+_LENS_LABEL = {"lens2": "dual-lens (lens2)", "redteam": "red-team"}
+# Causes that are a real deviation (#112 ALERT) vs the operator's expected setup (INFO).
+_ALERT_CAUSES = {"latched", "unavailable"}
+_CAUSE_DETAIL = {
+    "latched": "configured codex-family backend latched off (#107) at commit time",
+    "unavailable": "configured backend did not run (unavailable) at commit time",
+    "unconfigured": "no cross-family backend configured",
+}
+
+
+def degraded_lenses(review):
+    """Return the cross-family lenses GATED FOR but that did NOT run, each with a cause (#116).
+
+    [{"lens": "lens2"|"redteam", "cause": "latched"|"unavailable"|"unconfigured"}], sorted by lens.
+    `cause` fails toward visibility:
+      - "latched"      : a CONFIGURED codex-family backend was latched off (#107 marker active) —
+                         a real deviation, named precisely via the marker.
+      - "unavailable"  : a CONFIGURED backend did not run for another reason (down / bad path) —
+                         still a real deviation (configured ≠ ran).
+      - "unconfigured" : no backend configured (env unset) — the operator's expected single-lens
+                         setup, not a deviation.
+    Empty list when full-strength (every gated lens ran) or non-gating (no cross-family lens
+    requested). The marker only refines latched-vs-unavailable; it never decides whether a
+    configured-but-didn't-run lens is reported, so a stale/missing marker cannot hide a degradation.
+    """
+    if not isinstance(review, dict):
+        return []
+    # An empty diff gates for nothing — lens2/red-team are intentionally suppressed there, which is
+    # not a degradation (avoids a false positive on a --dual-lens review of an empty diff).
+    if review.get("empty_diff"):
+        return []
+    out = []
+    for lens, req_key, ran_key, conf_key, latched_key in _CROSS_FAMILY_LENSES:
+        if review.get(req_key) and not review.get(ran_key):
+            if not review.get(conf_key):
+                cause = "unconfigured"
+            elif review.get(latched_key):
+                cause = "latched"
+            else:
+                cause = "unavailable"
+            out.append({"lens": lens, "cause": cause})
+    return sorted(out, key=lambda d: d["lens"])
+
+
+def degraded_tone(degraded):
+    """#112 tone for a degraded_lenses() result: ALERT if ANY lens was a real deviation
+    (latched/unavailable), INFO if all are merely unconfigured (expected setup), '' when not degraded.
+    """
+    if not degraded:
+        return ""
+    return "ALERT" if any(d.get("cause") in _ALERT_CAUSES for d in degraded) else "INFO"
+
+
+def format_degraded_note(degraded, sha=None, round=None):
+    """Markdown note for the land-comment report and #108 issue-body enrichment (#116). Empty
+    string when not degraded. The re-review wording is HUMAN-triggered (the human-review +
+    surf-pilot labels are skipped by /surf's anti-regress guard), not an auto-trigger promise.
+    The heading + intro are TONE-AWARE (#112): an ALERT (a configured lens latched off / unavailable)
+    gets the ⚠️ "degraded review" banner; an INFO (no cross-family backend configured — the
+    operator's expected single-lens setup) gets a calm ℹ️ note that never claims a degraded-review
+    commit. The per-cause reason lives in each lens line, so the intro never over-claims.
+    """
+    if not degraded:
+        return ""
+    if degraded_tone(degraded) == "ALERT":
+        lines = [
+            "### ⚠️ Review degradation",
+            "",
+            "This change committed under a **degraded review** — a configured cross-family lens the "
+            "diff gated for did not run (see the per-lens cause below). The work was accepted; a "
+            "human-triggered full-strength re-review is advised.",
+        ]
+    else:  # INFO — no cross-family backend configured (expected setup, not a deviation)
+        lines = [
+            "### ℹ️ Single-lens review",
+            "",
+            "This change was reviewed **single-lens** — no cross-family backend was configured "
+            "(expected if you do not run a second lens). The work was accepted; a cross-family "
+            "re-review would add coverage but was not required.",
+        ]
+    if sha:
+        lines.append(f"- commit: `{sha}`")
+    if round is not None:
+        lines.append(f"- review round: {round}")
+    for d in degraded:
+        label = _LENS_LABEL.get(d["lens"], d["lens"])
+        detail = _CAUSE_DETAIL.get(d["cause"], d["cause"])
+        lines.append(f"- **{label}** did not run — {detail}")
+    return "\n".join(lines) + "\n"
+
+
 def escalate_round():
     env = os.environ.get("SAIL_REVIEW_ESCALATE_ROUND")
     if not env:
@@ -1218,6 +1324,10 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
     # tidiness_block was resolved by the concurrent dispatch above (#89).
     code_health_block = bool(tidiness_block and tidiness_block.get("blocking"))
 
+    # Cross-family backend argvs, resolved once for the #116 availability signals below.
+    _lens2_argv = _second_lens_argv()
+    _redteam_cmd_argv = _redteam_argv()
+
     review_data = {
         "status": "error" if (backend_error or plan_error) else "completed",
         "parse_ok": result["parse_ok"],
@@ -1239,6 +1349,23 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
         # by design (never mistake design for degradation).
         "dual_lens_requested": dual_lens,
         "lens2_ran": ("lens2" in lenses),
+        # Cross-family lens availability signals (#116). `*_configured` is keyed off whether the
+        # operator SET the backend env (intent): a CONFIGURED lens that did not run is a real
+        # deviation, an UNSET backend is the operator's expected single-lens setup. `*_latched`
+        # corroborates WHY a configured lens did not run with the #107 codex-down marker (codex
+        # family + latch active at review time) — so the terminus can name a latch precisely while
+        # still FAILING TOWARD VISIBILITY: any configured-but-didn't-run lens is ALERT, latched or
+        # not (the marker only refines the label, never gates the alert — so a stale/missing marker
+        # cannot silence a real degradation).
+        "lens2_configured": _lens2_argv is not None,
+        "lens2_latched": bool(_lens2_argv) and codexlatch.is_codex_family(_lens2_argv) and codexlatch.latch_active(),
+        "redteam_requested": redteam_triggered,
+        "redteam_ran": ("redteam" in lenses),
+        "redteam_configured": _redteam_cmd_argv is not None,
+        "redteam_latched": bool(_redteam_cmd_argv) and codexlatch.is_codex_family(_redteam_cmd_argv) and codexlatch.latch_active(),
+        # An empty diff gates for nothing — lens2/red-team are intentionally suppressed, NOT degraded.
+        # Recorded so degraded_lenses() can suppress the false positive (#116).
+        "empty_diff": bool(result.get("empty_diff")),
         "target": target,
         "diff_ref": diff_ref,
     }

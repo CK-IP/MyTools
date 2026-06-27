@@ -242,6 +242,38 @@ if [ "$COMMIT" = "yes" ]; then
 fi
 ```
 
+**Degraded-review visibility at the autonomous commit terminus (#116).** When the codex-family
+backend latches off mid-run (#107), the cross-family lenses (red-team, dual-lens lens2) silently
+stop running and a *weaker* review can reach green and commit — a change a full-strength review
+would have flagged. After the commit, detect whether the committing round's review was **degraded**
+(a lens the diff *gated for* did not run) and surface it — **never silently treat it as full
+green.** This is a **proceed-but-track** check, not a gate: the work is **accepted** (the maintainer
+refinement — not every operator runs a cross-family backend, so single-lens is many users' *normal*
+setup; auto-filing every degraded run would be noise). The decision is the tested
+`sail degraded-review` (deterministic Python); the shell only logs:
+
+```bash
+if [ "$COMMIT" = "yes" ] && { [ "$UNATTENDED" = "1" ] || [ -n "${SURF_RUN:-}" ]; }; then
+  SHA="$(git -C "$WORK_DIR" rev-parse HEAD)"
+  # Prints "<TONE> <lens:cause,...>" when degraded (empty when full-strength / non-gating) and
+  # writes "$SESSION_DIR/degraded-review.md" (SHA + unavailable lens[es]) for the report + #108
+  # enrichment to reuse. Freshness-keyed to the committing round/target (a stale prior round is not
+  # credited). Always rc 0 — visibility, not a gate.
+  DEGRADED="$(python3 -m sail degraded-review --run-dir "$SESSION_DIR" --target . --round "$ROUND" --sha "$SHA")"
+  if [ -n "$DEGRADED" ]; then
+    TONE="${DEGRADED%% *}"          # ALERT (a configured lens latched off — a real deviation) or INFO (unset backend — expected)
+    echo "sail: [$TONE] committed $SHA under a DEGRADED review (${DEGRADED#* }) — a cross-family lens the diff gated for did not run; work ACCEPTED, recorded in the land-comment + \$SESSION_DIR/degraded-review.md. A full-strength re-review is advised when the backend returns." >&2
+  fi
+fi
+```
+
+The degraded fact is **not** itself a reason to open an issue. It rides the **existing #108
+termini**: when a `proceed-dissent` (spec-conflict) or a `proceed-hardening` deferred-finding
+follow-up *independently* fires on a degraded run, that issue's `--body-file` is **enriched** with
+`$SESSION_DIR/degraded-review.md` (the commit SHA + unavailable lens[es]) so the human re-reviewing
+knows the commit was single-lens — see § Unattended mode. On a clean degraded green with no such
+terminus, the callout above + the land-comment section are the whole story; the work stands.
+
 Supervised runs may show/approve the message first; the autonomous `/surf` path commits without pausing (never break `/surf`). The branch now carries the committed change for the land stage (Stage 5) to close. (Note: a `git commit` here is subject to the global `delivery-gate.sh` hook only when a `~/.ship/ship-state-*.json` exists — `/sail`/`/surf` runs have none, so the gate is inert; see `.ship/domain.md`.)
 
 ### Stage 5 — Land (closing the loop, #59)
@@ -379,9 +411,24 @@ python3 -m sail converge --rc "$RC" --round "$ROUND" --run-dir "$SESSION_DIR"   
 
 - **Path/location classification is intentionally removed.** The old path-overlap heuristic was fragile and fail-opened; the safety decision now uses the audit plus the independent judge only. A beyond-diff caller break is still a real defect to FIX (`addressed`), never defer. If an AC is stuck `unknown` (#81) the floor stays conservatively shut.
 
-- **What `proceed-hardening` does.** On that result, the driver files each stderr-listed deferred
-  finding as a follow-up, then commits the branch. The red review is intentional and auditable, not
-  a free pass.
+- **What `proceed-hardening` does.** On that result, the driver **commits the branch first** (Stage
+  4), then files each stderr-listed deferred finding as a follow-up. The red review is intentional
+  and auditable, not a free pass. **#116 enrichment:** if this commit was also made under a DEGRADED
+  review, append the degraded note (commit SHA + unavailable lens[es]) to the deferred follow-up's
+  `--body-file` — the same file-append the spec-conflict terminus uses, never command-line
+  interpolation — so the human working the follow-up knows the commit was single-lens. The order is
+  **commit → capture SHA → re-derive note → file**, so the post-commit SHA always exists:
+  ```bash
+  BODY="$SESSION_DIR/hardening-followup-body.md"   # deferred finding id + detail written here verbatim
+  # Self-contained: capture THIS commit's SHA here, then re-derive the degraded note via the
+  # idempotent `sail degraded-review` (no dependence on a Stage-4 shell var or ordering); the
+  # `[ -f … ]` guard no-ops on a full-strength commit.
+  SHA="$(git -C "$WORK_DIR" rev-parse HEAD)"
+  python3 -m sail degraded-review --run-dir "$SESSION_DIR" --sha "$SHA" >/dev/null
+  [ -f "$SESSION_DIR/degraded-review.md" ] && { printf '\n' >> "$BODY"; cat "$SESSION_DIR/degraded-review.md" >> "$BODY"; }
+  gh issue create --label human-review --label surf-pilot \
+    --title "deferred hardening follow-up (from #<issue>)" --body-file "$BODY" || true
+  ```
 
 Together: `converged-green` and `genuine-oscillation` are the two park/stop reasons for ordinary
 convergence, while `never-dry-hardening` is the red-but-eligible commit exception. `sail converge`
@@ -458,6 +505,17 @@ engine-emitted). When the oracle returns `proceed-dissent`, the driver:
    gh label create human-review --description "Needs human judgment before automated pickup (e.g. an unattended /sail spec-conflict dissent)" --color D93F0B 2>/dev/null || true
    gh label create surf-pilot --description "Workflow refinement observed during a live /surf board run" --color 1d76db 2>/dev/null || true   # create-if-missing too: standalone /sail may run where /surf never has, so its charter label may not exist yet — else the issue-create would hard-fail and spuriously park (#108 review)
    BODY="$SESSION_DIR/human-review-body.md"   # objection/detail written here verbatim, not interpolated into the command line
+   # #116 enrichment: if this run also committed under a DEGRADED review, append the degraded note
+   # (commit SHA + unavailable lens[es]) to the SAME body-file so the human re-reviewing knows the
+   # commit was single-lens. Self-contained: capture the commit SHA HERE (do NOT rely on a Stage-4
+   # shell var surviving into this block) and re-derive the note via the idempotent
+   # `sail degraded-review` (removes any stale note, then writes a fresh one carrying THIS SHA only
+   # if the committing review was degraded) — so the enriched body always carries the commit SHA and
+   # never depends on Stage-4 ordering. The `[ -f … ]` guard no-ops on a full-strength commit.
+   # Appending a FILE (not interpolating) preserves the #108 no-untrusted-text-on-the-cmdline rule.
+   SHA="$(git -C "$WORK_DIR" rev-parse HEAD)"
+   python3 -m sail degraded-review --run-dir "$SESSION_DIR" --sha "$SHA" >/dev/null
+   [ -f "$SESSION_DIR/degraded-review.md" ] && { printf '\n' >> "$BODY"; cat "$SESSION_DIR/degraded-review.md" >> "$BODY"; }
    gh issue create --label human-review --label surf-pilot \
      --title "spec-conflict: human review required (from #<issue>)" --body-file "$BODY" \
      || { echo "sail: could not open human-review issue — falling back to park"; FALLBACK_PARK=1; }

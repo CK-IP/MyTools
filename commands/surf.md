@@ -506,6 +506,13 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
      sail_merge_to_default . surf/<issue> main "$RD/land-commit-msg.txt"   # checkout main + --no-ff merge; `Closes #<issue>` rides the msg file; prints the merge SHA
      git push origin main                                         # REQUIRED: only a merge on origin's DEFAULT branch fires GitHub auto-close + the board's Item-closed→Done automation; a local-only merge does neither
      git rev-parse HEAD                                            # capture this SHA into the journal/decision-log
+     # #116 degraded-merge visibility: the dual-lens guard above compensates ONLY lens2; a RED-TEAM
+     # lens that gated-for but did not run (codex latched / SAIL_REDTEAM_CMD down) would otherwise
+     # merge silently. Surface it — never block (proceed-but-track per #108). The published
+     # land-comment ALREADY carries the degraded note (`sail land` emits it from review.json); this
+     # adds the ALERT/INFO operator log line. Reads the merged review.json directly (no freshness args).
+     DEGRADED="$(python3 -m sail degraded-review --run-dir "$RD" --sha "$(git rev-parse HEAD)")"
+     [ -n "$DEGRADED" ] && echo "surf: [${DEGRADED%% *}] merged #<issue> under a DEGRADED review (${DEGRADED#* }) — a cross-family lens did not run; tracked in the land-comment, work accepted" >&2
      gh issue comment <issue> -F "$RD/land-comment.md"            # publish review evidence (reused, not re-derived)
      # Prune ONLY after the merge is on origin/main (`git push origin --delete` ignores merge state):
      sail_prune_merged_branch . surf/<issue>                      # `git branch -d` (never -D): refuses an unmerged branch
