@@ -16,7 +16,7 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cd "$REPO_ROOT"
 # Hermeticity: clear any inherited review backends so each case controls its own — otherwise a
 # globally-set SAIL_REVIEW_CMD2 leaks a real lens2 into the "no second lens" fixtures (#74 round-3).
-unset SAIL_REVIEW_CMD SAIL_REVIEW_CMD2 SAIL_REDTEAM_CMD 2>/dev/null || true
+unset "${!SAIL_@}" 2>/dev/null || true
 
 # Mock LLM CLI: ignores stdin, echoes a clean (no-findings) review, exit 0.
 MOCK="$WORK/mock_llm.sh"
