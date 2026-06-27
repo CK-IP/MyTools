@@ -19,8 +19,7 @@ export PATH="$HOME/Library/Python/3.9/bin:$PATH"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 cd "$REPO_ROOT"
 # Hermeticity: clear any inherited backends so each case controls its own.
-unset SAIL_REVIEW_CMD SAIL_REVIEW_CMD2 SAIL_TIDINESS_CMD SAIL_TIDINESS_VERIFY_CMD \
-      SAIL_REDTEAM_CMD SAIL_PLAN_CMD SAIL_PLAN_CMD2 2>/dev/null || true
+unset "${!SAIL_@}" 2>/dev/null || true
 export SAIL_CHECKERS=ruff,pytest   # keep deterministic-gate noise out of the review arm
 
 fail() { echo "FAIL: $*"; exit 1; }
