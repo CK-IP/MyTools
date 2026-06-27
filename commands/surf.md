@@ -1236,9 +1236,10 @@ right **only** when the target is genuinely absent by design (0 `.py` tests in t
 **no-pytest-by-design → INFO; pytest-present-but-skipped → ALERT.** Never dress a real deviation in
 calm wording to keep the log quiet.
 
-This is the same two-tier rule the degraded-merge `TONE` already encodes at the Step 7b land terminus
-(`ALERT` when a configured lens latched off — a real deviation; `INFO` when the backend was simply
-unset — expected single-lens). Extend it to every status line the run prints.
+This is the same two-tier rule the `sail degraded-review` `TONE` already encodes — surfaced here at
+the Step 7b land/merge line (the counterpart of `/sail`'s Stage 4 commit terminus): `ALERT` when a
+configured lens latched off (a real deviation), `INFO` when the backend was simply unset (expected
+single-lens). Extend it to every status line the run prints.
 
 ## Cross-references
 
