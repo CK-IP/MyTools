@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 import tempfile
 
 from sail import codexlatch
+from sail.build import _backend_family
 from sail.decisionlog import DecisionLog
 
 DEFAULT_BACKEND = ["claude", "-p"]
@@ -1127,6 +1128,20 @@ def review_tidiness(target, diff_ref, argv=None, verify_argv=None, enforce=True)
         result["verification"] = {"status": "skipped", "reason": "no cross-family verify backend"}
         return result
 
+    # Cross-family integrity guard (#83): Gear 2 grants teeth to a block-tier candidate ONLY as an
+    # INDEPENDENT, cross-family confirmation. If the verifier resolves to the SAME family as the
+    # Gear-1 lens that produced the candidate, that "confirmation" degenerates into self-rubber-
+    # stamping — the FP filter gives false confidence and a same-family over-eager block sails
+    # through. The intent (independence) is NOT met → ALERT-class (#112), surfaced via review.json +
+    # decision log. v1 is a WARNING, not hard family-enforcement (the agreed proportionate guard).
+    gear1_family = _backend_family(shlex.join(argv))
+    verify_family = _backend_family(shlex.join(verify_argv))
+    if gear1_family and gear1_family == verify_family:
+        result["same_family_warning"] = (
+            f"cross-family verifier appears same-family ('{gear1_family}'); "
+            "confirmation may be rubber-stamping"
+        )
+
     confirmed_ids, verification = _verify_block_findings(diff_text, candidates, verify_argv)
     result["verification"] = verification
     if confirmed_ids is None:
@@ -1417,6 +1432,8 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
                 )
         else:
             log.review_marker(f"tidiness (advisory): skipped — {tidiness_block.get('reason', '')}")
+        if tidiness_block.get("same_family_warning"):
+            log.review_marker(f"⚠ code-health: {tidiness_block['same_family_warning']}")
     print(f"sail review: {marker}")
 
     if advisory:
