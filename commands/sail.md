@@ -215,7 +215,7 @@ SAIL_REDTEAM_CMD="claude -p" \
 Unlike `/ship`'s simplify stage (which runs unconditionally on every change), `/sail` follows a **marginal-value rule**: heavy work fires only when justified. A clean diff pays almost nothing; a genuinely messy/wasteful diff gets `/ship`-grade treatment, but only then. Enforcement is **3-gear**:
 
 - **Gear 1 — generation (always, cheap).** The lens lists candidates, each tagged by `tier`: **`block`** (an EGREGIOUS, high-confidence, low-effort defect — an unambiguous easy win like dead code / a trivial duplicate / an obviously-wrong constant, **or** an egregious efficiency defect with an obvious cheaper alternative on a hot/reachable path) vs **`advisory`** (diminishing-returns polish — the default).
-- **Gear 2 — verification (only on a would-block candidate).** A `block`-tier candidate gets teeth **only if an independent cross-family (Codex) lens confirms it** — set `SAIL_TIDINESS_VERIFY_CMD` (falls back to `SAIL_REVIEW_CMD2`, the `--dual-lens` backend). This is a deliberate false-positive filter: an unconfirmed candidate is **demoted to advisory**, never blocked. A clean / all-advisory diff triggers **no verification call at all**.
+- **Gear 2 — verification (only on a would-block candidate).** A `block`-tier candidate gets teeth **only if an independent cross-family (Codex) lens confirms it** — set `SAIL_TIDINESS_VERIFY_CMD` (falls back to `SAIL_REVIEW_CMD2`, the `--dual-lens` backend). This is a deliberate false-positive filter: an unconfirmed candidate is **demoted to advisory**, never blocked. A clean / all-advisory diff triggers **no verification call at all**. The verifier **must be a different family** from the Gear-1 tidiness lens — that is what makes the confirmation independent. When it resolves to the **same** family (e.g. `SAIL_TIDINESS_VERIFY_CMD` pointed at the same backend as `SAIL_TIDINESS_CMD`), the review emits a `same_family_warning` in `review.json`'s `tidiness` block and an `⚠` decision-log line: the "confirmation" may be rubber-stamping (an integrity gap → **ALERT** per the tone taxonomy below). This is a best-effort, wrapper-aware **warning**, not hard family-enforcement.
 - **Gear 3 — fix-and-recheck (only if confirmed).** Confirmed `block`-tier findings surface under a `blocking` key in the `tidiness` block and **fold into the blocking exit code** /sail's convergence loop already runs (alongside CRITICAL/HIGH correctness findings and unmet ACs).
 
 - **Efficiency false-positive guardrail.** A *blocking* efficiency finding must state **(a)** current complexity, **(b)** the concrete cheaper alternative, **(c)** why the path is hot/reachable — else it is demoted to advisory (mirrors the #69 scanner-triage FP filter). The `block` decision is the lens's `tier`, not its `severity` — severity stays `MEDIUM`/`LOW`.
@@ -224,7 +224,7 @@ Unlike `/ship`'s simplify stage (which runs unconditionally on every change), `/
 - **Degrades cleanly.** An empty diff, a size-gated skip, a missing tidiness backend, a missing cross-family verifier, or an unusable response all record `"status": "skipped"` (or demote candidates to advisory) — **never a hard error, never a blocked run**.
 
 ```bash
-SAIL_TIDINESS_CMD="codex exec -m gpt-5.4-mini -c model_reasoning_effort=low" \
+SAIL_TIDINESS_CMD="claude -p" \
 SAIL_TIDINESS_VERIFY_CMD="codex exec -m gpt-5.4-mini" \
 SAIL_TIDINESS_MIN_LINES=40 \
   python3 -m sail run --target . --diff <base-ref> --run-dir "$SESSION_DIR" --round N --tidiness
