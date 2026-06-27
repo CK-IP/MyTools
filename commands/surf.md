@@ -1204,6 +1204,43 @@ from the durable files is the canonical path.
 - The charter + journal are the source of truth; re-anchor from them at the top of every issue.
   Do not rely on `/compact` or chat history.
 
+## Status-message tone — INFO vs ALERT (#112)
+
+**Tone tracks severity.** *Expected absence is information; unexpected absence is a warning.* The
+facts are the same either way — only the volume changes. This generalizes #108's "park loudly"
+instinct to **all** operator-facing status output: if every line reads as a caveat, a real event (a
+model downgrade, a missing-but-required tool, a gate failing red) stops being noticeable. So
+calibrate each status line — every journal/decision-log note, every operator log line — to one of
+two tiers.
+
+**Neutral — flat, declarative INFO** (the system is doing exactly what it should):
+- A gate **no-ops because its target is absent by design** — pytest / diff-coverage when the repo
+  has no Python tests; npm-audit with no `package.json`.
+- A **risk-gated step doesn't fire** on a low-stakes diff (e.g. red-team escalation skipped).
+- The **materiality floor stays dormant** on a green run.
+- **Dual-lens running on the configured backends** (both lenses present, as intended).
+
+**ALERT — explicit `⚠` / "HEADS UP", made to stand out** (the intent was NOT met):
+- A **configured backend is unavailable / the codex latch tripped → degrading to single-lens** (a
+  cross-family lens the diff gated for did not run).
+- A **fallback model** is used instead of the intended one.
+- A tool that **should** be present is **missing** (e.g. bandit can't emit SARIF).
+- A gate **genuinely fails red** (≠ skips).
+- Any **silent-fallback** path (a denied/unrenderable prompt that would auto-take the recommended
+  option — the exact class #108 kills).
+
+**Conditional honesty guard.** The classification turns on whether intent was *actually met*, not on
+the surface event — and the calm wording must stay truthful. "Coverage gate correctly no-ops" is
+right **only** when the target is genuinely absent by design (0 `.py` tests in the repo); a repo that
+*does* carry a pytest suite with a skipping coverage gate is a **real gap → ALERT**. So:
+**no-pytest-by-design → INFO; pytest-present-but-skipped → ALERT.** Never dress a real deviation in
+calm wording to keep the log quiet.
+
+This is the same two-tier rule the `sail degraded-review` `TONE` already encodes — surfaced here at
+the Step 7b land/merge line (the counterpart of `/sail`'s Stage 4 commit terminus): `ALERT` when a
+configured lens latched off (a real deviation), `INFO` when the backend was simply unset (expected
+single-lens). Extend it to every status line the run prints.
+
 ## Cross-references
 
 - `commands/idea.md` — triage skill; `/surf` is the board-level autopilot above per-issue pipelines

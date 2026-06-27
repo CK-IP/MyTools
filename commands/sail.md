@@ -558,6 +558,41 @@ end-to-end: to exercise `proceed-hardening`, set `SAIL_MATERIALITY_CMD` to a bac
 different from `SAIL_REVIEW_CMD` / `SAIL_REVIEW_CMD2` (#83). With it unset the floor never fires and a
 deferred blocking finding safely parks (no new `INSTALL.md` knob — reuses the existing one).
 
+## Status-message tone — INFO vs ALERT (#112)
+
+**Tone tracks severity.** *Expected absence is information; unexpected absence is a warning.* The
+facts are the same either way — only the volume changes. This generalizes #108's "park loudly"
+instinct to **all** operator-facing status output, interactive runs included: if every line reads as
+a caveat, a real event (a model downgrade, a missing-but-required tool, a gate failing red) stops
+being noticeable. So calibrate each status line to one of two tiers.
+
+**Neutral — flat, declarative INFO** (the system is doing exactly what it should):
+- A gate **no-ops because its target is absent by design** — pytest / diff-coverage when the repo
+  has no Python tests; npm-audit with no `package.json`.
+- A **risk-gated step doesn't fire** on a low-stakes diff (e.g. red-team escalation skipped).
+- The **materiality floor stays dormant** on a green run.
+- **Dual-lens running on the configured backends** (both lenses present, as intended).
+
+**ALERT — explicit `⚠` / "HEADS UP", made to stand out** (the intent was NOT met):
+- A **configured backend is unavailable / the codex latch tripped → degrading to single-lens** (a
+  cross-family lens the diff gated for did not run).
+- A **fallback model** is used instead of the intended one.
+- A tool that **should** be present is **missing** (e.g. bandit can't emit SARIF).
+- A gate **genuinely fails red** (≠ skips).
+- Any **silent-fallback** path (a denied/unrenderable prompt that would auto-take the recommended
+  option — the exact class #108 kills).
+
+**Conditional honesty guard.** The classification turns on whether intent was *actually met*, not on
+the surface event — and the calm wording must stay truthful. "Coverage gate correctly no-ops" is
+right **only** when the target is genuinely absent by design (0 `.py` tests in the repo); point
+`/sail` at a repo that *does* carry a pytest suite and a skipping coverage gate is a **real gap →
+ALERT**. So: **no-pytest-by-design → INFO; pytest-present-but-skipped → ALERT.** Never dress a real
+deviation in calm wording to keep the log quiet.
+
+This is the same two-tier rule the degraded-review `TONE` already encodes at the Stage 4 commit
+terminus (`ALERT` when a configured lens latched off — a real deviation; `INFO` when the backend was
+simply unset — expected single-lens). Extend it to every status line the run prints.
+
 ## Calibration (operator validation — deferred to a live run)
 
 The calibration acceptance criterion — *run looped `/sail` against issues `/ship` already handled (#32/#33 have full artifacts) and confirm the loop surfaces what `/ship`'s multi-round + dual-lens surfaced* — is an **operator validation step**, not a hermetic test: it needs a live LLM review backend (`SAIL_REVIEW_CMD` / `SAIL_REVIEW_CMD2`) and the merged #32/#33 artifacts. Run it once those are available and record the parity result in the ship's log (mirrors the #32 AC#7/#8 trial-runbook precedent). The build above delivers items 1–4 (plan-verification, resolution log, dual-lens, convergence) with hermetic tests; calibration is the live-run demonstration on top.
