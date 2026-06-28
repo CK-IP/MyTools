@@ -51,20 +51,24 @@ out="$(bash -c 'sail_setup_isolation(){ :; }; sail_concurrent_run(){ :; }; '"$PR
 [ "$rc" -ne 0 ] || fail "T6: preflight must halt when ship_safe_cleanup_orphan_dir is undefined"
 ok
 
-# T3a collision -> in-place.
+# T3a collision (rc=3) -> in-place. The lib now emits a collision-specific rc=3 (#92), so the
+# driver switches on the return code and no longer re-derives the collision from git-worktree
+# internals — the assertion deliberately carries NO collision worktree setup.
 make_repo "$TMP_ROOT/collide"
-git -C "$TMP_ROOT/collide" branch sail/88
-git -C "$TMP_ROOT/collide" worktree add -q "$TMP_ROOT/wt88" sail/88
-out="$(run_isolate 'sail_setup_isolation(){ return 1; };' "$TMP_ROOT/collide")" && rc=0 || rc=$?
-[ "$rc" -eq 0 ] || fail "T3a: collision should fall back cleanly to in-place"
+out="$(run_isolate 'sail_setup_isolation(){ return 3; };' "$TMP_ROOT/collide")" && rc=0 || rc=$?
+[ "$rc" -eq 0 ] || fail "T3a: collision (rc=3) should fall back cleanly to in-place"
 printf '%s' "$out" | grep -q "WORK_DIR=$TMP_ROOT/collide;COMMIT=no" \
   || fail "T3a: collision fallback should set WORK_DIR to repo root and COMMIT=no"
 ok
 
-# T3b rc=1 NO collision -> HALT.
+# T3b rc=1 -> HALT, unconditionally. rc=1 is now a GENERIC git/worktree failure (a collision is
+# rc=3), so the driver HALTs on it regardless of git state — prove it halts EVEN with a real
+# sail/88 collision worktree present (the driver trusts the return code, never re-greps).
 make_repo "$TMP_ROOT/nocollide"
+git -C "$TMP_ROOT/nocollide" branch sail/88
+git -C "$TMP_ROOT/nocollide" worktree add -q "$TMP_ROOT/wt88" sail/88
 if run_isolate 'sail_setup_isolation(){ return 1; };' "$TMP_ROOT/nocollide" >/dev/null 2>&1; then
-  fail "T3b: rc=1 without a checked-out sail/88 worktree must halt"
+  fail "T3b: rc=1 (generic failure) must halt even when a sail/88 worktree exists"
 fi
 ok
 

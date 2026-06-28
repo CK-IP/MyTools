@@ -196,6 +196,27 @@ grep -qx "precious unsaved work" "$REPO3"/.claude/worktrees/sail-77.orphan-*/wip
   || fail "preserved orphan retains its unsaved content"; ok
 
 # ---------------------------------------------------------------------------
+# 8b. Collision-specific return code (#92): a TRUE collision — branch sail/<n>
+#     held by another live worktree — returns rc=3 (distinct from a generic
+#     git/worktree failure, which stays rc=1). The driver switches on rc=3 to
+#     fall back to in-place without re-deriving the collision itself.
+# ---------------------------------------------------------------------------
+REPO_C="$TMP_ROOT/repo_collide"; mkrepo "$REPO_C"
+git -C "$REPO_C" branch sail/65
+git -C "$REPO_C" worktree add -q "$TMP_ROOT/held-65" sail/65   # branch held in a SEPARATE live worktree
+set +e; sail_setup_isolation "$REPO_C" 65 >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" -eq 3 ] || fail "collision (branch held by another live worktree) returns rc=3, got $rc"; ok
+
+# A generic worktree-add failure that is NOT a collision stays rc=1 (never misclassified as 3):
+# branch exists but is held by NO worktree, and the canonical target path is occupied by a FILE
+# so `git worktree add` fails for a non-collision reason.
+REPO_G="$TMP_ROOT/repo_generic"; mkrepo "$REPO_G"
+git -C "$REPO_G" branch sail/55
+mkdir -p "$REPO_G/.claude/worktrees"; : > "$REPO_G/.claude/worktrees/sail-55"
+set +e; sail_setup_isolation "$REPO_G" 55 >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" -eq 1 ] || fail "generic worktree-add failure (no collision) returns rc=1, got $rc"; ok
+
+# ---------------------------------------------------------------------------
 # 9. Doc contract — commands/sail.md documents the opening isolate stage and
 #    gates the commit strictly on a GREEN review (HIGH risk #1 mitigation).
 # ---------------------------------------------------------------------------
