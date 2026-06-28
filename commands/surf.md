@@ -1085,9 +1085,10 @@ restarted, the teammate survives the cap window — which restarting the Claude 
 
 - **The revive watcher.** `config/surf-resume.sh`, fired on an interval by the LaunchAgent
   (`config/com.surf.resume.plist`), is **reframed** from a headless relauncher into the
-  session-bound watcher: instead of `claude -p`, its action is `tmux send-keys` to the
-  **orchestrator pane** of the live session. It is **not** a headless `claude -p` relaunch — it
-  touches no Claude tokens to decide, and it only ever revives a session that is already alive.
+  session-bound watcher: instead of `claude -p`, it enumerates every live pane in the named
+  `surf` session and uses `tmux send-keys` on the pane(s) where the cap was actually observed.
+  It is **not** a headless `claude -p` relaunch — it touches no Claude tokens to decide, and it
+  only ever revives a session that is already alive.
 - **The watcher is pure bash and gates before any Claude call** — zero Claude tokens on an idle
   tick. It acts only when **all** of: no live revive lock; a **live `.surf/active` session**
   exists (a PID marker whose process is still alive — written by a running interactive or resumed
@@ -1104,8 +1105,8 @@ restarted, the teammate survives the cap window — which restarting the Claude 
      until the nudge would push the floor forward every tick and never revive — a livelock); it
      falls through to state 2.
   2. **Armed AND `now ≥ .surf/resume-after`** → the session *was* observed capped and the window
-     has reset → **revive once** (send-keys to the orchestrator pane), then **disarm** (delete
-     `.surf/resume-after`).
+     has reset → **revive once** (send-keys to each pane recorded in `.surf/resume-panes`, or the
+     orchestrator pane if no record exists), then **disarm** (delete both markers).
   3. **Armed AND reset still pending** → wait.
   4. **Not capped AND not armed** → a healthy/working session that was never observed capped →
      **do nothing.** The armed floor is the proof-of-prior-cap that licenses a nudge; without it
@@ -1122,18 +1123,20 @@ restarted, the teammate survives the cap window — which restarting the Claude 
   the watcher arms `resume-after = max(parsed_reset, now + MIN_BACKOFF)`. If the reset time is
   **unparseable**, it arms a long default (`now + DEFAULT_BACKOFF`, multi-hour — subscription
   windows are multi-hour). A parse-miss is therefore a *long* wait, never a per-tick hot-loop.
-- **Precise pane targeting.** So the revive keystroke lands on the orchestrator and not a
-  teammate's pane, the orchestrator records its own tmux pane id to `.surf/orchestrator-pane` at
-  the top of the per-issue loop (Step 7); the watcher sends keys to that pane id, falling back to
-  the named session only if the file is absent.
+- **Precise pane targeting.** So the revive keystroke lands on the pane that actually stalled,
+  the watcher records the capped tmux pane id(s) to `.surf/resume-panes` when it arms, and it
+  sends keys back to those pane ids on revive. If no pane record exists, it falls back to the
+  orchestrator pane id from `.surf/orchestrator-pane`, then to the named session only if that file
+  is absent.
 - **Cap detection is pane-read, and that is a documented limitation.** The watcher reads the
-  orchestrator pane's **active tail** (`tmux capture-pane`, last few non-empty lines) to spot the
-  cap notice. This is the **only** out-of-band cap signal available: a capped session is blocked
-  on the API and **cannot write a marker itself**, so there is nothing machine-readable to gate on
-  instead. The fragility is bounded by design — the conservative `MIN_BACKOFF` floor, the
-  active-tail restriction, and the single-shot idempotent nudge mean a misread costs at most one
-  harmless keystroke or a longer wait, never a hot-loop. The cap-notice patterns should be
-  **validated against a real capped Claude Code pane** before being trusted in production.
+  active tail (`tmux capture-pane`, last few non-empty lines) of every live pane in the named
+  session to spot the cap notice. This is the **only** out-of-band cap signal available: a capped
+  session is blocked on the API and **cannot write a marker itself**, so there is nothing
+  machine-readable to gate on instead. The fragility is bounded by design — the conservative
+  `MIN_BACKOFF` floor, the active-tail restriction, and the single-shot idempotent nudge mean a
+  misread costs at most one harmless keystroke or a longer wait, never a hot-loop. The cap-notice
+  patterns should be **validated against a real capped Claude Code pane** before being trusted in
+  production.
 - **Anti-pattern guard.** Never put the "is it time yet?" decision inside a Claude call — that would
   burn tokens on every idle tick and can't run while the session is capped. The decision lives in
   the pure-shell watcher; the live session is nudged only once the gate has already said yes.

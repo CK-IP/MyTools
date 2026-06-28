@@ -13,6 +13,9 @@
 	<key>StartInterval</key>
 	<integer>1800</integer>
 
+	<key>RunAtLoad</key>
+	<true/>
+
 	<key>StandardOutPath</key>
 	<string>/tmp/surf-resume.log</string>
 

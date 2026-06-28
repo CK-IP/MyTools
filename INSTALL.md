@@ -496,6 +496,7 @@ sed "s|__REPO_ROOT__|$(pwd)|g" config/com.surf.resume.plist \
 
 ```bash
 launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.surf.resume.plist
+launchctl kickstart -k "gui/$(id -u)/com.surf.resume"
 ```
 
 **Verify:**
