@@ -89,6 +89,23 @@ FAILURE_CLASS_CHECKLIST = (
     "Record any unaddressed class as a blocking (HIGH or CRITICAL) risk in the risks list.\n"
 )
 
+# #81: the PREVENTIVE half — stop run-state acceptance criteria being authored in the first place.
+# The diff-scoped reviewer (sail run --diff) sees only the diff, not a live test run, so an AC
+# phrased as a run-state claim ("the suite still passes") is structurally un-evaluable and made #70's
+# plan_verification oscillate unknown<->unmet. The oscillation SYMPTOM is already mitigated (unknown
+# is non-blocking; #77/#100 reduce churn); this directive is the upstream fix — author ACs the
+# reviewer can actually check against the diff text. Folded into the SAME single plan pass (no new
+# lens, no exit code); carried by both the blind and the grounded planning paths.
+DIFF_VERIFIABLE_AC_DIRECTIVE = (
+    "DIFF-VERIFIABLE ACCEPTANCE CRITERIA (mandatory): every acceptance criterion MUST be "
+    "diff-verifiable — it must assert something OBSERVABLE IN THE DIFF (e.g. 'adds test T20 "
+    "pinning X', 'review.py gains the probe directive', 'commands/sail.md documents the rule'). "
+    "Do NOT phrase an AC as a run-state claim (e.g. 'the suite still passes', 'the build "
+    "succeeds') — the diff-scoped reviewer sees only the diff, not a live run, so it cannot "
+    "evaluate that; run-state guarantees are the deterministic gates' job (the pytest gate), not "
+    "an LLM-checked AC.\n"
+)
+
 # AC#2/#4 (#58): markers of a plan-risky spec, in two families:
 #   (A) REMEDIATION  — the change adds a user-facing instruction/remediation (the broken
 #                      promise->action class), and
@@ -196,6 +213,7 @@ def build_prompt(spec):
         + CODE_HEALTH_SELF_CHECK
         + DESIGN_ALTERNATIVES_DIRECTIVE
         + FAILURE_CLASS_CHECKLIST
+        + DIFF_VERIFIABLE_AC_DIRECTIVE
         + "Return JSON only.\n\n"
         "=== SPEC ===\n"
         f"{spec}\n"
@@ -255,7 +273,8 @@ GROUNDED_PLAN_PROMPT_PREFIX = (
     '"risks":[{"severity":"CRITICAL|HIGH|MEDIUM|LOW","area":"design|security|scope|other",'
     '"issue":"...","mitigation":"...","evidence":"<concrete tool-execution evidence>"}],'
     '"scope":{"in":[...],"out":[...]},"summary":"..."}\n'
-    "Return JSON only.\n"
+    + DIFF_VERIFIABLE_AC_DIRECTIVE
+    + "Return JSON only.\n"
 )
 
 

@@ -433,4 +433,25 @@ raise SystemExit(0 if ok else 1)
 PY
 echo "PASS T22: plan prompt includes the conditional failure-class checklist (#90)"
 
+# --- T23 (#81): the plan prompt requires acceptance criteria to be DIFF-VERIFIABLE — assert
+# something observable in the diff, never a run-state claim ("the suite still passes"), which is
+# the deterministic pytest gate's job, not an LLM-checked AC. This is the PREVENTIVE half of #81
+# (the oscillation symptom is already mitigated by the unknown-non-blocking spine + #77/#100); it
+# stops run-state ACs being authored in the first place. Both planning paths must carry it: the
+# blind build_prompt AND the grounded build_grounded_prompt. Prompt-content assertion (the LLM
+# output is non-deterministic — same reason T10/T19/T22 assert the prompt, not the model output). ---
+python3 - <<'PY' || fail "T23: plan prompt missing the diff-verifiable acceptance-criteria guidance (#81)"
+from sail.plan import build_prompt, build_grounded_prompt
+for p in (build_prompt("some spec").lower(), build_grounded_prompt("some spec").lower()):
+    ok = (
+        "diff-verifiable" in p          # the rule names the property
+        and "acceptance" in p           # ...of acceptance criteria
+        and "run-state" in p            # the named anti-pattern
+        and "observable in the diff" in p
+    )
+    if not ok:
+        raise SystemExit(1)
+PY
+echo "PASS T23: plan prompt requires diff-verifiable acceptance criteria, both paths (#81)"
+
 echo "PASS: sail plan contract verified"
