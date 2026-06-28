@@ -106,7 +106,10 @@ sail_concurrent_run() {
 #     must NOT destroy it (autonomous: log + fall back to in-place).
 #
 # Requires `ship_safe_cleanup_orphan_dir` in scope (source ship-resume-safety.sh).
-# rc: 0 (path printed) | 2 (bad issue) | 1 (git/worktree failure).
+# rc: 0 (path printed) | 2 (bad issue) | 3 (collision — branch held by another live worktree)
+#   | 1 (any other git/worktree failure). Splitting the true collision out as a distinct rc=3
+#   lets the Stage 0.5 driver fall back to in-place on rc=3 without re-deriving the collision
+#   from `git worktree list` internals, while rc=1 stays a fail-closed generic error (#92).
 sail_setup_isolation() {
   local repo_root="$1" issue="$2"
   case "$issue" in
@@ -145,10 +148,19 @@ sail_setup_isolation() {
   fi
   git -C "$repo_root" worktree prune 2>/dev/null || true
 
-  # Re-attach to an existing branch (prior run) or create a fresh one. A branch checked
-  # out in another live worktree makes `git worktree add` fail → return 1 (never destroy).
+  # Re-attach to an existing branch (prior run) or create a fresh one. A branch checked out in
+  # another live worktree makes `git worktree add` fail; on that failure, positively confirm the
+  # cause is a TRUE collision (the branch is held in another live worktree) and return the
+  # collision-specific rc=3 (never destroy) so the driver can fall back to in-place without
+  # re-deriving the condition. Any OTHER add failure is a generic git/worktree error → rc=1 (#92).
   if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch"; then
-    git -C "$repo_root" worktree add "$wt" "$branch" >&2 || return 1
+    if ! git -C "$repo_root" worktree add "$wt" "$branch" >&2; then
+      if git -C "$repo_root" worktree list --porcelain 2>/dev/null \
+           | grep -qx "branch refs/heads/$branch"; then
+        return 3
+      fi
+      return 1
+    fi
   else
     git -C "$repo_root" worktree add "$wt" -b "$branch" >&2 || return 1
   fi
