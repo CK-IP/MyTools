@@ -137,7 +137,7 @@ _DOC_SUFFIXES = (".md", ".rst")
 # already re-runs them on any such edit.
 _RUFF_CONFIGS = ("pyproject.toml", "ruff.toml", ".ruff.toml", "setup.cfg",
                  ".gitignore", ".ignore", ".ruffignore")
-_MYPY_CONFIGS = ("pyproject.toml", "mypy.ini", ".mypy.ini", "setup.cfg")
+_MYPY_CONFIGS = ("pyproject.toml", "mypy.ini", ".mypy.ini", "setup.cfg", ".gitignore")
 _SHELLCHECK_CONFIGS = (".shellcheckrc",)
 
 
@@ -146,7 +146,7 @@ def _is_pip_manifest(path: str) -> bool:
     # the pip-tools layout where files live under a `requirements/` dir as `base.txt`, `dev.txt`,
     # … (basename loses the `requirements` prefix, so match on a path component too).
     base = os.path.basename(path)
-    if base == "pyproject.toml":
+    if base in ("pyproject.toml", "poetry.lock", "Pipfile.lock", "setup.cfg"):
         return True
     if base.startswith("requirements") and path.endswith(".txt"):
         return True
@@ -230,8 +230,12 @@ class Checker:
             return any(os.path.basename(f) in _NODE_MANIFESTS for f in changed_files)
         if name in ("gitleaks", "pytest", "diff-coverage"):
             return True
-        # bandit / semgrep (and any unknown gate): pure code-scan of .py.
-        return not all(f.endswith(_DOC_SUFFIXES) for f in changed_files)
+        if name in ("bandit", "semgrep"):
+            # bandit / semgrep: pure code-scan of .py.
+            return not all(f.endswith(_DOC_SUFFIXES) for f in changed_files)
+        # Unknown/custom gates have unknown inputs, so never reuse a green verdict on docs-only
+        # changes. Conservative default: re-run.
+        return True
 
     def is_blocking(self, target: str, mode: str) -> bool:
         # Runtime blocking decision. Defaults to the static `blocking` field (the prior
