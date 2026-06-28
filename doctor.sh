@@ -58,7 +58,7 @@ for d in "$REPO_ROOT"/skills/*;     do check_link "$d" "$CLAUDE_DIR/skills/$(bas
 echo ""
 echo "Hooks registered in settings.json:"
 if [ -f "$SETTINGS" ]; then
-  for h in codex-redirect.sh research-gate.sh sail-tdd-guard.sh; do
+  for h in research-gate.sh sail-tdd-guard.sh; do
     if grep -q "$h" "$SETTINGS"; then green "$h registered"; else yellow "$h NOT in settings.json — hook will not fire (see home/settings.reference.json)"; fi
   done
 else

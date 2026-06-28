@@ -379,23 +379,15 @@ This prevents false-positive churn that re-burns the tokens Codex saved.
 
 ## Fallback rules
 
-**Before every fallback:** write the signal file so the PreToolUse hook allows Agent through:
+When a codex delegation cannot complete, fall back to a native Claude subagent (general-purpose with the role prompt):
 
-```bash
-touch ~/.ship/codex-fallback
-```
+- **`codex` binary missing** → fall back immediately. One-line warning to the user.
+- **`codex login` auth failure** → ask user to re-auth (`codex login`), then retry once. If still failing, fall back.
+- **Sandbox refusal** (Codex blocks a needed write) → retry once with `--ignore-rules`. If still blocked, fall back.
+- **Malformed JSON output** → retry once with the prompt amended to "Your previous output was not valid JSON. Reply with JSON only, no prose." If still bad, fall back.
+- **Network error / token exhaustion** → retry once after 30s. Then fall back.
 
-Then fall back to native Claude subagent (general-purpose with role prompt).
-
-- **`codex` binary missing** → signal + fall back immediately. One-line warning to the user.
-- **`codex login` auth failure** → ask user to re-auth (`codex login`), then retry once. If still failing, signal + fall back.
-- **Sandbox refusal** (Codex blocks a needed write) → retry once with `--ignore-rules`. If still blocked, signal + fall back.
-- **Malformed JSON output** → retry once with the prompt amended to "Your previous output was not valid JSON. Reply with JSON only, no prose." If still bad, signal + fall back.
-- **Network error / token exhaustion** → retry once after 30s. Then signal + fall back.
-
-The signal file is auto-cleaned by the hook at the start of each new `/ship` run (compared against the ship-substeps timestamp). No manual cleanup needed.
-
-Every fallback writes a one-line note to the ship's log under "Process Improvements" so we can tune the skill later.
+Every fallback writes a one-line note to the ship's log recording that the substep ran on Claude, not codex — never claim codex delegation for a substep that fell back.
 
 ## Token-saving discipline checklist
 
