@@ -84,13 +84,29 @@ grep -qF '.surf/' "$GITIGNORE" && pass ".surf/ gitignored" || fail ".surf/ not g
 # 16. INSTALL.md documents the /surf symlink
 grep -qF 'commands/surf.md' "$INSTALL" && pass "INSTALL.md /surf symlink present" || fail "INSTALL.md /surf symlink missing"
 
-# A1. Supervised delegation mechanism pinned
-grep -qF 'TeamCreate' "$TARGET" && pass "supervised delegation (TeamCreate) pinned" || fail "supervised delegation (TeamCreate) missing"
+# --- #124 INVERSION: the DEFAULT execution body is now a headless `claude -p` worker process
+# per issue, NOT a tmux-pane agent-team teammate. The assertions below (formerly A1/A2/A10-A16
+# pinning the #73 teammate/persistent-tmux model) are INVERTED to pin the headless default; the
+# tmux/TeamCreate/pane machinery is re-asserted only as the OPTIONAL supervised lens. The brain
+# (charter/journal/decision-log/revert-map/Step 5b/tombstone/resume/run-dir/surf/<issue>) stays
+# GREEN — those assertions are untouched. ---
 
-# A2. Delegation model (#73): EVERY issue → fresh teammate; the old "autonomous = subagent" path is retired
-grep -qiE 'every issue is (delegated|built by).*teammate|delegating every issue to a teammate' "$TARGET" && pass "every-issue-delegated-to-teammate pinned" || fail "every-issue-delegated-to-teammate missing"
-grep -qiE 'cannot host|can.t host|never a one-shot subagent|no subagent path' "$TARGET" && pass "subagent-cannot-host-crew rationale pinned" || fail "subagent-incompatibility rationale missing"
-grep -qiE 'replaces the old .*subagent|that rule is .*retired|no longer uses subagents' "$TARGET" && pass "autonomous=subagent rule retired" || fail "autonomous=subagent retirement missing"
+# A1. The DEFAULT delegation is a headless `claude -p` worker (the #124 body swap).
+grep -qF -- 'claude --dangerously-bypass-permissions -p "/sail' "$TARGET" && pass "headless claude -p /sail worker invocation pinned" || fail "headless claude -p worker invocation missing"
+grep -qiE 'claude.*-p.*/sail.*--unattended|/sail <[ni]>? *--unattended|/sail <issue> --unattended' "$TARGET" && pass "worker runs /sail in --unattended mode" || fail "worker --unattended mode missing"
+
+# A1b. The supervisor is a thin LLM loop driving bash helpers; the operator talks only to the
+# supervisor, never directly to a worker process.
+grep -qiE 'thin LLM loop|supervisor.*(drives|driving).*(bash )?helper' "$TARGET" && pass "supervisor = thin LLM loop over bash helper pinned" || fail "thin-LLM-loop supervisor framing missing"
+grep -qiE 'operator (interacts|talks) only with the supervisor|never directly with a worker|operator (talks|only).*supervisor' "$TARGET" && pass "operator talks only to the supervisor pinned" || fail "operator-only-to-supervisor framing missing"
+
+# A2. The worker helper script is referenced as the delegation mechanism.
+grep -qF 'config/surf-worker.sh' "$TARGET" && pass "worker helper script (config/surf-worker.sh) referenced" || fail "config/surf-worker.sh reference missing"
+
+# A2b. The worker→supervisor contract is read from run-dir artifacts (review.json + exit code),
+# NOT from log/pane scraping.
+grep -qiE 'review\.json.*exit code|exit code.*review\.json|reads? .*review\.json|review\.json. *\+. *exit' "$TARGET" && pass "worker result read from review.json + exit code pinned" || fail "review.json+exit-code result contract missing"
+grep -qiE 'not (log|pane).?scrap|no (log|pane).?scrap|never .*scrap' "$TARGET" && pass "no log/pane-scraping contract pinned" || fail "no-scraping contract missing"
 
 # A3. Context model / anti-drift pinned
 grep -qi 're-anchor' "$TARGET" && pass "re-anchor pinned" || fail "re-anchor missing"
@@ -173,35 +189,71 @@ grep -qiE 'done: superseded' "$TARGET" && pass "tombstone journal line (done: su
 grep -qi 'externally exhausted' "$TARGET" && pass "externally-exhausted trigger present" || fail "externally-exhausted trigger missing"
 grep -qiE 'lay the old charter to rest' "$TARGET" && pass "tombstone instruction (lay the old charter to rest) present" || fail "tombstone lay-to-rest instruction missing"
 
-# --- #73: teammate-for-every-issue + persistent-tmux revive ---
+# --- #124: headless-worker-for-every-issue (default) + durable-file resume; panes optional ---
 
-# A10. Engine: /sail default, /ship optional
+# A10. Engine: /sail default, /ship optional (UNCHANGED by #124 — kept GREEN).
 grep -qiE 'sail.{0,12}default|default engine.*sail' "$TARGET" && pass "/sail-default engine pinned" || fail "/sail-default engine missing"
 grep -qiE 'ship.{0,6}optional|optional.*heavier engine' "$TARGET" && pass "/ship-optional engine pinned" || fail "/ship-optional engine missing"
 
-# A11. Persistent-tmux + revive resume model; headless relaunch retired/reframed; reboot trade-off
-grep -qiE 'persistent.?tmux' "$TARGET" && pass "persistent-tmux model pinned" || fail "persistent-tmux model missing"
-grep -qiF 'tmux send-keys' "$TARGET" && pass "send-keys revive mechanism pinned" || fail "send-keys revive missing"
-grep -qiE 'retired|reframed' "$TARGET" && pass "headless-relaunch retired/reframed pinned" || fail "headless-relaunch retire/reframe missing"
-grep -qiE 'reboot' "$TARGET" && pass "reboot trade-off pinned" || fail "reboot trade-off missing"
+# A11. DEFAULT resume is the durable-file `/surf resume` headless relaunch (#53 LaunchAgent model),
+# NOT a persistent-tmux send-keys revive. The headless relaunch is no longer "retired" on the
+# default path — the verified headless-hosts-the-crew fact restores it.
+grep -qiE 'durable.?file|/surf resume.*relaunch|relaunch.*/surf resume' "$TARGET" && pass "durable-file /surf resume relaunch pinned (default)" || fail "durable-file resume relaunch missing"
+grep -qiE 'headless relaunch|claude .*-p .*/surf resume' "$TARGET" && pass "headless /surf resume relaunch named (default cap-recovery)" || fail "headless relaunch (default) missing"
+grep -qiE 'reboot' "$TARGET" && pass "reboot/recovery discussed" || fail "reboot/recovery discussion missing"
 
-# A12. Named tmux session start/monitor procedure (the start front door)
-grep -qF 'tmux new -s surf' "$TARGET" && pass "named-session start command pinned" || fail "named-session start command missing"
-grep -qF 'tmux attach -t surf' "$TARGET" && pass "named-session attach/monitor command pinned" || fail "named-session attach command missing"
+# A11b. The false 'agent teams / only a teammate can host the crew / cannot run headless' premise
+# is REMOVED from the default path (it survives only inside the optional supervised lens prose, if
+# at all). A headless `-p` process hosts /sail's crew (depth-0 subagents) — assert that fact.
+grep -qiE 'depth-0|subagent|hosts? .*crew|headless .*host' "$TARGET" && pass "headless-hosts-the-crew fact pinned" || fail "headless-hosts-crew fact missing"
 
-# A13. Teardown mandatory on every stop path
-grep -qi 'teardown' "$TARGET" && pass "teardown referenced" || fail "teardown missing"
-grep -qiE 'every stop path|dismiss (all|every) teammate' "$TARGET" && pass "teardown-on-every-stop-path pinned" || fail "teardown-on-every-stop-path missing"
+# A12. tmux start/monitor commands appear ONLY inside the OPTIONAL supervised lens (a viewer over
+# the same run-dir process), not as the default start front door.
+# Either: no default-path tmux-start command at all, OR every tmux-start lives near an optional-lens qualifier.
+if grep -qF 'tmux new -s surf' "$TARGET"; then
+  # Every `tmux new -s surf` line must have an optional/supervised-lens qualifier within ±40 lines.
+  awk '
+    tolower($0) ~ /optional/ && tolower($0) ~ /lens|supervised|demo/ { q[NR]=1 }
+    /tmux new -s surf/ { starts[NR]=1 }
+    END {
+      for (s in starts) {
+        ok=0
+        for (n in q) { if (n>=s-40 && n<=s+40) { ok=1; break } }
+        if (!ok) { exit 1 }
+      }
+      exit 0
+    }' "$TARGET" \
+    && pass "tmux start command qualified as optional/supervised lens" || fail "tmux start not scoped to optional lens"
+else
+  pass "no default-path tmux-start command (headless default)"
+fi
 
-# A14. Spawn contract: start immediately / run to terminus / don't idle (idle-on-spawn fix)
-grep -qiE 'start immediately|run autonomously to terminus|do not idle|without idling' "$TARGET" && pass "teammate spawn-immediately contract pinned" || fail "spawn-immediately contract missing"
+# A13. Worker lifecycle is HARNESS-owned (#124 final decision): the worker is backgrounded via the
+# harness `run_in_background` Bash facility (survives turns; harness-managed kill), NOT pure-bash
+# daemonization. The wall-clock cap is enforced by the SUPERVISOR (elapsed-since-spawn) issuing the
+# harness kill — no bash process-group kill / PID-reuse guard on the default path.
+grep -qiE 'run_in_background|run-in-background' "$TARGET" && pass "harness run_in_background worker lifecycle pinned" || fail "run_in_background lifecycle missing"
+grep -qiE 'wall-clock cap|elapsed' "$TARGET" && pass "supervisor-enforced wall-clock cap pinned" || fail "wall-clock cap missing"
+grep -qiE 'harness.*kill|kill.*harness|background-task kill|task-stop|KillShell' "$TARGET" && pass "harness-managed kill pinned (no bash pgkill)" || fail "harness-managed kill missing"
+# The OLD bash daemonization functions must NOT be INVOKED as the active model anymore (prose may
+# still EXPLAIN that they were removed). Assert no callable invocation syntax survives:
+#   `surf_worker_spawn <`, `surf_worker_wait <`, `surf_worker_pgkill <`, or `surf_worker_command`
+# being called with a run-dir arg (the old spawn signature). The emitter is invoked as
+# `surf_worker_command <issue>` (no run-dir), so that's allowed.
+grep -qE 'surf_worker_spawn <|surf_worker_wait "|surf_worker_wait <|surf_worker_pgkill |surf_worker_identity_ok |surf_worker_start_token ' "$TARGET" && fail "stale bash-daemonization function INVOCATION still in surf.md" || pass "no stale spawn/wait/pgkill/identity invocations in surf.md"
 
-# A15. Agent-teams required in BOTH modes (no longer supervised-only)
-grep -qiE 'both.{0,4}modes' "$TARGET" && pass "both-modes delegation pinned" || fail "both-modes requirement missing"
+# A14. Worker run-to-terminus contract (the worker runs /sail --unattended to terminus).
+grep -qiE 'start immediately|run autonomously to terminus|do not idle|without idling|--unattended' "$TARGET" && pass "worker run-to-terminus contract pinned" || fail "run-to-terminus contract missing"
 
-# A16. Revive watcher requires positive stall evidence + precise pane target (#73 review fixes)
-grep -qiE 'positive stall evidence|never nudge a healthy session|armed floor' "$TARGET" && pass "positive-stall-evidence pinned" || fail "positive-stall-evidence missing"
-grep -qF '.surf/orchestrator-pane' "$TARGET" && pass "orchestrator-pane targeting pinned" || fail "orchestrator-pane targeting missing"
+# A15. Injection-safe boundary: numeric issue id + answers via files (the worker command is EMITTED
+# by surf_worker_command, not forked by bash).
+grep -qF 'surf_worker_command' "$TARGET" && pass "surf_worker_command emitter referenced" || fail "surf_worker_command reference missing"
+grep -qiE 'numeric.*issue id|issue id.*numeric|injection.?safe|answers? .*(via|in) (a )?file' "$TARGET" && pass "injection-safe boundary pinned" || fail "injection-safe boundary missing"
+
+# A16. Resume reconciliation: an in-flight run-dir WITHOUT a completion sentinel is ORPHANED
+# (re-check/re-run against the SAME run-dir), never treated as done.
+grep -qiE 'completion sentinel|done sentinel|sentinel' "$TARGET" && pass "completion sentinel concept pinned" || fail "completion sentinel missing"
+grep -qiE 'orphan' "$TARGET" && pass "in-flight run-dir treated as orphaned pinned" || fail "orphaned-run-dir reconciliation missing"
 
 # --- #57: domain-gated input windows + clear mode banner ---
 

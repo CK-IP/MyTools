@@ -1,0 +1,47 @@
+{
+  "status": "completed",
+  "parse_ok": true,
+  "rc": 0,
+  "round": 1,
+  "counts": {
+    "CRITICAL": 0,
+    "HIGH": 1,
+    "MEDIUM": 0,
+    "LOW": 0
+  },
+  "findings": [
+    {
+      "severity": "HIGH",
+      "title": "unsafe",
+      "body": "x",
+      "id": "lens1-9f128f412cd9",
+      "lens": "lens1"
+    }
+  ],
+  "diff_hash": "b805b6b194ed0a34335c6cbc619cf4700862afee07dbd035ebc291af03afeed6",
+  "plan_hash": "c6cb570cf734eccb517f69afc8dddd30d0f6ae24d6f3ed53e5f5b81d6354f5ec",
+  "plan_verification": {
+    "status": "verified",
+    "acceptance_criteria": [
+      {
+        "criterion": "the function returns 2",
+        "status": "unmet",
+        "evidence": "still returns 1"
+      }
+    ]
+  },
+  "lenses": [
+    "lens1"
+  ],
+  "dual_lens_requested": false,
+  "lens2_ran": false,
+  "lens2_configured": false,
+  "lens2_latched": false,
+  "redteam_requested": false,
+  "redteam_ran": false,
+  "redteam_configured": true,
+  "redteam_latched": false,
+  "empty_diff": false,
+  "target": "/var/folders/h0/yj867jy52r93mh0sjjhprjzw0000gn/T/tmp.NIsZ2Y5fJp/repo",
+  "diff_ref": "HEAD~1"
+}
