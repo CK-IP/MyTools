@@ -27,9 +27,11 @@ DEFAULT_BACKOFF="${SURF_RESUME_DEFAULT_BACKOFF:-18000}"  # parse-miss → 5h lon
 MAX_RUN_AGE="${SURF_RESUME_MAX_RUN_AGE:-7200}"       # a lockdir older than 2h is stale → reclaim
 SESSION="${SURF_RESUME_SESSION:-surf}"               # the canonical named tmux session
 LOG="${SURF_RESUME_LOG:-/tmp/surf-resume.log}"
+CAP_NOTICE_RE='weekly limit|hit your .*limit|usage limit|usage cap|rate limit|try again later|limit will reset|limit reached|resets at|/usage-credits'
 
 SURF_DIR="${SURF_RESUME_DIR:-$REPO_ROOT/.surf}"   # overridable so the functional test can point at a fixture dir
 RESUME_AFTER="$SURF_DIR/resume-after"
+RESUME_PANES="$SURF_DIR/resume-panes"
 LOCKDIR="$SURF_DIR/resume.lock"
 ACTIVE="$SURF_DIR/active"
 ORCH_PANE_FILE="$SURF_DIR/orchestrator-pane"   # tmux pane id the orchestrator records at Step 7
@@ -64,6 +66,11 @@ mtime_of() {
     return 0
   fi
   stat -c %Y "$p" 2>/dev/null || true
+}
+
+# Live pane ids for the named tmux session, one per line.
+live_panes() {
+  tmux list-panes -s -t "$SESSION" -F '#{pane_id}' 2>/dev/null || true
 }
 
 # Is there real unfinished board work? The done-marker is the authoritative "quiet"
@@ -171,9 +178,57 @@ should_revive() {
 # `↺ resume <ISO>` or a merge line — can't be mistaken for the reset time.
 parse_reset_time() {
   local out="$1"
-  grep -iE 'usage limit|usage cap|rate limit|try again later|limit will reset|resets at' "$out" 2>/dev/null \
-    | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' 2>/dev/null \
-    | head -1 || true
+  local line ts time tz
+  line="$(
+    grep -iE "$CAP_NOTICE_RE" \
+      "$out" 2>/dev/null | head -1 || true
+  )"
+  [ -n "$line" ] || return 0
+
+  ts="$(printf '%s\n' "$line" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' 2>/dev/null | head -1 || true)"
+  if [ -n "$ts" ]; then
+    printf '%s\n' "$ts"
+    return 0
+  fi
+
+  time="$(
+    printf '%s\n' "$line" | sed -nE 's/.*([0-9]{1,2}(:[0-9]{2})?[[:space:]]*[AaPp][Mm]).*/\1/p' | head -1 || true
+  )"
+  tz="$(
+    printf '%s\n' "$line" | sed -nE 's/.*\(([A-Za-z_]+\/[A-Za-z_]+)\).*/\1/p' | head -1 || true
+  )"
+  if [ -z "$time" ] || [ -z "$tz" ] || ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  python3 - "$time" "$tz" <<'PY' 2>/dev/null || true
+import re
+import sys
+from datetime import datetime, timedelta, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    raise SystemExit(0)
+
+token = sys.argv[1].strip().lower().replace(" ", "")
+match = re.fullmatch(r"(?P<h>\d{1,2})(?::(?P<m>\d{2}))?(?P<ampm>am|pm)", token)
+if not match:
+    raise SystemExit(0)
+
+hour = int(match.group("h")) % 12
+if match.group("ampm") == "pm":
+    hour += 12
+minute = int(match.group("m") or 0)
+
+zone = ZoneInfo(sys.argv[2])
+now = datetime.now(zone)
+candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+if candidate <= now:
+    candidate += timedelta(days=1)
+
+print(candidate.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+PY
 }
 
 # Does the captured pane show the session is currently capped? We capture only the CURRENT,
@@ -182,7 +237,7 @@ parse_reset_time() {
 # tail. This is the authoritative current-state read, not a grep over historical output.
 hit_cap() {
   local out="$1"
-  grep -qiE 'usage limit|usage cap|rate limit|try again later|limit will reset|resets at' "$out" 2>/dev/null
+  grep -qiE "$CAP_NOTICE_RE" "$out" 2>/dev/null
 }
 
 # The tmux target for capture/send — the recorded orchestrator pane id if /surf wrote one
@@ -227,29 +282,66 @@ main() {
   local out target full
   out="$(mktemp)"
   full="$(mktemp)"
-  trap 'rm -rf "$LOCKDIR"; rm -f "$out" "$full"' EXIT
+  local best
+  best="$(mktemp)"
+  trap 'rm -rf "$LOCKDIR"; rm -f "${out:-}" "${full:-}" "${best:-}"' EXIT
   target="$(orch_target)"
+  local parsed_raw parsed_epoch armed_raw armed_epoch nowe floor_epoch
+  local active_cap=0 best_epoch="" best_out="" capped_panes="" pane_list pane candidate_epoch
+  local revive_targets
 
-  # Read the CURRENT visible screen of the orchestrator pane (no Claude tokens spent), then keep
-  # only the ACTIVE TAIL (last few non-empty lines). A capped Claude session shows its cap notice
-  # as the live tail; restricting to the tail keeps an older cap line that is merely still on
-  # screen from re-arming. NOTE (documented limitation): pane text is the ONLY out-of-band cap
-  # signal available — a capped session is blocked on the API and cannot write a marker itself, so
-  # there is no machine-readable alternative to read. The conservative MIN_BACKOFF floor and the
-  # single-shot, idempotent nudge bound the blast radius of any misread; validate against a real
-  # capped Claude Code pane before trusting the patterns in production.
-  tmux capture-pane -t "$target" -p >"$full" 2>/dev/null || true
-  grep -v '^[[:space:]]*$' "$full" 2>/dev/null | tail -n 12 >"$out" || true
-
-  # Read both signals up front: the reset time shown in the tail (if any) and the armed floor.
-  local parsed_raw parsed_epoch="" armed_raw armed_epoch="" nowe
-  parsed_raw="$(parse_reset_time "$out")"
-  [ -n "$parsed_raw" ] && parsed_epoch="$(epoch_of_rfc3339 "$parsed_raw")"
+  armed_raw=""
+  armed_epoch=""
   if [ -f "$RESUME_AFTER" ]; then
     armed_raw="$(cat "$RESUME_AFTER" 2>/dev/null || true)"
     armed_epoch="$(epoch_of_rfc3339 "$armed_raw")"
   fi
   nowe="$(now_epoch)"
+  floor_epoch=$((nowe + MIN_BACKOFF))
+
+  pane_list="$(live_panes)"
+  [ -n "$pane_list" ] || pane_list="$target"
+  while IFS= read -r pane; do
+    [ -n "$pane" ] || continue
+    tmux capture-pane -t "$pane" -p >"$full" 2>/dev/null || true
+    grep -v '^[[:space:]]*$' "$full" 2>/dev/null | tail -n 12 >"$out" || true
+    if hit_cap "$out"; then
+      active_cap=1
+      capped_panes="${capped_panes}${pane}"$'\n'
+      parsed_raw="$(parse_reset_time "$out")"
+      if [ -n "$parsed_raw" ]; then
+        parsed_epoch="$(epoch_of_rfc3339 "$parsed_raw")"
+        if [ -n "$parsed_epoch" ] && [ "$parsed_epoch" -gt "$nowe" ]; then
+          candidate_epoch=$(( parsed_epoch > floor_epoch ? parsed_epoch : floor_epoch ))
+          if [ -z "$best_epoch" ] || [ "$candidate_epoch" -gt "$best_epoch" ]; then
+            best_epoch="$candidate_epoch"
+            cp "$out" "$best"
+            best_out="$best"
+          fi
+        elif [ -z "$armed_epoch" ] && [ -z "$best_out" ]; then
+          cp "$out" "$best"
+          best_out="$best"
+        fi
+      elif [ -z "$armed_epoch" ] && [ -z "$best_out" ]; then
+        cp "$out" "$best"
+        best_out="$best"
+      fi
+    fi
+  done <<<"$pane_list"
+
+  # Read both signals up front: the reset time shown in the tail (if any) and the armed floor.
+  # A cap notice is only "still in effect" when its reset time is in the future, or it is the
+  # first sight of a cap and there is no armed floor yet. A lingering notice whose reset has
+  # already passed must NOT re-arm, or the revive would livelock.
+  if [ "$active_cap" -eq 1 ]; then
+    printf '%s\n' "$capped_panes" | awk 'NF && !seen[$0]++' >"$RESUME_PANES"
+    # Relative reset strings (e.g. "resets 8pm") always parse to a future epoch, so once an
+    # armed floor has already been crossed we must not treat the lingering notice as a fresh cap.
+    if [ -n "$best_out" ] && { [ -z "$armed_epoch" ] || [ "$nowe" -lt "$armed_epoch" ]; }; then
+      arm_resume_after "$best_out"
+      exit 0
+    fi
+  fi
 
   # State machine — positive stall evidence is REQUIRED before any nudge:
   #   (1) cap STILL IN EFFECT → arm/refresh resume-after, never nudge.
@@ -263,28 +355,26 @@ main() {
   # has already passed must NOT re-arm — the notice stays on the tail until we nudge, so re-arming
   # it would push the floor forward every tick and the revive (state 2) would never fire (livelock).
   # In that case we fall through to the armed-floor check and revive.
-  if hit_cap "$out"; then
-    if { [ -n "$parsed_epoch" ] && [ "$parsed_epoch" -gt "$nowe" ]; } \
-       || { [ -z "$parsed_epoch" ] && [ -z "$armed_epoch" ]; }; then
-      arm_resume_after "$out"                                # (1) cap still in effect
-      exit 0
-    fi
-    # else: lingering notice (reset already passed) or capped-unparseable-but-already-armed →
-    # do not re-arm; fall through to the armed-floor decision below.
-  fi
-
   if [ -n "$armed_epoch" ]; then
     if [ "$nowe" -lt "$armed_epoch" ]; then
       log "armed resume-after $armed_raw not yet reached — waiting"   # (3)
       exit 0
     fi
     # (2) armed and the floor has been crossed → the session stalled at a cap that has now reset.
-    # Revive it IN PLACE with a keystroke to the orchestrator pane — no headless relaunch, no
-    # process restart, so the still-alive teammate panes survive.
-    log "reviving '$target' via tmux send-keys (armed floor crossed)"
-    tmux send-keys -t "$target" "Cap window has reset — continue the /surf board run; do not idle." Enter 2>/dev/null || \
-      log "send-keys failed (session gone?) — manual /surf resume needed"
-    rm -f "$RESUME_AFTER" 2>/dev/null || true               # disarm so we nudge exactly once
+    # Revive it IN PLACE with a keystroke to the pane(s) that actually stalled — no headless
+    # relaunch, no process restart, so the still-alive teammate panes survive.
+    if [ -s "$RESUME_PANES" ]; then
+      revive_targets="$(cat "$RESUME_PANES" 2>/dev/null || true)"
+    else
+      revive_targets="$(orch_target)"
+    fi
+    while IFS= read -r pane; do
+      [ -n "$pane" ] || continue
+      log "reviving '$pane' via tmux send-keys (armed floor crossed)"
+      tmux send-keys -t "$pane" "Cap window has reset — continue the /surf board run; do not idle." Enter 2>/dev/null || \
+        log "send-keys failed for '$pane' (session gone?) — manual /surf resume needed"
+    done <<<"$revive_targets"
+    rm -f "$RESUME_AFTER" "$RESUME_PANES" 2>/dev/null || true   # disarm so we nudge exactly once
     exit 0
   fi
 
