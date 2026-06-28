@@ -27,7 +27,7 @@ print(g.get(sys.argv[3]) if g else 'MISSING')" "$1" "$2" "$3"
 # T1: affected_by per-gate dependency rule (the deterministic, tested heart).
 # ---------------------------------------------------------------------------
 python3 - <<'PY' || fail "T1: affected_by per-gate rule"
-from sail.checkers import build_registry
+from sail.checkers import build_registry, Checker
 reg = {c.name: c for c in build_registry()}
 def chk(name, files, expect):
     got = reg[name].affected_by(files)
@@ -39,6 +39,9 @@ chk("mypy", ["pkg/b.py"], True);        chk("mypy", ["docs/x.rst"], False)
 chk("mypy", ["stubs/a.pyi"], True)
 # ruff respects ignore files: a .gitignore/.ruffignore edit can change its scanned set + verdict.
 chk("ruff", [".gitignore"], True);      chk("ruff", [".ruffignore"], True)
+# #111: mypy honors .gitignore only under --exclude-gitignore, but treat it as an input symmetric
+# with ruff so a .gitignore-only change resets mypy's reuse (conservative; never adds a skip).
+chk("mypy", [".gitignore"], True)
 # shell gate -> only .sh
 chk("shellcheck", ["x.sh"], True);      chk("shellcheck", ["a.py"], False)
 # narrow gates also re-run on their own TOOL CONFIG (a config edit can flip a prior green).
@@ -49,6 +52,9 @@ chk("shellcheck", [".shellcheckrc"], True)
 chk("pip-audit", ["pyproject.toml"], True)
 chk("pip-audit", ["requirements-dev.txt"], True)
 chk("pip-audit", ["requirements/dev.txt"], True)   # pip-tools layout
+chk("pip-audit", ["poetry.lock"], True)            # #111: poetry lockfile
+chk("pip-audit", ["Pipfile.lock"], True)           # #111: pipenv lockfile
+chk("pip-audit", ["setup.cfg"], True)              # #111: setuptools install_requires (install_requires)
 chk("pip-audit", ["a.py"], False)
 # node dep manifests
 chk("npm-audit", ["package.json"], True)
@@ -62,6 +68,16 @@ for g in ("bandit", "semgrep"):
     chk(g, ["README.md"], False)          # markdown-only => skip
     chk(g, ["docs/a.md", "docs/b.rst"], False)
     chk(g, ["fixture.txt"], True)         # .txt may be a fixture => re-run (not inert)
+# #111: an unknown/custom gate (registered via SAIL_CHECKERS but NOT in the known-name set) has
+# inputs that are by definition unknown, so the conservative default is ALWAYS re-run — never the
+# pure-.py-scanner doc-only skip, which would reuse a stale green on a docs-only resume.
+custom = Checker(name="my-custom-gate", tool="mytool", artifact="out.json")
+assert custom.affected_by(["README.md"]) is True, "custom gate must re-run on a docs-only set"
+assert custom.affected_by(["docs/a.md", "docs/b.rst"]) is True, "custom gate must re-run on any set"
+assert custom.affected_by(["a.py"]) is True
+# regression pin (#111): the custom-gate split must NOT regress bandit/semgrep — both stay pure
+# .py scanners that still skip a pure-doc (.md/.rst) resume (distinct files from the loop above).
+chk("bandit", ["LICENSE.md"], False);   chk("semgrep", ["guide.rst"], False)
 # Gates that read/execute ARBITRARY files cannot be scoped by suffix — always re-run when the
 # diff moved: gitleaks (secrets can hide in any file incl. docs), pytest (doctests/fixtures can
 # live in .md/.rst/.txt via --doctest-glob), diff-coverage (diff-derived).
