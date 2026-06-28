@@ -143,11 +143,16 @@ def run_build(target, run_dir, mode="build", round=1):
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         run_dir = os.path.join(os.getcwd(), ".sail", "runs", f"build-{stamp}-{uuid.uuid4().hex[:8]}")
     os.makedirs(run_dir, exist_ok=True)
+    build_cmd = os.environ.get("SAIL_BUILD_CMD")
     backend = _backend_argv()
 
     # #95 / RT-1: clean-degrade to inline when no runnable build backend exists.
     if not _argv_runnable(backend):
-        payload = {"status": "inline", "mode": mode}
+        payload = {
+            "status": "inline",
+            "mode": mode,
+            "reason": "backend-unset" if not (build_cmd and build_cmd.strip()) else "backend-not-runnable",
+        }
         _write_build_json(run_dir, payload)
         return 0
 

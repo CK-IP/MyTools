@@ -32,6 +32,7 @@ PY
 }
 status() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$1"; }
 warn()   { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("same_family_warning") or "")' "$1"; }
+reason() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("reason") or "")' "$1"; }  # #120: inline cause
 mark_red() { mkdir -p "$1/.sail"; : > "$1/.sail/last-test-failed"; }  # the failing-test marker
 
 TGT="$WORK/tgt"; mkdir -p "$TGT"
@@ -144,6 +145,41 @@ set +e; SAIL_BUILD_CMD="$BYTES" run_build "$TGT" "$RD" build 1 >/dev/null 2>&1; 
 [ "$rc" = 0 ] || fail "T15: non-UTF8 backend stdout should not crash the dispatcher (exit 0 delegated), got $rc"
 [ "$(status "$RD/build.json")" = delegated ] || fail "T15: status should be delegated despite non-UTF8 output"
 echo "PASS T15: non-UTF8 backend output -> delegated, exit 0 (S1.R1.2)"
+
+# ===== #120: inline `reason` distinguishes backend-unset from backend-not-runnable =====
+# So Stage-2 prose can classify the #112 INFO/ALERT tone off the artifact, not by re-reading $SAIL_BUILD_CMD.
+
+# T19 (#120): SAIL_BUILD_CMD unset → inline, reason "backend-unset" (expected degrade → INFO)
+RD="$WORK/rd19"; mark_red "$TGT"
+set +e; ( unset SAIL_BUILD_CMD; run_build "$TGT" "$RD" build 1 ) >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 0 ] || fail "T19: unset backend should exit 0, got $rc"
+[ "$(status "$RD/build.json")" = inline ] || fail "T19: status should be inline when unset"
+[ "$(reason "$RD/build.json")" = backend-unset ] || fail "T19: reason should be backend-unset when SAIL_BUILD_CMD unset, got '$(reason "$RD/build.json")'"
+echo "PASS T19: unset SAIL_BUILD_CMD → inline reason=backend-unset (#120)"
+
+# T20 (#120): SAIL_BUILD_CMD set but unrunnable → inline, reason "backend-not-runnable" (unexpected fallback → ALERT)
+RD="$WORK/rd20"; mark_red "$TGT"
+set +e; SAIL_BUILD_CMD="/nonexistent/backend-xyz" run_build "$TGT" "$RD" build 1 >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 0 ] || fail "T20: unrunnable backend should exit 0, got $rc"
+[ "$(status "$RD/build.json")" = inline ] || fail "T20: status should be inline when unrunnable"
+[ "$(reason "$RD/build.json")" = backend-not-runnable ] || fail "T20: reason should be backend-not-runnable when set-but-unrunnable, got '$(reason "$RD/build.json")'"
+echo "PASS T20: set-but-unrunnable SAIL_BUILD_CMD → inline reason=backend-not-runnable (#120)"
+
+# T20b (#120): SAIL_BUILD_CMD set but malformed (unparseable) → inline, reason "backend-not-runnable" (it WAS configured)
+RD="$WORK/rd20b"; mark_red "$TGT"
+set +e; SAIL_BUILD_CMD='codex "unbalanced' run_build "$TGT" "$RD" build 1 >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 0 ] || fail "T20b: malformed backend should exit 0, got $rc"
+[ "$(status "$RD/build.json")" = inline ] || fail "T20b: status should be inline when malformed"
+[ "$(reason "$RD/build.json")" = backend-not-runnable ] || fail "T20b: malformed (but set) backend reason should be backend-not-runnable, got '$(reason "$RD/build.json")'"
+echo "PASS T20b: malformed (set) SAIL_BUILD_CMD → inline reason=backend-not-runnable (#120)"
+
+# T21 (#120): delegated path carries NO reason field (reason is inline-only — additive, no spurious key)
+RD="$WORK/rd21"; mark_red "$TGT"
+set +e; SAIL_BUILD_CMD="codex" MOCK_RC=0 run_build "$TGT" "$RD" build 1 >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 0 ] || fail "T21: delegated should exit 0, got $rc"
+[ "$(status "$RD/build.json")" = delegated ] || fail "T21: status should be delegated"
+[ -z "$(reason "$RD/build.json")" ] || fail "T21: delegated build.json must NOT carry a reason field, got '$(reason "$RD/build.json")'"
+echo "PASS T21: delegated → no reason field (#120)"
 
 echo "PASS: sail build backend contract verified (Step 1)"
 
