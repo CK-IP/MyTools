@@ -55,4 +55,16 @@ if grep -qiE 'not built here' "$SKILL" 2>/dev/null; then
   fail "#47 must be live, not a deferred seam ('not built here' still present)"
 fi
 
+# --- #120 contract: Stage 2 ENFORCES codex-build-by-default when SAIL_BUILD_CMD is set ---
+# (the bug: SAIL_BUILD_CMD was set but Stage 2 left inline as the silent default, so codex never built
+#  and builder=reviewer=claude — the cross-family guarantee evaporated with no signal.)
+assert_grep 'when .SAIL_BUILD_CMD. is set.*(invoke|default)|SAIL_BUILD_CMD.*set.*invoke .*sail build|invoke .*sail build. by default' \
+  "Stage 2 invokes sail build by default when SAIL_BUILD_CMD is set (not inline-by-default)"
+assert_grep 'inline.*set.*ALERT|set.*inline.*ALERT|ALERT.*unexpected.*inline|unexpected.*inline.*ALERT' \
+  "an UNEXPECTED inline fallback (SAIL_BUILD_CMD set but build came back inline) reads as ALERT (#112)"
+assert_grep 'backend-unset' "Stage 2 names the build.json inline reason backend-unset (expected → INFO)"
+assert_grep 'backend-not-runnable' "Stage 2 names the build.json inline reason backend-not-runnable (unexpected → ALERT)"
+assert_grep 'builder.*reviewer.*claude|same.family.*builder|builder=reviewer' \
+  "Stage 2 carries the #83 same-family callout: SAIL_BUILD_CMD set + single-lens claude + inline build → builder=reviewer=claude (cross-family lost)"
+
 echo "PASS: sail command contract verified"

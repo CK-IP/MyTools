@@ -317,7 +317,7 @@ python3 -m sail run --target DIR --diff <git-ref> --dual-lens  # gates + dual-le
 
 ## Build delegation layer (`sail build`)
 
-`/sail`'s Stage-2 build (writing the failing test then the minimum code) and its per-round convergence fixes are **inline by default** — done by the orchestrating session. For the expensive code-writing, `sail build` delegates to a configurable subprocess backend, mirroring the plan/review backend pattern.
+`/sail`'s Stage-2 build (writing the failing test then the minimum code) and its per-round convergence fixes are **inline only when `SAIL_BUILD_CMD` is unset** — done by the orchestrating session. When `SAIL_BUILD_CMD` is set, `sail build` invokes the configured subprocess backend by default, mirroring the plan/review backend pattern.
 
 ```bash
 SAIL_BUILD_CMD="claude -p" \
@@ -326,8 +326,8 @@ SAIL_BUILD_CMD="claude -p" \
   python3 -m sail build --target . --run-dir "$RUN_DIR" --mode fix --round N   # per-round fixes
 ```
 
-- **Backend:** `SAIL_BUILD_CMD` supplies the command (parsed with `shlex`, run with `cwd=target`). No built-in default — **unset means inline** (the orchestrator builds, logged not errored).
-- **`build.json` status:** `delegated` (backend wrote the change → proceed to review), `inline` (no runnable backend → build inline), or `error` (fail closed). Exit code: 0 for delegated/inline, 1 for error.
+- **Backend:** `SAIL_BUILD_CMD` supplies the command (parsed with `shlex`, run with `cwd=target`). No built-in default — **unset means inline** (the orchestrator builds, logged not errored); when it is set, `python3 -m sail build` dispatches to that backend by default.
+- **`build.json` status:** `delegated` (INFO: backend wrote the change → proceed to review), `inline` (`reason=backend-unset` is INFO; `reason=backend-not-runnable` with `SAIL_BUILD_CMD` set is ALERT), or `error` (fail closed). Exit code: 0 for delegated/inline, 1 for error.
 - **TDD enforced:** both `build` and `fix` modes fail closed unless `<target>/.sail/last-test-failed` exists — the failing test is authored first (leadsman-owned); only code-writing is delegated. The backend is instructed never to weaken the failing test.
 - **fix-mode contract:** reads `review.json` (stable finding ids) + decision-log dispositions from the run-dir; fails closed if `review.json` is missing / unparseable / not `status: completed`, or the decision-log is present but undecodable. An absent decision-log is fine (a round-1 fix has no prior dispositions).
-- **Backend choice (#83):** `claude -p` (Sonnet 4.6) keeps the implementer in a different family from a codex review lens, preserving cross-family review; `codex exec …` is cheapest but collides with a codex `SAIL_REVIEW_CMD2`. `sail build` emits an advisory `same_family_warning` (best-effort, wrapper-aware, non-blocking) when `SAIL_BUILD_CMD` and `SAIL_REVIEW_CMD2` share a family. Inline stays the default/fallback until measured.
+- **Backend choice (#83):** `claude -p` (Sonnet 4.6) keeps the implementer in a different family from a codex review lens, preserving cross-family review; `codex exec …` is cheapest but collides with a codex `SAIL_REVIEW_CMD2`. If `SAIL_BUILD_CMD` is set, `SAIL_REVIEW_CMD` is the single-lens `claude` reviewer, and `build.json` comes back `inline` with `reason=backend-not-runnable`, raise an **ALERT** because builder=reviewer=claude and cross-family review was lost. `sail build` emits an advisory `same_family_warning` (best-effort, wrapper-aware, non-blocking) when `SAIL_BUILD_CMD` and `SAIL_REVIEW_CMD2` share a family. Inline stays the default/fallback only when `SAIL_BUILD_CMD` is unset.
