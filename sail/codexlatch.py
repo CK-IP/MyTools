@@ -88,8 +88,7 @@ def latch_active(now=None):
         return False
     if not isinstance(data, dict):
         return False
-    # Stale cleanup: a marker from a different session must not leak into this one (mirrors
-    # /ship's ~/.ship/codex-fallback newer-than-run cleanup).
+    # Stale cleanup: a marker from a different session must not leak into this one.
     if data.get("session") != session_token():
         clear_latch()
         return False

@@ -131,10 +131,6 @@ ln -s "$(pwd)/agents/culture-worker.md" ~/.claude/agents/culture-worker.md
 
 # --- Hooks ---
 
-# codex-redirect — PreToolUse on Agent: routes /ship substeps to Codex CLI
-rm -f ~/.claude/hooks/codex-redirect.sh
-ln -s "$(pwd)/hooks/codex-redirect.sh" ~/.claude/hooks/codex-redirect.sh
-
 # research-gate — PreToolUse on Edit|Write|Task: soft gate research checklist
 rm -f ~/.claude/hooks/research-gate.sh
 ln -s "$(pwd)/hooks/research-gate.sh" ~/.claude/hooks/research-gate.sh
@@ -168,7 +164,6 @@ ls -la ~/.claude/agents/explore-first.md
 ls -la ~/.claude/agents/culture-worker.md
 
 # Hooks
-ls -la ~/.claude/hooks/codex-redirect.sh
 ls -la ~/.claude/hooks/research-gate.sh
 
 # Skill

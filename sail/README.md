@@ -77,16 +77,6 @@ This JSON is standalone and valid. It shows the `PreToolUse` block expected by t
   "hooks": {
     "PreToolUse": [
       {
-        "_comment": "CK-Skills: redirects eligible /ship substeps to Codex CLI",
-        "matcher": "Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/codex-redirect.sh"
-          }
-        ]
-      },
-      {
         "_comment": "CK-Skills: soft gate — injects research checklist before edits",
         "matcher": "Edit|Write|Task",
         "hooks": [
