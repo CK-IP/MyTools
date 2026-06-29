@@ -11,8 +11,8 @@
 #
 # This SUPERSEDES the #73 persistent-tmux send-keys revive, which existed only because the old
 # teammate-pane build body could not run headless — a premise now verified FALSE. The optional
-# supervised (panes) lens (surf.md Step 3b) may still revive a long-lived session in place; that is
-# a visibility convenience of the optional lens, not this default watcher.
+# supervised (panes) lens (surf.md Step 3b) is a pure visibility layer with no cap-recovery of its
+# own; a capped run — watched or not — recovers via this same durable-file headless relaunch.
 #
 # Fired on an interval by the com.surf.resume LaunchAgent. The gate is PURE BASH: it spends zero
 # Claude tokens on an idle tick and only relaunches when there is real unfinished board work, no

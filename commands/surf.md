@@ -785,10 +785,8 @@ so the build host should match the manager's tier rather than drop to sonnet.
 issue's terminus and is `wait`-reaped (Step 7 step 5). Never reuse a worker across issues — stale
 context is exactly the drift `/surf` is built to avoid.
 
-> **Optional supervised (panes) lens.** Step 3b's panes wrap this **same** worker substrate inside
-> a tmux session purely for visibility — the per-issue process and `.surf/runs/<n>` artifacts are
-> identical. The optional lens uses the agent-teams feature only to render panes; it is **not** a
-> second execution body and adds no separate result contract or resume path.
+> **Optional supervised (panes) lens.** Step 3b's panes are a visibility wrapper over this **same**
+> worker substrate — not a second execution body; same result contract and resume path.
 
 **Recommended deferred — parallel workers.** This land runs workers **sequentially** (one issue at
 a time), matching convoy's proven floor. Running independent issues concurrently (a bounded worker
@@ -797,22 +795,13 @@ single-worker cleanup/identity/resume surface is proven first — see docs §7.
 
 ### Step 8b: Reuse-vs-optimize decision record (#124)
 
-The #124 body swap reuses what `/convoy` proves useful (cc-dotfiles `home/shell/convoy.sh`,
-`home/lib/ship-tide.py`) but, after hitting macOS limits, puts the **worker lifecycle on the
-harness instead of bash**. The authoritative per-mechanic table —
-**durable-artifact result contract, FAIL-CLOSED** (run-state.json + review.json + wip-handoff.md +
-review currency, never the claude exit code; not log-scraping), **worker lifecycle owned by the
-orchestrator's `run_in_background` harness facility** (survives turns; harness-managed kill; the
-supervisor enforces the wall-clock cap by elapsed-vs-spawn) — chosen over pure-bash daemonization,
-which fights macOS (no `setsid` → no cross-tick survival + unsafe process-group kill), **split
-polarity** (merge gate fail-closed vs liveness fail-open), **durable-journal + `.done`-sentinel
-resume** (in-flight = orphaned), and **deferred parallelism** —
-with one-line rationales and best-in-class citations, lives in
-`docs/surf-convoy-comparison-and-backlog.md` **§7. #124 convoy reuse-vs-optimize decision record**.
-That section also records two load-bearing lessons: the #73 "agent teams cannot run headless / only
-a teammate can host the crew" claim is **verified false** (depth-0 `-p` process; CLI/subagent
-lenses), and the **platform-fit lesson** that pure-bash process daemonization is the wrong home for
-worker lifecycle on macOS — the harness `run_in_background` facility (built to survive turns) is.
+The #124 body swap reuses what `/convoy` proves useful but puts the **worker lifecycle on the
+harness instead of bash**. The authoritative **per-mechanic decision table** (reused vs. done
+differently, each with a rationale + best-in-class citation) and the two load-bearing lessons (the
+#73 "only a teammate can host the crew" premise **verified false**; the platform-fit lesson) live in
+`docs/surf-convoy-comparison-and-backlog.md` **§7**. The contract those mechanics implement is
+stated at its point of use in Steps 7–8 above; §7 is the single home for the full table — do not
+re-narrate it here.
 
 ---
 
@@ -820,21 +809,27 @@ worker lifecycle on macOS — the harness `run_in_background` facility (built to
 
 ### Step 9: Auto-merge green, park everything else
 
-The merge rule is simple and strict:
+The merge rule is simple and strict, and — since #124 — the green/park decision is read from the
+worker's **durable run-dir artifacts**, not from any process exit code (see Worker delegation,
+Step 8, for the full contract):
 
-- **Auto-merge everything GREEN.** Green means `python3 -m sail run --diff main` **exited 0** —
-  all deterministic gates passed *and* the blocking LLM review passed with no CRITICAL or HIGH
-  findings. A green issue is merged as one `--no-ff` commit and its SHA is logged.
-- **Park everything else.** Any exit-1 run, or any issue with an unanswered question past its
-  deadline that the charter says `/surf` may *not* decide, is parked with a written note — never
-  merged.
+- **Auto-merge everything GREEN.** Green is **positively confirmed** by `surf_worker_result` from
+  the run-dir: no `wip-handoff.md`, every `run-state.json` gate `passed`/`skipped`, and a
+  `review.json` that is `completed` with no CRITICAL/HIGH finding, every AC `met`, no blocking
+  tidiness, and current (not stale). Only then is the issue merged as one `--no-ff` commit and its
+  SHA logged.
+- **Park everything else.** Anything not positively confirmed green — a `wip-handoff.md`, a
+  non-pass gate, a CRITICAL/HIGH finding, an unmet AC, a stale/garbage/missing artifact, or any
+  issue with an unanswered question past its deadline the charter says `/surf` may *not* decide — is
+  parked with a written note, never merged.
 
-**Safety property — the review is fail-closed.** In one-pass `sail run --diff` mode the blocking
-LLM review is **fail-closed**: if the review backend is unavailable, the run exits **1** (per the
-`/sail` README), not 0. So a run with no review backend is **parked, never silently
-auto-merged**. `/surf` does not need to special-case a missing backend — the engine already
-turns "couldn't review" into "not green," and not-green is parked. Treat any exit code other
-than 0 as park.
+**Safety property — the contract is fail-closed.** The decision **ignores the worker process exit
+code** (informational only — it reflects the `claude -p` process, not `/sail`'s commit-vs-park
+terminus, and is unreliable across the macOS spawn fallback). `/sail`'s own review is fail-closed
+inside the worker — a missing review backend makes the run not-green — and that surfaces to `/surf`
+as a `review.json` that is not `completed` (or absent), which `surf_worker_result` treats as
+**park**. So a run with no review backend is **parked, never silently auto-merged**: any ambiguity
+fails toward park, never toward merge.
 
 ---
 
@@ -1238,12 +1233,11 @@ not run headless — a premise now verified false).
   burn tokens on every idle tick and can't run while the API is capped. The decision lives in the
   pure-shell gate; `/surf resume` is relaunched only once the gate has already said yes.
 
-> **Optional supervised (panes) lens — in-place revive.** If you opted into the Step 3b panes lens
-> (a long-lived `surf` tmux session), the watcher can instead **revive the still-alive session in
-> place** with `tmux send-keys` rather than relaunch headlessly — keeping the visible panes intact
-> across the cap. This is a **visibility convenience of the optional lens only**; the **default**
-> cap-recovery is the durable-file headless relaunch above, and resume behaviour (the `.surf/`
-> files Step 15 reconstructs from) is identical either way.
+> **Optional supervised (panes) lens — cap-recovery is the same headless relaunch.** The Step 3b
+> panes lens is a **pure visibility layer**; it has **no** cap-recovery of its own. A capped run —
+> watched or not — recovers via the durable-file `/surf resume` headless relaunch above (a human at
+> a manned panes run can also relaunch manually). Resume behaviour (the `.surf/` files Step 15
+> reconstructs from) is identical either way.
 
 **Recovery in every case is the same durable-file path.** A usage cap, a crash, a reboot, or a
 user-stop all recover via `/surf resume` reading the durable `.surf/` files + git — there is no
@@ -1262,16 +1256,18 @@ claude --dangerously-bypass-permissions
 
 ## Rules
 
-- The start gate is non-negotiable: confirm the repo, confirm `--dangerously-bypass-permissions`,
-  and (in **both** modes, since both delegate to teammates) confirm
-  `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: 1`. Refuse the loop until all hold.
+- The start gate is non-negotiable: confirm the repo and confirm
+  `--dangerously-bypass-permissions`; refuse the loop until both hold. `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: 1`
+  is **not** required on the default headless path (Steps 2–3) — only if you opt into the optional
+  supervised (panes) lens (Step 3b).
 - Every user choice is an **interactive selection prompt — never a `--flag`**.
-- **Auto-merge only on `python3 -m sail run --diff main` exit 0.** Any other exit code is parked.
-  The review is fail-closed, so a missing backend parks; it never auto-merges.
+- **Auto-merge only on a positively-confirmed-green run-dir** (`surf_worker_result`: no
+  `wip-handoff.md`, all gates `passed`/`skipped`, `review.json` `completed` & clean & current).
+  The worker process exit code is ignored; any ambiguity fails closed to park (Step 8/9).
 - **Autonomous mode = fix, don't wait.** When something is broken or a fix is needed and the fix is
   reversible, in-scope, and unambiguous (a broken/non-hermetic test, a clear code-quality fix,
-  inserting a discovered fix-issue into the build order, a merge/park call, finishing a stalled
-  teammate's already-green work), the orchestrator **makes the call and executes it — decide-and-log,
+  inserting a discovered fix-issue into the build order, a merge/park call, landing a stalled
+  worker's already-green work), the orchestrator **makes the call and executes it — decide-and-log,
   never pause for the human.** Waiting defeats an unattended run. **Park is the only "stop"** and is
   reserved for the genuinely irreversible (cannot be undone by `git revert`), the genuinely ambiguous
   (no defensible default), or a non-code judgment that is truly the human's. Supervised mode asks

@@ -59,8 +59,9 @@ surf_worker_command() {
 #
 # POLARITY — FAIL-CLOSED (park on ambiguity). This is the merge gate: we must NEVER merge a run
 # that is not POSITIVELY CONFIRMED green, so anything missing/garbage/ambiguous → PARK. This is
-# DISTINCT from the watchdog/liveness polarity (surf_worker_wait/_pgkill/_identity), which is
-# fail-OPEN (don't wedge a healthy run). Two different jobs, two opposite safe directions.
+# DISTINCT from the watchdog/liveness path — owned by the harness (run_in_background + its
+# background-task kill), not bash — which is fail-OPEN (don't wedge a healthy run). Two different
+# jobs, two opposite safe directions.
 #
 # CRITICAL (#124 R5-1): the exit code is IGNORED for the decision — it is informational only.
 # The `claude -p` process exit code reflects the *claude process*, not /sail's commit-vs-park
