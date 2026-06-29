@@ -53,6 +53,8 @@ REVIEW_CLAUDE="$(mk_family_mock claude REVIEW_OUT)"   # correctness lens (family
 TIDY_CODEX="$(mk_family_mock codex TIDY_OUT)"         # Gear-1 tidiness lens, family "codex"
 TIDY_CLAUDE="$(mk_family_mock claude TIDY_OUT)"       # Gear-1 tidiness lens, family "claude"
 VERIFY_CODEX="$(mk_verify_mock codex)"                # Gear-2 verifier, family "codex"
+TIDY_MYLLM="$(mk_family_mock myllm TIDY_OUT)"         # Gear-1 lens, UNKNOWN family "myllm"
+VERIFY_OTHERLLM="$(mk_verify_mock otherllm)"          # Gear-2 verifier, UNKNOWN family "otherllm"
 
 CLEAN='{"findings":[],"summary":"no issues"}'
 # Block-tier EASY WIN (dead code) — a would-block candidate, so Gear-2 verification fires.
@@ -85,6 +87,7 @@ SAIL_REVIEW_CMD="$REVIEW_CLAUDE" REVIEW_OUT="$CLEAN" \
 SAIL_TIDINESS_CMD="$TIDY_CODEX" TIDY_OUT="$BLOCK_DEADCODE" \
 SAIL_TIDINESS_VERIFY_CMD="$VERIFY_CODEX" \
   run_sail "$TGT" "$RD"
+[ -f "$RD/review.json" ] || fail "T1: review.json not written — tidiness path did not run"
 warn_present "$RD/review.json" || fail "T1: same-family verifier did not emit same_family_warning"
 grep -q "rubber-stamping" "$RD/decision-log.md" || fail "T1: decision log missing the ⚠ code-health warning line"
 echo "PASS T1: same-family Gear-2 verifier emits the rubber-stamp warning (review.json + decision log)"
@@ -99,7 +102,8 @@ SAIL_TIDINESS_VERIFY_CMD="$VERIFY_CODEX" \
 # even if the verifier never fired): the verifier confirmed the block candidate, so the tidiness
 # block must show a completed verification with a blocking finding.
 python3 - "$RD/review.json" <<'PY' || fail "T2: cross-family Gear-2 path did not run — negative test would pass vacuously"
-import json, sys
+import json, os, sys
+assert os.path.exists(sys.argv[1]), f"review.json not written: {sys.argv[1]}"
 t = json.load(open(sys.argv[1])).get("tidiness") or {}
 assert t.get("status") == "completed", f"tidiness lens did not complete: {t.get('status')}"
 assert (t.get("verification") or {}).get("status") == "completed", "Gear-2 verification did not run"
@@ -108,5 +112,60 @@ PY
 if warn_present "$RD/review.json"; then fail "T2: cross-family verifier wrongly emitted same_family_warning"; fi
 if grep -q "rubber-stamping" "$RD/decision-log.md"; then fail "T2: decision log wrongly emitted the rubber-stamp warning"; fi
 echo "PASS T2: a genuinely cross-family verifier (Gear-2 confirmed) emits NO warning (no false positive)"
+
+# --- T4: env-WRAPPED SAME-family (#118). Gear-1 plain codex; verifier '/usr/bin/env <codex>'. ---
+# Pins the MISSED-real-same-family half of the bug: before the basename fix _backend_family keys off
+# the un-basenamed argv[0], so '/usr/bin/env …' resolves to 'env' (not 'codex') and a genuinely
+# same-family verifier slips past with NO warning. After the fix both read 'codex' → warning fires.
+TGT="$WORK/t4"; new_target "$TGT"; RD="$WORK/rd4"
+SAIL_REVIEW_CMD="$REVIEW_CLAUDE" REVIEW_OUT="$CLEAN" \
+SAIL_TIDINESS_CMD="$TIDY_CODEX" TIDY_OUT="$BLOCK_DEADCODE" \
+SAIL_TIDINESS_VERIFY_CMD="/usr/bin/env $VERIFY_CODEX" \
+  run_sail "$TGT" "$RD"
+[ -f "$RD/review.json" ] || fail "T4: review.json not written — tidiness path did not run"
+warn_present "$RD/review.json" || fail "T4: env-wrapped same-family verifier did not emit same_family_warning (basename normalization missing)"
+echo "PASS T4: '/usr/bin/env' wrapper normalizes to the inner family → same-family warning still fires"
+
+# --- T5: env-WRAPPED CROSS-family (#118). Gear-1 '/usr/bin/env <claude>'; verifier '/usr/bin/env <codex>'. ---
+# Pins the FALSE-ALARM half: before the fix BOTH wrapper forms collapse to 'env' → 'env'=='env' →
+# wrong warning. After the fix they read 'claude' vs 'codex' → NO warning, and the Gear-2 path still
+# runs to completion (positive proof the negative isn't vacuous).
+TGT="$WORK/t5"; new_target "$TGT"; RD="$WORK/rd5"
+SAIL_REVIEW_CMD="$REVIEW_CLAUDE" REVIEW_OUT="$CLEAN" \
+SAIL_TIDINESS_CMD="/usr/bin/env $TIDY_CLAUDE" TIDY_OUT="$BLOCK_DEADCODE" \
+SAIL_TIDINESS_VERIFY_CMD="/usr/bin/env $VERIFY_CODEX" \
+  run_sail "$TGT" "$RD"
+python3 - "$RD/review.json" <<'PY' || fail "T5: env-wrapped cross-family Gear-2 path did not run — negative test would pass vacuously"
+import json, os, sys
+assert os.path.exists(sys.argv[1]), f"review.json not written: {sys.argv[1]}"
+t = json.load(open(sys.argv[1])).get("tidiness") or {}
+assert t.get("status") == "completed", f"tidiness lens did not complete: {t.get('status')}"
+assert (t.get("verification") or {}).get("status") == "completed", "Gear-2 verification did not run"
+assert t.get("blocking"), "cross-family verifier did not confirm — verification path not exercised"
+PY
+if warn_present "$RD/review.json"; then fail "T5: two '/usr/bin/env'-wrapped backends wrongly collapsed to 'env' → false same_family_warning"; fi
+echo "PASS T5: two env-wrapped backends do NOT collapse to 'env' (claude vs codex) → no false warning"
+
+# --- T3: UNKNOWN distinct families (#118 LOW). Gear-1 'myllm'; verifier 'otherllm' → NO warning. ---
+# Reframed from the LOW finding's literal premise ("a mock whose basename _backend_family returns ''"):
+# _backend_family returns the basename, never '' for a resolvable command, so two IDENTICAL unknown
+# names ('myllm'/'myllm') are genuinely same-family and SHOULD warn (not a false positive). The
+# protective intent — "unknown-family pairs must not false-alarm" — is pinned by asserting two
+# DISTINCT unknown basenames raise no warning, with the Gear-2 path still completing.
+TGT="$WORK/t3"; new_target "$TGT"; RD="$WORK/rd3"
+SAIL_REVIEW_CMD="$REVIEW_CLAUDE" REVIEW_OUT="$CLEAN" \
+SAIL_TIDINESS_CMD="$TIDY_MYLLM" TIDY_OUT="$BLOCK_DEADCODE" \
+SAIL_TIDINESS_VERIFY_CMD="$VERIFY_OTHERLLM" \
+  run_sail "$TGT" "$RD"
+python3 - "$RD/review.json" <<'PY' || fail "T3: unknown-family Gear-2 path did not run — negative test would pass vacuously"
+import json, os, sys
+assert os.path.exists(sys.argv[1]), f"review.json not written: {sys.argv[1]}"
+t = json.load(open(sys.argv[1])).get("tidiness") or {}
+assert t.get("status") == "completed", f"tidiness lens did not complete: {t.get('status')}"
+assert (t.get("verification") or {}).get("status") == "completed", "Gear-2 verification did not run"
+assert t.get("blocking"), "unknown-family verifier did not confirm — verification path not exercised"
+PY
+if warn_present "$RD/review.json"; then fail "T3: distinct unknown families (myllm vs otherllm) wrongly emitted same_family_warning"; fi
+echo "PASS T3: distinct unknown families do NOT false-alarm (myllm vs otherllm → no warning)"
 
 echo "ALL PASS: test_sail_83_same_family_verifier.sh"
