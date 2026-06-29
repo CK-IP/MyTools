@@ -103,6 +103,14 @@ grep -qiE 'operator (interacts|talks) only with the supervisor|never directly wi
 # A2. The worker helper script is referenced as the delegation mechanism.
 grep -qF 'config/surf-worker.sh' "$TARGET" && pass "worker helper script (config/surf-worker.sh) referenced" || fail "config/surf-worker.sh reference missing"
 
+# A2-127. /surf must SOURCE its helper from a STABLE path that resolves regardless of which repo
+# /surf is operating on — never cwd-relative. (#127: `. config/surf-worker.sh` only resolved when
+# cwd was the CK-Skills checkout; /surf is a global command run against any repo's board.)
+grep -qF '. ~/.claude/lib/surf-worker.sh' "$TARGET" && pass "surf-worker.sh sourced from the stable ~/.claude/lib path (#127)" || fail "stable source path '. ~/.claude/lib/surf-worker.sh' missing (#127)"
+grep -qF '. config/surf-worker.sh' "$TARGET" && fail "regressive cwd-relative sourcing '. config/surf-worker.sh' still present (#127)" || pass "no cwd-relative helper sourcing remains (#127)"
+# INSTALL.md documents the post-merge symlink that backs the stable source path.
+grep -qF 'ln -s "$(pwd)/config/surf-worker.sh" ~/.claude/lib/surf-worker.sh' "$INSTALL" && pass "INSTALL.md documents the surf-worker.sh ~/.claude/lib symlink (#127)" || fail "INSTALL.md surf-worker.sh symlink step missing (#127)"
+
 # A2b. The worker→supervisor contract is read from run-dir artifacts (review.json + exit code),
 # NOT from log/pane scraping.
 grep -qiE 'review\.json.*exit code|exit code.*review\.json|reads? .*review\.json|review\.json. *\+. *exit' "$TARGET" && pass "worker result read from review.json + exit code pinned" || fail "review.json+exit-code result contract missing"

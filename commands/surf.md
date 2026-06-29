@@ -406,7 +406,9 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
    already in the baseline) and runs the engine in a stable per-issue run-dir:
    ```bash
    # 1. The SUPERVISOR derives the injection-safe command (no forking happens here):
-   . config/surf-worker.sh
+   # Sourced from the STABLE ~/.claude/lib path (symlinked at install, see INSTALL.md) so it
+   # resolves no matter which repo's board /surf is working — never cwd-relative (#127).
+   . ~/.claude/lib/surf-worker.sh
    surf_worker_command <issue>        # numeric-validates <issue>; prints exactly:
    #   claude --dangerously-bypass-permissions -p "/sail <issue> --unattended"
    ```
@@ -700,7 +702,7 @@ never directly with a worker process; a worker is a fire-and-background build ta
 partner. One worker per issue:
 
 ```bash
-. config/surf-worker.sh
+. ~/.claude/lib/surf-worker.sh   # stable path (symlinked at install, INSTALL.md) — never cwd-relative (#127)
 surf_worker_command <issue>      # numeric-validates <issue>; PRINTS (does not fork) exactly:
 #   claude --dangerously-bypass-permissions -p "/sail <issue> --unattended"
 # The supervisor then runs THAT command with the Bash tool, run_in_background: true (harness-owned
