@@ -111,6 +111,12 @@ grep -qF '. config/surf-worker.sh' "$TARGET" && fail "regressive cwd-relative so
 # INSTALL.md documents the post-merge symlink that backs the stable source path.
 grep -qF 'ln -s "$(pwd)/config/surf-worker.sh" ~/.claude/lib/surf-worker.sh' "$INSTALL" && pass "INSTALL.md documents the surf-worker.sh ~/.claude/lib symlink (#127)" || fail "INSTALL.md surf-worker.sh symlink step missing (#127)"
 
+# A2-128. The /surf runtime shell is zsh, but surf-worker.sh is a bash library — so /surf must invoke
+# it through a bash SUBSHELL (`bash -c '. ~/.claude/lib/surf-worker.sh && …'`), never source the
+# bash `set -e` library directly into the zsh runtime (which aborts on the unbound BASH_SOURCE guard
+# and leaks set -e). (#128)
+grep -qF "bash -c '. ~/.claude/lib/surf-worker.sh" "$TARGET" && pass "helper invoked via a bash subshell wrapper (#128)" || fail "bash -c subshell wrapper for surf-worker.sh missing (#128)"
+
 # A2b. The worker→supervisor contract is read from run-dir artifacts (review.json + exit code),
 # NOT from log/pane scraping.
 grep -qiE 'review\.json.*exit code|exit code.*review\.json|reads? .*review\.json|review\.json. *\+. *exit' "$TARGET" && pass "worker result read from review.json + exit code pinned" || fail "review.json+exit-code result contract missing"
