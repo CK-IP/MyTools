@@ -454,4 +454,66 @@ for p in (build_prompt("some spec").lower(), build_grounded_prompt("some spec").
 PY
 echo "PASS T23: plan prompt requires diff-verifiable acceptance criteria, both paths (#81)"
 
+# --- T24 (#129 AC#5): the runtime/platform-assumptions probe gate FIRES on a #127/#128-derived
+# spec — a bash library sourced under the zsh runtime via a symlink. This is the failure case the
+# repo-grounding missed (a #!/usr/bin/env bash lib sourced by /bin/zsh through a symlink broke at
+# runtime; bash-only tests passed). is_runtime_sensitive is a deterministic, tested Python gate
+# (mirrors is_plan_risky), NOT a prompt-only conditional — so the "would it have flagged #127/#128"
+# guarantee is hermetically testable without a live LLM. ---
+python3 - <<'PY' || fail "T24: is_runtime_sensitive did not flag the #127/#128 runtime-sensitive spec"
+from sail.plan import is_runtime_sensitive
+runtime_sensitive = (
+    "surf-worker.sh is a #!/usr/bin/env bash library but is sourced under the zsh runtime "
+    "via a symlink; the runtime shell differs from the bash-only test shell."
+)
+raise SystemExit(0 if is_runtime_sensitive(runtime_sensitive) else 1)
+PY
+echo "PASS T24: is_runtime_sensitive flags the bash-lib-sourced-under-zsh-via-symlink case (#129 AC#5)"
+
+# --- T25 (#129 AC#2/AC#6): is_runtime_sensitive does NOT fire on ordinary, non-runtime-sensitive
+# specs — the no-over-fire / no-cost-regression property. A normal diff must not pay the probe. ---
+python3 - <<'PY' || fail "T25: a non-runtime spec was wrongly flagged runtime-sensitive"
+from sail.plan import is_runtime_sensitive
+non_runtime = [
+    "Fix a typo in the README and rename a variable in helper.py.",
+    "Improve the error message when the price calculation overflows.",
+    "Add a new config knob to the JSON settings and document it.",
+    "Refactor the report formatter to reduce duplication.",
+    "Source: retro on the #124 session — add a new acceptance criterion.",  # 'Source:' metadata, not shell sourcing
+    # R1 precision regressions (#129 review): broad words that MUST NOT over-fire (AC#2).
+    "Update CONTRIBUTING.md with Linux installation instructions.",          # bare 'linux' in docs
+    "Document the operating system requirements in the README.",             # 'operating system' in docs
+    "Fix a bug in pathological edge cases of the date parser.",              # 'in path' substring trap
+    "Move the helper defined in path_utils.py into a shared module.",        # 'in path' substring trap
+]
+bad = [s for s in non_runtime if is_runtime_sensitive(s)]
+if bad:
+    print("wrongly flagged runtime-sensitive:", bad)
+    raise SystemExit(1)
+PY
+echo "PASS T25: is_runtime_sensitive leaves ordinary specs unflagged (#129 AC#2/AC#6)"
+
+# --- T26 (#129 AC#3/AC#4/AC#7): conditional INJECTION — both the blind build_prompt and the
+# grounded build_grounded_prompt CONTAIN the runtime/platform probe directive for a runtime-
+# sensitive spec and OMIT it entirely for an ordinary spec (the directive rides on NO plan when
+# the gate is False — the literal zero-cost-on-normal-diff property). ---
+python3 - <<'PY' || fail "T26: runtime/platform probe is not conditionally injected into both plan prompts"
+from sail.plan import build_prompt, build_grounded_prompt
+MARKER = "runtime / platform-assumptions probe"
+sensitive = "surf-worker.sh is a bash library sourced under zsh via a symlink."
+ordinary = "Fix a typo in the README."
+for builder in (build_prompt, build_grounded_prompt):
+    s = builder(sensitive).lower()
+    o = builder(ordinary).lower()
+    if MARKER not in s:
+        print(f"{builder.__name__}: probe MISSING for a runtime-sensitive spec"); raise SystemExit(1)
+    if MARKER in o:
+        print(f"{builder.__name__}: probe wrongly present for an ordinary spec (over-fire / cost regression)"); raise SystemExit(1)
+    # the directive must name the four assumptions to record
+    for dim in ("shell", "symlink", "os", "tool"):
+        if dim not in s:
+            print(f"{builder.__name__}: probe text missing the '{dim}' dimension"); raise SystemExit(1)
+PY
+echo "PASS T26: runtime/platform probe is conditionally injected into both plan prompts (#129 AC#3/AC#4/AC#7)"
+
 echo "PASS: sail plan contract verified"
