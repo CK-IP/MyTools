@@ -382,6 +382,30 @@ else
   pass "(R7-2) git unavailable — skipped currency cases"
 fi
 
+# --- (R8 #128) surf_worker_result sourced via the ~/.claude/lib SYMLINK must still locate the sail
+# module. It derives the repo root from its own source path to `import sail.review`; under the symlink
+# a naive dirname lands in ~/.claude/lib (no sail/) → import fails → it PARKS every run. Source via a
+# real symlink and assert a fresh-green fixture still reaches GREEN (proving realpath resolution).
+if [ "$GREEN_OK" -eq 1 ] && command -v python3 >/dev/null 2>&1; then
+  SYM="$FIX/surf-worker-symlink.sh"; ln -sf "$WORKER_SRC" "$SYM"
+  RD8="$FIX/runs/r8-symlink"; make_real_green "$RD8"
+  # Two things make this test genuinely discriminating (a naive dirname must FAIL it):
+  #  - Pass the symlink as a NON-$0 positional ($0='_') so the helper's bottom guard sees
+  #    BASH_SOURCE[0] ($SYM) != $0 and does NOT take the don't-execute-me `exit 0` branch (else the
+  #    source exits before surf_worker_result is even defined → vacuous pass). Production is safe too:
+  #    there $0 is "bash", not the file.
+  #  - Run from a NEUTRAL cwd ($FIX, which has no sail/) so the `import sail.review` cannot succeed via
+  #    cwd-on-sys.path — it must come from the repo root the helper derives from its own (symlinked)
+  #    source path. Without realpath resolution that root is wrong and the import fails → park. #128.
+  if ( cd "$FIX" && bash -c '. "$1" && surf_worker_result "$2" 0 "$3"' _ "$SYM" "$RD8" "$GREEN_REPO" ); then
+    pass "(R8 #128) result sourced via symlink resolves repo root via realpath → green"
+  else
+    fail "(R8 #128) sourced via symlink → parked: repo root not realpath-resolved, sail import failed"
+  fi
+else
+  pass "(R8 #128) git/python unavailable — skipped symlink repo-root case"
+fi
+
 # --- cleanup is safe (#124): NEVER force-delete; git worktree remove WITHOUT --force. Process
 # liveness is the HARNESS's job now (no bash worker.pid live-guard), so these only exercise the
 # safe-worktree-removal logic.
@@ -426,6 +450,27 @@ GIT_CLEANUP_DIRTY_TEST() {
   git -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1 || true   # test-side teardown only
 }
 GIT_CLEANUP_DIRTY_TEST
+
+# --- (7) #128: source-safe under the zsh RUNTIME. The /surf runtime (the Claude Code Bash tool) is
+# /bin/zsh, not bash. The bash-only tests above hid two zsh failures: under zsh `set -u` the bottom
+# guard `${BASH_SOURCE[0]}` was unbound (source aborted), and the helper's top-level `set -euo
+# pipefail` leaked into the caller. This drives the helper under zsh exactly as the runtime does.
+if command -v zsh >/dev/null 2>&1; then
+  # 7a. Sources cleanly under zsh AND surf_worker_command emits the exact command.
+  zout="$(zsh -c ". '$WORKER_SRC' && surf_worker_command 42" 2>&1)" && zrc=0 || zrc=$?
+  { [ "${zrc:-1}" -eq 0 ] && [ "$zout" = 'claude --dangerously-bypass-permissions -p "/sail 42 --unattended"' ]; } \
+    && pass "(7a) helper sources + emits under the zsh runtime" \
+    || fail "(7a) helper not source-safe under zsh (rc=${zrc:-?}, out='$zout')"
+  # 7b. The bad id must be REJECTED (non-zero) AND that non-zero return must NOT abort the zsh caller
+  # (i.e. sourcing did not leak set -e). Assert BOTH, so the test can't pass just because the command
+  # silently accepted a bad id.
+  zleak="$(zsh -c ". '$WORKER_SRC'; if surf_worker_command 'bad; rm -rf /' >/dev/null 2>&1; then echo ACCEPTED; else echo REJECTED; fi; echo ALIVE" 2>&1)"
+  [ "$zleak" = "$(printf 'REJECTED\nALIVE')" ] \
+    && pass "(7b) bad id rejected (non-zero) AND set -e not leaked (caller survives)" \
+    || fail "(7b) expected REJECTED+ALIVE, got '$zleak'"
+else
+  fail "(7) zsh not available — cannot verify the zsh runtime contract (#128)"
+fi
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

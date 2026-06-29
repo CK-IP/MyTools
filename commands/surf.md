@@ -405,12 +405,13 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
    itself creates the issue branch off **current `main`** (so a parent merged earlier in this run is
    already in the baseline) and runs the engine in a stable per-issue run-dir:
    ```bash
-   # 1. The SUPERVISOR derives the injection-safe command (no forking happens here):
-   # Sourced from the STABLE ~/.claude/lib path (symlinked at install, see INSTALL.md) so it
-   # resolves no matter which repo's board /surf is working — never cwd-relative (#127).
-   . ~/.claude/lib/surf-worker.sh
-   surf_worker_command <issue>        # numeric-validates <issue>; prints exactly:
-   #   claude --dangerously-bypass-permissions -p "/sail <issue> --unattended"
+   # 1. The SUPERVISOR derives the injection-safe command (no forking happens here). The helper is a
+   # bash library, but /surf's runtime shell is zsh — so invoke it through a bash SUBSHELL and
+   # capture stdout; NEVER source a bash `set -e` library straight into the zsh runtime (it aborts on
+   # the unbound BASH_SOURCE guard and leaks set -e — #128). Stable ~/.claude/lib path (symlinked at
+   # install, INSTALL.md), not cwd-relative (#127).
+   worker_cmd="$(bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_command <issue>')"
+   #   worker_cmd is exactly: claude --dangerously-bypass-permissions -p "/sail <issue> --unattended"
    ```
    ```
    # 2. The SUPERVISOR runs THAT command with the Bash tool, run_in_background: true.
@@ -469,9 +470,18 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
    that if the run is killed mid-issue, Resume (Step 15) can re-invoke the *same* `--run-dir` and
    `/sail` skips the gates it already finished. The per-issue **journal entry** written in step 4
    below is the resume checkpoint: a hard stop loses at most the single in-flight issue.
-3. **Evaluate the result (`surf_worker_result`, NOT the exit code).** A `green` verdict requires the
-   positive run-dir confirmation above (no `wip-handoff.md`; all `run-state.json` gates pass; clean
-   `review.json`); anything else parks (fail-closed).
+3. **Evaluate the result (`surf_worker_result`, NOT the claude exit code).** Invoke it the same way —
+   a bash SUBSHELL — but `surf_worker_result`/`surf_worker_cleanup` are **DECISION** functions that
+   signal via **exit status** (not stdout), so branch on the subshell's exit code (#128):
+   ```bash
+   if bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_result "<run-dir>"'; then
+     :   # green → auto-merge (subject to the stacked-parent guard below)
+   else
+     :   # non-green → park (fail-closed)
+   fi
+   ```
+   A `green` verdict requires the positive run-dir confirmation above (no `wip-handoff.md`; all
+   `run-state.json` gates pass; clean `review.json`); anything else parks (fail-closed).
    - **Green → auto-merge** — *but first, the stacked-parent guard.* Before merging,
      verify every dependency parent of this issue is **itself already merged to `main`**. If any
      parent is still parked, **park this dependent too** — never auto-merge a stacked branch whose
@@ -583,11 +593,15 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
       poll (step 2) sees the task still running **past** the cap (elapsed-since-spawn ≥ cap), the
       supervisor stops it via the **harness background-task kill** (task-stop / KillShell) — not a
       bash `kill`. That outcome is classified **timed-out** and **parks** the issue, never merges it.
-   2. **Cleanup is safe.** `surf_worker_cleanup` removes only what this worker created —
-      `git worktree remove` runs **without `--force`** (so it refuses to drop uncommitted work — the
-      safety net now that the harness, not a bash pid file, owns liveness), and the stable run-dir is
-      **left in place** as the resume checkpoint. It never force-deletes a directory tree. Only call
-      cleanup once the poll confirms the task has exited.
+   2. **Cleanup is safe.** Invoke it the same bash-subshell way (#128) — it signals via exit status:
+      ```bash
+      bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_cleanup "<run-dir>" "surf/<issue>"'
+      ```
+      `surf_worker_cleanup` removes only what this worker created — `git worktree remove` runs
+      **without `--force`** (so it refuses to drop uncommitted work — the safety net now that the
+      harness, not a bash pid file, owns liveness), and the stable run-dir is **left in place** as the
+      resume checkpoint. It never force-deletes a directory tree. Only call cleanup once the poll
+      confirms the task has exited.
 
    A fresh worker is spawned per issue (see Worker delegation); never carry one across issues.
    Full hang-detection of a *wedged-but-not-capped* worker (heartbeat/adaptive timeout) is a
@@ -702,9 +716,11 @@ never directly with a worker process; a worker is a fire-and-background build ta
 partner. One worker per issue:
 
 ```bash
-. ~/.claude/lib/surf-worker.sh   # stable path (symlinked at install, INSTALL.md) — never cwd-relative (#127)
-surf_worker_command <issue>      # numeric-validates <issue>; PRINTS (does not fork) exactly:
-#   claude --dangerously-bypass-permissions -p "/sail <issue> --unattended"
+# The helper is a bash library; /surf's runtime shell is zsh — so invoke it through a bash SUBSHELL
+# and capture stdout (never source a bash `set -e` lib into the zsh runtime — #128). Stable
+# ~/.claude/lib path (symlinked at install, INSTALL.md), not cwd-relative (#127):
+worker_cmd="$(bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_command <issue>')"
+#   worker_cmd PRINTS (no fork) exactly: claude --dangerously-bypass-permissions -p "/sail <issue> --unattended"
 # The supervisor then runs THAT command with the Bash tool, run_in_background: true (harness-owned
 # lifecycle). It records the harness task id + the spawn time for the wall-clock cap.
 ```

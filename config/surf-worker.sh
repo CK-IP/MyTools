@@ -17,7 +17,12 @@
 # No judgment lives here (that is the supervisor's job); no log/pane scraping (the result contract
 # is the run-dir's durable artifacts).
 
-set -euo pipefail
+# Strict mode applies ONLY when this file is executed directly — NOT when sourced. A sourced library
+# must never mutate the caller's shell options: under `set -e` a function's by-design non-zero return
+# (e.g. the injection-guard rejection) would abort the caller, and under `set -u`/zsh the unbound
+# guard below would abort the source. /surf sources this via a `bash -c` subshell, but this keeps it
+# safe under any sourcing shell too (#128). The functions handle their own errors explicitly.
+if [ "${BASH_SOURCE[0]:-}" = "${0:-}" ]; then set -euo pipefail; fi
 
 surf_worker_log() {
   printf '%s surf-worker: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >&2 2>/dev/null || true
@@ -103,8 +108,13 @@ surf_worker_result() {
   fi
   local rs="$run_dir/run-state.json" rj="$run_dir/review.json"
   # Repo root so the heredoc can `import sail.review` / `sail.convergence` (the SAME predicates /sail
-  # uses) — this script lives at <repo>/config/surf-worker.sh.
-  local _repo_root; _repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd || true)"
+  # uses) — this script lives at <repo>/config/surf-worker.sh. It is sourced via the
+  # ~/.claude/lib/surf-worker.sh SYMLINK (#127), so REALPATH-resolve the source before taking
+  # dirname — otherwise dirname lands in ~/.claude/lib and `import sail.review` fails, parking every
+  # run (#128). Fall back to the raw path if realpath can't run.
+  local _src _repo_root
+  _src="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]:-$0}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]:-$0}")"
+  _repo_root="$(cd "$(dirname "$_src")/.." 2>/dev/null && pwd || true)"
   # Positively confirm a FULL /sail green from run-state.json (gates) AND review.json (status,
   # findings, non-empty ACs all met, tidiness.blocking, AND review currency). Fail-CLOSED on any
   # parse failure, missing artifact, unexpected shape, non-pass gate, blocking finding, empty/unmet
@@ -257,8 +267,9 @@ surf_worker_cleanup() {
   return 0
 }
 
-# Sourcing (the unit test) gets the functions without running anything.
-if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+# Sourcing (the runtime + unit test) gets the functions without running anything. ${BASH_SOURCE[0]:-}
+# is zsh-safe under `set -u` (zsh leaves BASH_SOURCE unset) — #128.
+if [ "${BASH_SOURCE[0]:-}" = "${0:-}" ]; then
   surf_worker_log "surf-worker.sh is a function library; source it, don't execute it."
   exit 0
 fi
