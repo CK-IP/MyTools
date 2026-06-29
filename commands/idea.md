@@ -5,7 +5,7 @@ Walk the user through turning an idea into working code. The user is NOT a progr
 Every step below is a **mandatory gate**. You MUST execute each step in order. DO NOT SKIP, bypass, or rationalize away any step — no matter how simple the task seems.
 
 - The **t-shirt sizing** (Step 6/8) ALWAYS runs after creating the issue. You must evaluate whether the task is a Small, Medium, Large, or XL, and you must ask the user. There are no exceptions.
-- The **build step** (Step 7/8) MUST invoke `/skiff`, `/sloop`, `/ship`, or `/fleet`. You must NEVER start coding directly — no exceptions.
+- The **build step** (Step 7/8) MUST invoke `/sail`, `/skiff`, `/sloop`, `/ship`, or `/fleet`. You must NEVER start coding directly — no exceptions.
 - You MUST announce every step number and name before doing any work in that step.
 
 ## Step announcements
@@ -115,10 +115,12 @@ Look at the issue you just created and ask three questions:
 
 | Size | What it means | Pipeline |
 |---|---|---|
-| **S** (Small) | 1-3 files, bugfix/follow-up/doc edit, straightforward | `/skiff` |
-| **M** (Medium) | Single concern, <5 files, existing patterns, <200 LOC | `/sloop` |
-| **L** (Large) | Multi-file, new patterns, unknowns, security-touching | `/ship` |
+| **S** (Small) | 1-3 files, bugfix/follow-up/doc edit, straightforward | `/sail` (default; alternative: `/skiff`) |
+| **M** (Medium) | Single concern, <5 files, existing patterns, <200 LOC | `/sail` (default; alternative: `/sloop`) |
+| **L** (Large) | Multi-file, new patterns, unknowns, security-touching | `/sail --dual-lens --red-team` (default; alternative: `/ship`) |
 | **XL** (Extra Large) | Independent workstreams, parallel team build (Epic Mode) | `/fleet` |
+
+The default path is `/sail` for S, M, and L work. If the user explicitly wants the named alternative instead, use `/skiff`, `/sloop`, or `/ship`.
 
 ### 2. Present your analysis
 
@@ -167,19 +169,44 @@ For XL:
 
 ### 6. If full feature
 
-Proceed to Step 7/8 — invoke `/ship <issue>`.
+Proceed to Step 7/8 — invoke `/sail --dual-lens --red-team <issue>`.
+Fallback pipeline if the user wants the named alternative: `/ship <issue>`.
 
 ### 7. If standard build
 
-Proceed to Step 7/8 — invoke `/sloop <issue>`.
+Proceed to Step 7/8 — invoke `/sail <issue>`.
+Fallback pipeline if the user wants the named alternative: `/sloop <issue>`.
 
 ### 8. If small fix
 
-Proceed to Step 7/8 — invoke `/skiff <issue>`.
+Proceed to Step 7/8 — invoke `/sail <issue>`.
+Fallback pipeline if the user wants the named alternative: `/skiff <issue>`.
 
 ## Step 7/8: Build it
 
-> ⛔ HARD GATE — DO NOT SKIP. You must invoke /skiff, /sloop, /ship, or /fleet. NEVER code directly.
+> ⛔ HARD GATE — DO NOT SKIP. You must invoke /sail, /skiff, /sloop, /ship, or /fleet. NEVER code directly.
+
+### If /sail (default build)
+
+Tell the user:
+
+**"Great — I'm using the default build pipeline. Here's how it works:**
+- **I'll make a plan first and show it to you for approval**
+- **Then I'll write tests and code in small steps**
+- **The automatic checks run as we go**
+- **A reviewer checks for serious problems and can stop the run if needed**
+- **I'll keep looping through fixes and checks until the change is clean**
+
+**You just need to say 'looks good' or tell me what to change. Ready?"**
+
+Then invoke `/sail` with the flags and issue number from the sub-branch you followed in Step 6/8 — bare `/sail <issue>` for S and M, `/sail --dual-lens --red-team <issue>` for L. Do not drop the L-tier flags.
+
+#### At checkpoints during /sail
+
+- Instead of "plan mode" -> **"I've mapped out the change. Take a look and tell me if it covers what you want."**
+- Instead of "automated gates" -> **"The automatic checks are running now to catch any breakage."**
+- Instead of "blocking LLM review" -> **"A reviewer is checking the work and can stop us if it finds a serious problem."**
+- Instead of "convergence loop" -> **"I'm repeating the fix-and-check cycle until the reviewer sees no serious issues."**
 
 ### If /skiff (small fix)
 
@@ -258,6 +285,16 @@ When `/skiff` finishes, tell the user:
 
 **The issue has been closed automatically. Nothing else to do on this one."**
 
+### If /sail was used
+
+When `/sail` finishes, tell the user:
+
+**"Here's what happened: [plain summary].**
+
+**If the build finished cleanly, the code has been merged to the main branch and the issue closed automatically — nothing else to do.**
+
+**If I had to pause the build for a human to look at (a "park"), I'll have told you why and what's needed next — it is NOT merged in that case. Either way, if anything looks off, just let me know."**
+
 ### If /sloop or /ship was used
 
 When the build finishes, tell the user:
@@ -276,5 +313,5 @@ When the build finishes, tell the user:
 - ALWAYS announce the step number and name at the start of each step
 - MANDATORY: Execute every step (1–8) in order. Never skip a step for any reason.
 - MANDATORY: ALWAYS run the t-shirt sizing (Step 6/8) after creating the issue — evaluate for S/M/L/XL and ask the user.
-- MANDATORY: ALWAYS invoke /skiff <issue>, /sloop <issue>, /ship <issue>, or /fleet <issue> to build. NEVER start coding directly — no exceptions.
+- MANDATORY: ALWAYS invoke /sail <issue>, /skiff <issue>, /sloop <issue>, /ship <issue>, or /fleet <issue> to build. NEVER start coding directly — no exceptions.
 - MANDATORY: Announce the step number and name at the start of each step before doing any work.
