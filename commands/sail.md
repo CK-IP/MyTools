@@ -282,10 +282,15 @@ First, the engine emits the closing artifacts from the **already-produced** revi
 
 ```bash
 # Reachable only after the convergence loop confirms `sail run ...` exited 0.
+# Absolutize the run-dir BEFORE any cd (#115): in the default ISOLATED flow $SESSION_DIR is
+# relative and the artifacts live INSIDE the linked worktree, but the land mechanics below cd to
+# the PRIMARY worktree — a relative run-dir would not resolve there. (Standalone /sail's run-dir is
+# its OWN $SESSION_DIR `.sail/runs/sail-<issue>-<ts>`, never /surf's `.surf/runs/<issue>` namespace.)
+RD="$(cd "$SESSION_DIR" && pwd -P)"
 TITLE="$(printf '%s' "$RAW" | python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])')"
-python3 -m sail land --run-dir .surf/runs/<issue> --issue <issue> --title "$TITLE"
-# writes:  .surf/runs/<issue>/land-comment.md      (AC verdicts + finding dispositions + gate counts)
-#          .surf/runs/<issue>/land-commit-msg.txt  (merge subject + a `Closes #<issue>` line)
+python3 -m sail land --run-dir "$RD" --issue <issue> --title "$TITLE"
+# writes:  $RD/land-comment.md      (AC verdicts + finding dispositions + gate counts)
+#          $RD/land-commit-msg.txt  (merge subject + a `Closes #<issue>` line)
 ```
 
 **Unattended runs never reach this stage's outward actions (#108).** When `--unattended` is set, the run is **local-only**: it stops after the Stage 4 commit, may emit the local land artifacts (`land-comment.md` / `land-commit-msg.txt`) and the WIP handoff, and performs **no** push/merge/close/board-write/prune (see § Unattended mode). The outward block below runs only on a hands-on `/sail` (or via `/surf`'s own autonomous loop).
@@ -295,21 +300,27 @@ python3 -m sail land --run-dir .surf/runs/<issue> --issue <issue> --title "$TITL
 **Direct-merge (default).** GitHub auto-closes the issue from the `Closes #<issue>` keyword in the merge commit when it lands on the **default branch (`main`)**; the board's native *Item closed → Done* automation then flips status — **no `gh issue close`, no board API call**. Confirm the merge target is `main` (the auto-close only fires there), then:
 
 ```bash
-RD=.surf/runs/<issue>
+# $RD was absolutized in the artifact-emit block above (#115) — reuse it (each prose block is its
+# own shell, but $RD is a /sail session variable in scope for the whole run).
 [ -f "$HOME/.claude/lib/sail-git-lifecycle.sh" ] && . "$HOME/.claude/lib/sail-git-lifecycle.sh"  # in scope from Stage 0.5; re-source defensively
 # LOCAL mechanics are single-sourced tested code (#82): --no-ff merge onto default + safe prune.
-# NOTE (#115): in the default ISOLATED flow this block must run from the PRIMARY worktree (where
-# `main` is checked out) with an ABSOLUTE run-dir — the cd/run-dir orchestration is tracked in #115,
-# not here. The functions themselves are correct and worktree-aware (sail_prune_merged_branch removes
-# the branch's linked worktree before deleting it).
+# #115: in the default ISOLATED flow Stage 0.5 cd'd INTO the linked worktree (.claude/worktrees/
+# sail-<issue>), but these mechanics MUST run from the PRIMARY worktree — `git checkout main` (inside
+# sail_merge_to_default) and `git worktree remove` (inside sail_prune_merged_branch) both FAIL while
+# cwd is the linked worktree holding sail/<issue>. Derive the primary robustly and cd there; $RD is
+# already absolute so the artifacts stay reachable after the cd. (No-op on the in-place/feature-branch
+# paths: sail_primary_worktree returns the only/current worktree.)
+cd "$(sail_primary_worktree .)"                              # land runs from the PRIMARY worktree (where `main` is checked out)
 sail_merge_to_default . sail/<issue> main "$RD/land-commit-msg.txt"   # checkout main + --no-ff merge; `Closes #<issue>` rides the msg file; prints the merge SHA
 git push origin main                                         # REQUIRED: the merge must reach origin's DEFAULT branch — only then does GitHub auto-close the issue and fire the board's Item-closed→Done automation; a local-only merge does neither
 git rev-parse HEAD                                            # record the merge SHA
 gh issue comment <issue> -F "$RD/land-comment.md"            # publish review evidence (reused, not re-derived)
 # Prune the merged branch ONLY after the merge is on origin/main (auto-delete-head-branch is
-# PR-only — it won't fire on a direct merge). Order matters: `git push origin --delete` ignores
-# merge state, so deleting the remote branch before main is pushed could drop unmerged work.
-sail_prune_merged_branch . sail/<issue>                      # `git branch -d` (never -D): refuses an unmerged branch
+# PR-only — it won't fire on a direct merge). Order matters TWO ways: (1) `git push origin --delete`
+# ignores merge state, so delete the remote branch only AFTER `git push origin main`; (2) prune runs
+# LAST, after every read of $RD — sail_prune_merged_branch removes the linked worktree that holds $RD,
+# so the merge-msg + land-comment reads above must already be done (#115 ordering hazard).
+sail_prune_merged_branch . sail/<issue>                      # removes the branch's linked worktree, then `git branch -d` (never -D): refuses an unmerged branch
 git ls-remote --exit-code --heads origin sail/<issue> >/dev/null 2>&1 && git push origin --delete sail/<issue> || true
 ```
 
@@ -322,7 +333,7 @@ gh pr create --base main --head sail/<issue> --title "$TITLE" --body-file "$RD/l
 
 **Preconditions (document, don't assume).** The merge must be **pushed to origin's default branch** — a local-only merge triggers neither GitHub's auto-close nor the board automation. Board → Done then relies on the repo's *Item closed → Done* Projects automation staying enabled; `Closes #<issue>` auto-closes **only** on the default branch; `git branch -d` refuses an unmerged branch, and the remote delete is guarded on the branch having been pushed **and** sequenced after `git push origin main` so it never drops unmerged work. If any precondition fails, land surfaces it rather than silently no-op'ing.
 
-> **Keep in sync:** the LOCAL git mechanics are now single-sourced as `sail_merge_to_default` / `sail_prune_merged_branch` in `home/lib/sail-git-lifecycle.sh` (tested by `tests/test_sail_82_land_lifecycle.sh`) — edit there, not inline. Only the residual **network sequence** below stays duplicated with `commands/surf.md`'s land step and must be kept identical: `git push origin main` → `git rev-parse HEAD` → `gh issue comment` → the ls-remote-guarded `git push origin --delete` (and `--pr` mode). Both consume the same `sail land` output. Change one, change the other.
+> **Keep in sync:** the LOCAL git mechanics are now single-sourced as `sail_merge_to_default` / `sail_prune_merged_branch` / `sail_primary_worktree` in `home/lib/sail-git-lifecycle.sh` (tested by `tests/test_sail_82_land_lifecycle.sh` + `tests/test_sail_115_land_orchestration.sh`) — edit there, not inline. The primary-worktree derivation is /sail's #115 fix for the isolated-worktree topology; `/surf` reaches the same primary-worktree-root basis differently — its supervisor never `cd`s into the worktree (it confines any worktree `cd` to a subshell), so its land block already runs from the primary. Only the residual **network sequence** below stays duplicated with `commands/surf.md`'s land step and must be kept identical: `git push origin main` → `git rev-parse HEAD` → `gh issue comment` → the ls-remote-guarded `git push origin --delete` (and `--pr` mode). Both consume the same `sail land` output. Change one, change the other.
 
 ## Autonomous-mode convergence rubric (#77)
 

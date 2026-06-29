@@ -189,6 +189,27 @@ sail_commit_on_branch() {
 }
 
 # ---------------------------------------------------------------------------
+# sail_primary_worktree <repo>  ->  absolute path of the PRIMARY worktree
+# ---------------------------------------------------------------------------
+# In /sail's default isolated flow the build runs in a LINKED worktree
+# (.claude/worktrees/sail-<issue>) and Stage 0.5 `cd`s INTO it, but the land merge/prune must
+# run from the PRIMARY worktree (where the default branch is checked out): both `git checkout
+# main` (inside sail_merge_to_default) and `git worktree remove` (inside sail_prune_merged_branch)
+# FAIL while cwd is the linked worktree holding the feature branch (#115). `git worktree list
+# --porcelain` ALWAYS lists the main working tree FIRST, so the first `worktree ` line is the
+# primary — robust from any worktree. Uses substr($0,10) (not $2) so a path containing spaces is
+# preserved (matches sail_setup_isolation's parser). rc: 0 (path printed) | 2 (missing repo arg)
+# | 1 (not a git repo / no worktree line).
+sail_primary_worktree() {
+  local repo="$1" p
+  [ -n "$repo" ] || { echo "sail-git-lifecycle: sail_primary_worktree <repo>" >&2; return 2; }
+  p="$(git -C "$repo" worktree list --porcelain 2>/dev/null \
+        | awk '/^worktree /{print substr($0,10); exit}')"
+  [ -n "$p" ] || { echo "sail-git-lifecycle: could not determine primary worktree for $repo" >&2; return 1; }
+  printf '%s\n' "$p"
+}
+
+# ---------------------------------------------------------------------------
 # sail_merge_to_default <repo> <branch> <default_branch> <msg_file>
 # ---------------------------------------------------------------------------
 # The LOCAL half of /sail's & /surf's closing "land" bookend: check out the default branch
