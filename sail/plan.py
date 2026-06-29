@@ -106,6 +106,31 @@ DIFF_VERIFIABLE_AC_DIRECTIVE = (
     "an LLM-checked AC.\n"
 )
 
+# AC#2 (#129): the directive injected ONLY when is_runtime_sensitive(spec) is True (the conditional
+# injection is in build_prompt / build_grounded_prompt — so a non-runtime spec pays NOTHING, the
+# no-cost-regression property). The text is declarative (not "if applicable") because the Python
+# gate already decided applicability. It directs the plan to record the four runtime/platform
+# assumptions the repo-grounding cannot verify — runtime SHELL, SYMLINK indirection, target OS, and
+# external-tool availability — as explicit plan items/risks (#127/#128/#124).
+RUNTIME_PLATFORM_PROBE = (
+    "RUNTIME / PLATFORM-ASSUMPTIONS PROBE (mandatory): this change touches a runtime/OS/shell-"
+    "sensitive surface (a shell script, a command sourced or executed by another process, a "
+    "symlinked artifact, or OS-specific tooling). Repo-grounding confirms a symbol/file EXISTS; it "
+    "does NOT confirm the change works in the runtime it actually runs in. So the plan MUST "
+    "identify and record, as explicit plan items/risks, the runtime/platform assumptions to "
+    "verify:\n"
+    "  (1) RUNTIME SHELL: which shell actually sources/executes this at runtime (e.g. a "
+    "#!/usr/bin/env bash library sourced under a /bin/zsh runtime — the #127/#128 escape)? Name "
+    "it; do not assume the author's interactive shell.\n"
+    "  (2) SYMLINK INDIRECTION: is the artifact reached via a symlink, so its real path or sourcing "
+    "context differs from where it lives in the repo?\n"
+    "  (3) TARGET OS: does it rely on OS-specific tooling or behavior (e.g. setsid, GNU vs BSD "
+    "flags, macOS vs Linux — the #124 escape)?\n"
+    "  (4) EXTERNAL-TOOL AVAILABILITY: does it invoke an external CLI/tool that may be absent on "
+    "the target?\n"
+    "Record any unverified assumption as an explicit plan item or a risk in the risks list.\n"
+)
+
 # AC#2/#4 (#58): markers of a plan-risky spec, in two families:
 #   (A) REMEDIATION  — the change adds a user-facing instruction/remediation (the broken
 #                      promise->action class), and
@@ -183,6 +208,48 @@ def adversary_available():
     return _argv_runnable(_adversary_argv())
 
 
+# AC#2 (#129): the risk-gating for the runtime/platform-assumptions probe. Unlike the prompt-only
+# conditional self-checks above (whose applicability the LLM self-judges), this gate is a
+# DETERMINISTIC, unit-tested Python predicate — mirroring is_plan_risky — so "would the probe have
+# flagged the #127/#128 bash-lib-sourced-under-zsh-via-symlink case?" and "does it stay quiet on an
+# ordinary diff?" are both hermetically testable without a live LLM. It detects a runtime/OS/shell-
+# sensitive surface in FIVE keyword families. Tokens are deliberately SPECIFIC (e.g. "sourced", not
+# bare "source", which matches "Source:" metadata or "source of truth") so an ordinary spec does not
+# over-fire — the no-cost-regression property (AC#2). Lowercased substring match; never raises.
+_RT_SHELL = (
+    "bash", "zsh", "ksh", "/bin/sh", "#!/", "shebang", "shell script", "shell runtime",
+    "runtime shell", "posix sh",
+)
+_RT_SOURCED = (
+    "sourced", "source the", "sourcing", "dot-source", "executed by", "run by", "invoked by",
+    "executed under", "run under",
+)
+_RT_SYMLINK = ("symlink", "symbolic link", "ln -s")
+# NOTE (#129 review R1): tokens are kept SPECIFIC to preserve AC#2 (no over-fire). Bare common
+# words were deliberately rejected — "linux"/"operating system" match ordinary docs specs ("Linux
+# install instructions", "operating-system requirements"), and "in path" matches incidental prose
+# ("a bug in pathological cases", "defined in path_utils.py"). A genuine OS-runtime change almost
+# always co-mentions a shell/tool token that still fires; the residual (an OS-only spec with no
+# shell/tool wording) is an accepted precision/recall trade the red-team endorsed.
+_RT_OS = (
+    "macos", "darwin", "setsid", "os-specific", "platform-specific", "cross-platform",
+)
+_RT_TOOL = (
+    "command -v", "$path", "tool availability", "is installed", "not installed",
+    "available on the path", "chmod +x", "executable bit",
+)
+_RUNTIME_FAMILIES = (_RT_SHELL, _RT_SOURCED, _RT_SYMLINK, _RT_OS, _RT_TOOL)
+
+
+def is_runtime_sensitive(spec):
+    # AC#1 (#129): True when the spec touches a runtime/OS/shell-sensitive surface in ANY of the
+    # five families — repo-grounding confirms a symbol exists but not that it works in the runtime
+    # it runs in, so any single strong signal warrants recording the runtime assumptions. The
+    # tokens are specific enough that an ordinary spec matches none (AC#2). Never raises.
+    text = (spec or "").lower()
+    return any(kw in text for fam in _RUNTIME_FAMILIES for kw in fam)
+
+
 def is_plan_risky(spec):
     # AC#2/#4 (#58): auto-trigger heuristic for the risk-gated plan adversary. To keep the
     # default single-pass (no uniform weight — review R1 HIGH), it fires ONLY on the strong
@@ -214,6 +281,9 @@ def build_prompt(spec):
         + DESIGN_ALTERNATIVES_DIRECTIVE
         + FAILURE_CLASS_CHECKLIST
         + DIFF_VERIFIABLE_AC_DIRECTIVE
+        # #129: conditionally injected — only when the deterministic gate flags the spec as
+        # runtime/OS/shell-sensitive, so an ordinary spec pays zero added tokens (AC#2/AC#3).
+        + (RUNTIME_PLATFORM_PROBE if is_runtime_sensitive(spec) else "")
         + "Return JSON only.\n\n"
         "=== SPEC ===\n"
         f"{spec}\n"
@@ -274,12 +344,20 @@ GROUNDED_PLAN_PROMPT_PREFIX = (
     '"issue":"...","mitigation":"...","evidence":"<concrete tool-execution evidence>"}],'
     '"scope":{"in":[...],"out":[...]},"summary":"..."}\n'
     + DIFF_VERIFIABLE_AC_DIRECTIVE
-    + "Return JSON only.\n"
 )
 
 
 def build_grounded_prompt(spec):
-    return GROUNDED_PLAN_PROMPT_PREFIX + "\n=== SPEC ===\n" + f"{spec}\n" + "=== END SPEC ==="
+    # #129: the grounded (tool-using) pass carries the runtime/platform probe too, under the same
+    # deterministic gate — conditionally injected so a non-runtime spec is unchanged (AC#4). The
+    # probe is placed BEFORE the closing "Return JSON only." instruction (mirroring build_prompt),
+    # not after it (#129 review R1 HIGH: an after-the-terminal-instruction directive reads as
+    # trailing noise past the JSON-only close).
+    probe = RUNTIME_PLATFORM_PROBE if is_runtime_sensitive(spec) else ""
+    return (
+        GROUNDED_PLAN_PROMPT_PREFIX + probe + "Return JSON only.\n"
+        + "\n=== SPEC ===\n" + f"{spec}\n" + "=== END SPEC ==="
+    )
 
 
 def _find_json_objects(text):
