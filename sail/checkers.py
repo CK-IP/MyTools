@@ -211,8 +211,9 @@ class Checker:
         #   * gitleaks, pytest and diff-coverage cannot be scoped by file-type => re-run on ANY
         #     change when the diff moved (a secret can hide in a doc; pytest can collect doctests
         #     /fixtures from .md/.rst/.txt via --doctest-glob; coverage is the diff itself);
-        #   * pure code scanners (bandit/semgrep, and any unknown gate) only analyze .py, so they
-        #     re-run unless EVERY changed file is inert/prose — a single code file forces a re-run.
+        #   * bandit/semgrep are pure .py code scanners, so they re-run unless EVERY changed file
+        #     is inert/prose — a single code file forces a re-run, a doc-only diff skips;
+        #   * unknown/custom gates have unknown inputs, so they always re-run (no doc-only skip).
         if not changed_files:
             return True
         name = self.name
