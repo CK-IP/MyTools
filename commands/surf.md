@@ -63,22 +63,28 @@ AskUserQuestion(
   question: "How should /surf run the board?",
   options: [
     { label: "Autonomous", description: "No human watching. /surf decides, logs, and continues. Best for a long unattended run on a sandbox repo." },
-    { label: "Supervised", description: "A human is around. /surf asks questions and waits (up to a deadline) before deciding. Visible teammates, watchable panes." }
+    { label: "Supervised", description: "A human is around. /surf asks questions and waits (up to a deadline) before deciding." }
   ]
 )
 ```
 
 The chosen mode is recorded in the charter and governs how `/surf` behaves — **not** how it
 delegates. Delegation is the same in both modes: **every** issue is built by a fresh per-issue
-agent-team teammate (see Context model and Worker delegation). What the mode changes is:
+**headless `claude -p` worker process** (see Context model and Worker delegation). What the mode
+changes is:
 
 - **Decision behavior** — *Autonomous* decides-and-logs every reversible call; *Supervised* asks
   the question and waits on a deadline (Step 11) before deciding.
-- **Monitoring** — *Supervised* assumes a human is attached to the tmux session watching the
-  teammate panes; *Autonomous* runs the same panes with nobody watching.
+- **Visibility** — both modes run the same headless workers; *Supervised* simply assumes a human is
+  around to answer the domain questions a worker surfaces (Step 11). Neither mode requires a human
+  to watch a pane.
 
-The start gate's agent-teams settings check (Step 3) now runs in **both** modes, because both
-modes spawn teammates.
+**Optional supervised (panes) lens.** A human who wants to *watch* a build can additionally run
+`/surf` inside a named `surf` tmux session and attach a viewer — see **Step 3b (optional)**. The
+panes are a **visibility layer over the same headless worker substrate** (the same per-issue
+process + the same `.surf/runs/<n>` artifacts), **not** a second execution body — resume,
+delegation, and the result contract are identical whether or not anyone is watching. The default
+needs no tmux.
 
 **The no-flags principle.** Every choice you make in `/surf` is an interactive selection
 prompt — never a `--flag` to remember. There is deliberately no `--autonomous`,
@@ -127,7 +133,7 @@ switch (press **Esc** to interrupt and type the new mode, or type the keyword `s
 Step 7 re-anchor, the same checkpoint that re-reads the charter and re-prints the banner. The
 switch **updates the mode recorded in the charter** (Step 4), so it is durable and survives
 resume, and the next issue's re-anchor re-prints the banner in the new mode. The change takes
-effect from the **next** issue, **never mid-build** — an in-flight teammate finishes under the
+effect from the **next** issue, **never mid-build** — an in-flight worker finishes under the
 mode it started in — so mode stays a charter-anchored fact, not a volatile chat state. This is
 still **no `--flag`**: flipping mode is an interactive keystroke, in keeping with the no-flags
 principle.
@@ -169,65 +175,52 @@ not something in `settings.json`, so there is no way to switch it on mid-session
 not "work around" the missing flag by pausing on every action — that defeats the point of an
 autopilot and produces a half-supervised run nobody asked for.
 
-> **Launch in the named `surf` tmux session.** Because every issue is delegated to a teammate
-> (Step 8) and teammates render as panes inside the launching session, `/surf` is meant to be
-> started inside a **named** tmux session so the operator has one front door for monitoring and
-> the resume watcher has one session to revive. The documented start procedure is in the
-> **Start / monitor in a named tmux session** subsection below; the canonical session name is
-> **`surf`**.
+> **No tmux required by default.** Every issue is delegated to a **headless `claude -p` worker
+> process** (Step 8), not a tmux-pane teammate, so the default `/surf` run needs no named tmux
+> session — start it from any terminal. A named `surf` tmux session is **optional**, only for the
+> supervised (panes) visibility lens in **Step 3b (optional)**.
 
-### Step 3: Agent-teams environment check (both modes)
+### Step 3: Engine-availability check (both modes)
 
-This step runs in **both** modes. `/surf` delegates **every** issue to an agent-team teammate
-(Step 8), so the agent-teams feature is required regardless of mode — this is the change from the
-old "supervised-only" check (autonomous no longer uses subagents; see Step 8).
+`/surf` delegates **every** issue to a headless `claude -p` worker that runs `/sail`
+(Step 8). The deterministic prerequisite is therefore that **`claude` is on `PATH`** and this
+session was launched with `--dangerously-bypass-permissions` (Step 2) so the headless worker can
+inherit a non-interactive permission posture.
 
-- Check `~/.claude/settings.json` for `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: 1`. If missing,
-  stop with: "`/surf` builds every issue with a visible teammate. Add
-  `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: 1` to `~/.claude/settings.json` and restart Claude
-  Code, then re-run `/surf`."
+- Confirm `claude` is on `PATH` (the worker is `claude --dangerously-bypass-permissions -p "/sail
+  <n> --unattended"`). If it is missing, stop and say so in plain language.
+- The **agent-teams** feature (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: 1`) is **no longer required**
+  for the default headless path — a `-p` worker is a depth-0 process that hosts `/sail`'s crew
+  directly (Step 8). It is needed **only** if you opt into the supervised (panes) lens (Step 3b),
+  which renders the run inside a tmux session.
 - Recommend **opus** for this orchestrating session:
   > "For best results the `/surf` session should run **opus** — it makes all the merge and
   > park decisions. Switch now if you're not on opus."
-- **Confirm `/surf` was launched inside the named `surf` tmux session** (see the next
-  subsection). The teammate panes spawn as siblings in whatever session hosts `/surf`; running
-  inside the named session is what makes single-command monitoring (`tmux attach -t surf`) and
-  the resume watcher (Step 16) work. The agent-teams framework handles the pane splits *within*
-  that session automatically — **never split panes or create extra tmux windows by hand**, but
-  **do** start `/surf` inside the named session yourself (the framework does not name the session
-  for you).
 
-### Step 3b: Start / monitor in a named tmux session
+### Step 3b (optional): Supervised (panes) visibility lens
 
-`/surf` is launched inside a **named** tmux session so one session serves all four purposes —
-**start → monitor → revive → teardown**. The canonical session name is **`surf`**.
+This subsection is **optional** — it is the **supervised (panes) lens**, a way to *watch* the run.
+It wraps the **same** headless worker substrate (the same per-issue `claude -p` process and the
+same `.surf/runs/<n>` artifacts) inside a named tmux session so a human can attach a viewer. It is
+**not** a different execution body: delegation, the result contract, and resume are identical to
+the default headless run. Skip this entirely for an unattended run.
 
-**Start (copy-pasteable):**
+If you opt in, enable `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: 1` (so the framework can render panes)
+and launch inside the canonical **`surf`** session:
 
 ```bash
-# 1. Create (or re-create) the named session and attach to it
+# OPTIONAL supervised lens — only if you want to watch the run in panes.
 tmux new -s surf
-
-# 2. Inside that tmux session, launch Claude Code with the bypass flag and run /surf
 claude --dangerously-bypass-permissions
 #   …then at the Claude prompt:
 /surf
 ```
 
-**Monitor:**
-
-- **Attach** from any terminal to watch the run and the per-issue teammate panes:
-  `tmux attach -t surf`
-- **Switch panes** to watch a specific build: `Ctrl-b o` (next pane) or `Ctrl-b q` then a number.
-- **Detach without killing the run:** `Ctrl-b d`. The session — orchestrator **and** teammate
-  panes — keeps running in the background; this detachability is exactly what lets `/surf`
-  survive a closed terminal and a usage-cap window.
-
-**How monitoring composes with teardown (Step 14):** after a run reports done, `tmux attach -t
-surf` to confirm the teardown was clean — the per-issue teammate panes should be **gone** (Step
-14 dismisses every teammate and kills its pane), leaving only the orchestrator pane. A leftover
-teammate pane means teardown didn't complete and should be investigated. The `surf` session
-itself is left alive for the next run / resume; only the per-issue panes are torn down.
+**Monitor (optional lens):** attach from any terminal with `tmux attach -t surf`; detach without
+killing the run with `Ctrl-b d`. Even in this lens the per-issue work runs in the same headless
+worker process — the pane is a viewer, not the engine. Resume after a cap is the **same**
+durable-file `/surf resume` relaunch the default uses (Step 16); the optional lens adds no separate
+revive mechanism.
 
 ---
 
@@ -355,40 +348,36 @@ surviving — those are unreliable over a long board run. Instead:
 - At the **top of every issue**, `/surf` re-anchors by re-reading the charter (mission, scope,
   authority, guardrails) and the journal (what's merged, what's parked, where we are). This
   re-anchoring is what lets the run survive a long board without drifting.
-- **Every issue is delegated to a fresh per-issue teammate** — never built inline (see Worker
-  delegation). The orchestrator does **not** run gates, edits, or reviews itself; it spawns a
-  teammate, then ingests only a **compact per-issue result** (exit code + a one-line summary +
-  the merge SHA or park reason) and writes the detail to the journal. This is the core anti-drift
-  property: because no build ever runs in the orchestrator's own context, that context stays
-  **flat regardless of board length** — a 5-issue board and a 30-issue board cost the orchestrator
-  roughly the same. (This is what makes the 200K tmux context cap acceptable — see the tmux note
-  below.)
-- **The orchestrator keeps only a bounded running summary in context** — the per-issue
+- **Every issue is delegated to a fresh per-issue headless worker process** — never built inline
+  (see Worker delegation). The orchestrator (the supervisor) does **not** run gates, edits, or
+  reviews itself; it spawns a `claude -p` worker via the worker helper, then ingests only a
+  **compact per-issue result** read from the worker's **run-dir artifacts** (`run-state.json` gates
+  + `review.json` findings + a `wip-handoff.md` if parked — **not** the claude process exit code) +
+  the merge SHA or park reason, and writes the detail to the journal. This is the core anti-drift
+  property: because no build ever runs in the supervisor's own context, that context stays **flat
+  regardless of board length** — a 5-issue board and a 30-issue board cost the supervisor roughly
+  the same. Full delegation, not a pane cap, is what keeps context flat.
+- **The supervisor keeps only a bounded running summary in context** — the per-issue
   compact results plus running counts (merged / parked / remaining). All per-issue detail lives
   on disk in the journal, which is the source of truth for `/surf resume` (Step 15), not the
   conversation.
-- **The 200K tmux context cap is acceptable here.** Agent-teams panes in tmux are capped at 200K
-  context (the known `/fleet` Step 10a gotcha). That cap is fine for `/surf` precisely **because**
-  full delegation keeps the orchestrator tiny (only compact per-issue results) and each teammate
-  only ever needs **one issue's** worth of context. Neither side accumulates a board's worth of
-  history, so neither approaches the cap over a long run.
-- **A hard stop is different from running low on context.** If the run is killed outright — a
+- **Each worker only ever needs one issue's worth of context.** A fresh headless `claude -p`
+  process per issue starts clean and exits at the issue's terminus, so neither the supervisor nor
+  any worker accumulates a board's worth of history over a long run.
+- **A hard stop and a usage cap both recover the same way.** If the run is killed outright — a
   crash, a machine reboot, or the Max-subscription usage window cutting it off mid-issue — the
-  session cannot re-anchor from chat at all. The persistent-tmux model (Steps 15–16) keeps the
-  session alive **across a usage-cap window** so a cap is *not* a hard stop; a reboot or kill that
-  destroys the session **is** a hard stop, and recovery from it goes through **Resume (Step 15)**,
-  which rebuilds board position from the charter + journal + git, not from the conversation.
+  supervisor cannot re-anchor from chat at all. Recovery goes through **Resume (Step 15/16)**,
+  which rebuilds board position from the charter + journal + git, not from the conversation. The
+  default cap-recovery is the durable-file `/surf resume` **headless relaunch** (Step 16) — viable
+  because a headless `-p` process hosts `/sail`'s crew (depth-0 subagents) just as well as an
+  interactive session does.
 - **Live-session marker.** At the start of the per-issue loop (Step 7), write `.surf/active`
-  containing this process's PID — and record this orchestrator's tmux pane id to
-  `.surf/orchestrator-pane` (`tmux display-message -p '#{pane_id}'`) so the revive watcher
-  (Step 16) can send keys to the right pane — and **remove both on clean exit** (board exhausted,
-  or the user stops the run). This is the marker the revive watcher (Step 16) checks: a **live**
-  PID in
-  `.surf/active` (process still alive, named `surf` session still up) is what tells the watcher
-  there is a real session to **revive in place** after the cap resets. A *stale* marker (its PID
-  is dead — the session was killed or the machine rebooted) means there is **no live session to
-  nudge**: the watcher ignores and cleans it, and recovery falls to a manual `/surf resume`
-  (Step 16's reboot path), never an automatic headless relaunch.
+  containing this process's PID, and **remove it on clean exit** (board exhausted, or the user
+  stops the run). This is the marker the cap-recovery watcher (Step 16) checks: a **live** PID in
+  `.surf/active` means a `/surf` is already running, so the watcher does **not** relaunch on top of
+  it; a *stale* marker (its PID is dead — the session was killed or the machine rebooted) is
+  ignored and cleaned, and the watcher then relaunches `/surf resume` headlessly once the cap
+  resets.
 
 ---
 
@@ -406,48 +395,98 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
    so the active mode + decide-vs-ask behavior stays visible at every issue boundary. Confirm
    this issue's dependencies have landed (or handle them per the Dependent issues section).
    State, in one line, what you're about to build and why it's next.
-2. **Delegate the build to a fresh teammate.** The orchestrator never builds inline. Spawn a
-   fresh per-issue teammate (Step 8) and hand it the issue. The teammate creates the issue branch
-   off **current `main`** (so a parent merged earlier in this run is already in the baseline) and
-   runs the engine **in a stable per-issue run-dir**, then reports a compact result back:
+2. **Delegate the build to a fresh headless worker via the HARNESS, then POLL (do not block-wait).**
+   The supervisor never builds inline. It asks the worker helper `config/surf-worker.sh` to **emit**
+   the exact worker command, then launches it with the **Bash tool using `run_in_background: true`** —
+   Claude Code's own background facility, which keeps the worker alive across turns and **owns its
+   lifecycle and kill**. The supervisor does **not** daemonize anything in bash (pure-bash
+   daemonization fights macOS — no `setsid`, no cross-tick survival, unsafe process-group kill; see
+   Step 8b). The worker runs `/sail` in `--unattended` mode (the #108 front-door terminus), which
+   itself creates the issue branch off **current `main`** (so a parent merged earlier in this run is
+   already in the baseline) and runs the engine in a stable per-issue run-dir:
    ```bash
-   # the TEAMMATE runs this (the orchestrator only receives the exit code + summary):
-   git checkout main
-   git checkout -b surf/<issue>
-   SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c model_reasoning_effort=high" \
-     python3 -m sail run --diff main --dual-lens --run-dir .surf/runs/<issue>
+   # 1. The SUPERVISOR derives the injection-safe command (no forking happens here):
+   . config/surf-worker.sh
+   surf_worker_command <issue>        # numeric-validates <issue>; prints exactly:
+   #   claude --dangerously-bypass-permissions -p "/sail <issue> --unattended"
    ```
-   This is the one-pass `/sail` mode (the teammate's default engine; `/ship` is the optional
-   heavier engine — see Step 8): it runs the deterministic gates **and** the blocking LLM review
+   ```
+   # 2. The SUPERVISOR runs THAT command with the Bash tool, run_in_background: true.
+   #    The harness returns a background-task id and keeps the worker alive across turns.
+   #    Record the spawn TIME (for the wall-clock cap) alongside the task id.
+   ```
+   `/sail <issue> --unattended` is the worker's default engine (`/ship` is the optional heavier
+   engine — see Step 8). Internally it drives `python3 -m sail run --diff main --dual-lens
+   --run-dir .surf/runs/<issue>` with `SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c
+   model_reasoning_effort=high"`: it runs the deterministic gates **and** the blocking LLM review
    against the diff vs. `main`. The `--dual-lens` flag plus `SAIL_REVIEW_CMD2` give the delegated
    build a genuine **cross-family** review (codex + the default `claude` lens) — Step 8 explains why
-   these **CLI-subprocess lenses** (not `advisor()`) work inside a teammate, and the pre-merge guard
-   below handles the rare degraded case, never silently (#74). It exits **0** when the issue is green (all gates pass and the
-   blocking review found no CRITICAL/HIGH) and **1** when something is blocking. The teammate
-   reports that exit code plus a one-line summary; the orchestrator ingests only that.
+   these **CLI-subprocess lenses** (not `advisor()`) work inside a headless `-p` worker, and the
+   pre-merge guard below handles the rare degraded case, never silently (#74).
+
+   **Poll, don't block-wait.** A worker runs to a multi-hour wall-clock cap, but the Bash tool caps
+   a single call at ~10 minutes — so the supervisor must **never** block-wait the worker. Instead it
+   **polls across its own ticks**, reading the durable run-dir artifacts AND the harness
+   **background-task status** (running vs exited) — **not** the `.done` sentinel, which the
+   supervisor only writes *after* a green terminus is read and merged (it is a Step 15 resume
+   marker, never a live-poll terminus signal). On each tick:
+   - **task still running, under the cap** → still building → move on; re-check next tick.
+   - **task still running, OVER the wall-clock cap** → the supervisor stops the worker via the
+     **harness's background-task kill** (e.g. the task-stop / KillShell facility), **not** a bash
+     `kill -pgid` → treat as a timed-out park. The cap is enforced by the supervisor comparing
+     *elapsed-since-spawn* against the cap; there is no bash timeout helper.
+   - **task exited (or terminus artifacts present)** → evaluate the run-dir with `surf_worker_result`
+     (next): it positively confirms green from `run-state.json` + `review.json` (and parks on a
+     `wip-handoff.md`), **fail-closed** on any missing/incomplete artifact. (A genuinely crashed
+     worker that wrote no `run-state.json` parks fail-closed here, and Step 15 resume re-runs it
+     against the same `--run-dir`.)
+   The **`.done`-absent ⇒ orphaned** rule belongs ONLY to Step 15 *resume* reconciliation — a fresh
+   supervisor with no live harness-task context, discriminating a completed-but-unjournaled run from
+   a true orphan.
+
+   **The worker→supervisor contract is /sail's durable run-dir artifacts, NEVER the claude exit
+   code.** The `claude -p` process exit code reflects the *claude process*, not `/sail`'s
+   commit-vs-park terminus (decided inside the agent turn), so it is **informational only — never a
+   decision input**. `surf_worker_result` reads the terminus SOLELY from the artifacts `/sail`
+   writes: **`.surf/runs/<issue>/wip-handoff.md`** (present ⇒ the run PARKED), **`run-state.json`**
+   (every gate `status` in `{passed, skipped}`), and **`review.json`** (status `completed`; no
+   CRITICAL/HIGH finding; every plan-verification AC `met`; no blocking tidiness; **and review
+   currency** — `diff_hash`/`plan_hash`/`target` match the live diff, so a stale review never merges).
+   It is **GREEN only when positively confirmed** on all of these; anything else — a wip-handoff, a
+   non-pass gate, a blocking finding, an unmet AC, a stale fingerprint, or a missing/garbage
+   artifact — **parks**. There is no log-scraping or pane-reading on the result path.
+
+   **Polarity — the merge gate is FAIL-CLOSED.** `surf_worker_result` parks on any ambiguity
+   (missing/garbage run-state, unconfirmed/stale review): we must **never merge a run that is not
+   positively confirmed green**. This is **distinct** from the worker *liveness* path (the harness
+   task status + the supervisor's elapsed-vs-cap kill, Step 8), which is fail-OPEN (don't wedge a
+   healthy run). Two jobs, two opposite safe directions: the merge contract fails toward **park**,
+   the watchdog fails toward **proceed**.
 
    The run-dir is **stable per issue** (`.surf/runs/<issue>/`, under the gitignored `.surf/`) so
    that if the run is killed mid-issue, Resume (Step 15) can re-invoke the *same* `--run-dir` and
    `/sail` skips the gates it already finished. The per-issue **journal entry** written in step 4
    below is the resume checkpoint: a hard stop loses at most the single in-flight issue.
-3. **Evaluate the exit code.**
-   - **Exit 0 → green → auto-merge** — *but first, the stacked-parent guard.* Before merging,
+3. **Evaluate the result (`surf_worker_result`, NOT the exit code).** A `green` verdict requires the
+   positive run-dir confirmation above (no `wip-handoff.md`; all `run-state.json` gates pass; clean
+   `review.json`); anything else parks (fail-closed).
+   - **Green → auto-merge** — *but first, the stacked-parent guard.* Before merging,
      verify every dependency parent of this issue is **itself already merged to `main`**. If any
      parent is still parked, **park this dependent too** — never auto-merge a stacked branch whose
      base is not on `main`, because a branch stacked on a parked parent (branch-from-parent, §10)
-     carries the parent's commits in the diff, can exit 0, and would smuggle the parent's unmerged
+     carries the parent's commits in the diff, can look green, and would smuggle the parent's unmerged
      work into `main` past its parked status.
 
-     *Second pre-merge guard — the dual-lens degradation check (#74, REQUIRED).* The teammate
+     *Second pre-merge guard — the dual-lens degradation check (#74, REQUIRED).* The worker
      builds with `--dual-lens`, but if its second lens could not run the delegated review degraded
      to single-lens (cross-family review is the quality mechanism; Step 8 explains why these CLI
-     lenses, not `advisor()`, are used). Before merging, the orchestrator MUST read the teammate's
+     lenses, not `advisor()`, are used). Before merging, the supervisor MUST read the worker's
      `.surf/runs/<issue>/review.json` and classify it with `sail.review.dual_lens_status()` — the
      single tested source of truth. A `degraded` verdict means the predicate
      **`dual_lens_requested == true AND lens2_ran == false`** held; it keys off the explicit
      `lens2_ran` boolean, NOT `len(lenses)` (a high-stakes diff can add a `redteam` lens, so
      `lens1`+`redteam` with no `lens2` is length 2 yet still degraded). If the verdict is
-     `degraded`, the in-teammate review was single-lens — do not merge yet.
+     `degraded`, the in-worker review was single-lens — do not merge yet.
      **Run the missing second lens** yourself, soundly (three sub-steps, none skippable):
      1. **Re-review the issue's content, not nothing.** Check out the issue branch (or a worktree
         holding it) so the diff is real, then assert it is **non-empty** — a re-review from bare
@@ -473,13 +512,13 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
           || { echo "compensation blocked, or second lens did not run — park, do NOT merge"; exit 1; }
         ```
      3. Merge only if step 2's verification passes. If the second lens still cannot run anywhere
-        (codex unavailable in the orchestrator context too, so `lens2_ran` stays false):
+        (codex unavailable in the supervisor context too, so `lens2_ran` stays false):
         **never silently merge** the single-lens build — park it loudly with the dual-lens
         degradation as the blocking reason, exactly like any other exit-1 outcome.
 
-     *Guard mechanics.* The orchestrator checks out `surf/<issue>` in the **shared repo** here — the
-     same basis the Step-7 merge below already relies on (the teammate has reported back and
-     released the branch by this point). The compensation re-review overwrites the teammate's
+     *Guard mechanics.* The supervisor checks out `surf/<issue>` in the **shared repo** here — the
+     same basis the Step-7 merge below already relies on (the worker has exited and released the
+     branch by this point). The compensation re-review overwrites the worker's
      degraded `review.json` in place; that is intentional (the upgraded dual-lens review supersedes
      the single-lens one), and the degradation *event* is preserved in the run journal (step 4) —
      the audit trail lives there, not in `review.json`.
@@ -518,37 +557,40 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
      sail_prune_merged_branch . surf/<issue>                      # `git branch -d` (never -D): refuses an unmerged branch
      git ls-remote --exit-code --heads origin surf/<issue> >/dev/null 2>&1 && git push origin --delete surf/<issue> || true
      ```
-   - **Exit 1 → not green → park.** Do **not** merge. **Parking** = leave the branch
+   - **Not green (park) → park.** Any non-green verdict (a `wip-handoff.md`, a failed/pending gate,
+     a CRITICAL/HIGH finding, a timed-out worker, an abnormal process exit, or any ambiguity) parks.
+     Do **not** merge. **Parking** = leave the branch
      (`surf/<issue>`) intact, do not merge, and write a **parking note** recording the issue
      number, the branch name (`surf/<issue>`), the blocking reason (the sail summary), and a
      recommendation. Write the parking note to the journal **and** to a parked-issues record at
      `.surf/parked-issues.md` under the gitignored `.surf/` — this is the defined source §14's
      wrap-up reads parked issues from. Leave the branch intact, then move on to the next
      independent issue.
-4. **Journal the decision.** Append an entry recording the outcome (merged + SHA, or parked +
-   reason), the alternatives weighed, and whether the result is reversible (see Recovery).
-5. **Dismiss the teammate AND kill its pane the moment its issue resolves.** Every issue has a
-   teammate; dismiss it as soon as the issue is merged or parked, before moving on. Use `/fleet`'s
-   graceful-shutdown wording (fleet Step 13), but in `/surf`'s **tmux** setup the pane-kill is a
-   **standard step, not a rare fallback** — empirically the agent-teams framework does **not**
-   self-close a teammate's tmux pane when its process exits; it leaves an idle `zsh` shell behind.
-   So both steps are routine:
-   1. **Send a clear, graceful shutdown request** via `SendMessage` — a `shutdown_request` with a
-      concrete reason, e.g. *"Issue #<n> merged to `main` (<sha>) — work complete and captured.
-      You're dismissed; please shut down."* (For a parked issue: *"Issue #<n> parked on
-      `surf/<issue>` — captured for follow-up. You're dismissed; please shut down."*) Send it only
-      when the teammate is **done and idle** (it has reported its result) — dismissing mid-work or
-      double-sending is what leaves a half-exited session.
-   2. **Confirm the teammate has exited, then kill its pane.** A dismissed teammate's pane shows an
-      idle `zsh` (not a running `claude` / the `2.1.176`-style version string); that idle-shell
-      state is the signal its process is gone. Read its recorded `tmuxPaneId` from
-      `~/.claude/teams/<team>/config.json` and `tmux kill-pane -t <paneId>`. **NEVER** kill the
-      orchestrator's own pane (`.surf/orchestrator-pane`) or any pane still running `claude` (a
-      live teammate). In an environment where the framework *does* auto-close panes, this kill is a
-      harmless no-op (the pane is already gone).
+4. **Journal the decision, then write the completion sentinel.** Append an entry recording the
+   outcome (merged + SHA, or parked + reason), the alternatives weighed, and whether the result is
+   reversible (see Recovery). **Then write the per-issue completion sentinel
+   `.surf/runs/<issue>/.done`** — the durable signal that this issue reached a clean terminus
+   (built + reviewed + journaled). The sentinel is what lets Resume (Step 15) distinguish a
+   completed-but-just-unmerged issue from an **orphaned** in-flight run-dir: an in-flight run-dir
+   **without** `.done` is re-run against the same `--run-dir`, never skipped as done.
+5. **Resolve and clean up when the worker's task ends.** The harness owns the worker process, so
+   there is no bash reaping or pane teardown here — the supervisor observes terminus via the **poll**
+   in step 2 (harness task exited, or terminus artifacts present). Cleanup is then a thin,
+   deterministic boundary:
+   1. **The worker is bounded by a wall-clock cap, enforced by the supervisor + harness.** When the
+      poll (step 2) sees the task still running **past** the cap (elapsed-since-spawn ≥ cap), the
+      supervisor stops it via the **harness background-task kill** (task-stop / KillShell) — not a
+      bash `kill`. That outcome is classified **timed-out** and **parks** the issue, never merges it.
+   2. **Cleanup is safe.** `surf_worker_cleanup` removes only what this worker created —
+      `git worktree remove` runs **without `--force`** (so it refuses to drop uncommitted work — the
+      safety net now that the harness, not a bash pid file, owns liveness), and the stable run-dir is
+      **left in place** as the resume checkpoint. It never force-deletes a directory tree. Only call
+      cleanup once the poll confirms the task has exited.
 
-   A fresh teammate is spawned per issue (see Worker delegation); never carry one across issues.
-   Any teammate not individually cleaned here is still swept at teardown by `TeamDelete` (Step 14b).
+   A fresh worker is spawned per issue (see Worker delegation); never carry one across issues.
+   Full hang-detection of a *wedged-but-not-capped* worker (heartbeat/adaptive timeout) is a
+   deferred follow-up (docs §5a / §7); the wall-clock cap above is the minimal boundary this land
+   ships.
 
 ### Step 7c: Auto-pickup — re-scan the board each pass until it is truly empty (whole-board mode)
 
@@ -594,9 +636,9 @@ on the **hydrated** issue:
    (one issue number per line). Its exact path is **recorded in the charter at creation**, so
    Resume (Step 15) — which already restores the latest `.surf/charter-*` — locates the run's own
    generation-set unambiguously (never a stale or merged set). **The orchestrator owns population
-   deterministically** — not the ephemeral per-issue teammate, which may die before it records
-   anything: **after each issue resolves, the orchestrator records into the generation-set every
-   issue the run filed that pass** (whether the orchestrator or a teammate ran the `gh issue
+   deterministically** — not the ephemeral per-issue worker, which may exit before it records
+   anything: **after each issue resolves, the supervisor records into the generation-set every
+   issue the run filed that pass** (whether the supervisor or a worker ran the `gh issue
    create`), **before the next board re-scan**. Step 7c reads the file each pass; **Resume
    (Step 15) re-loads it before any re-scan** so a run cut off mid-board does not lose its
    generation-set and re-admit its own refinements on resume. An **empty** file means the run has
@@ -645,67 +687,114 @@ Record the **termination cause** — **board-empty** (no build-appropriate issue
 
 ---
 
-## Worker delegation (teammate for every issue)
+## Worker delegation (headless worker for every issue)
 
-### Step 8: Delegating every issue to a teammate
+### Step 8: Delegating every issue to a headless `claude -p` worker
 
-**Every** issue is built by a fresh per-issue **agent-team teammate** — never inline, never a
-one-shot subagent, and this is the same in **both** run modes. Use `TeamCreate` once at the start
-of the run, then spawn one named teammate per issue:
+**Every** issue is built by a fresh per-issue **headless `claude -p` worker process** — never
+inline, and this is the same in **both** run modes. The supervisor (this `/surf` session) is a
+**thin LLM loop**: it makes the merge/park judgment, asks `config/surf-worker.sh` to **emit** the
+worker command, and launches it via the **harness `run_in_background` Bash facility** (which owns
+the worker's lifecycle and kill — see Step 8b). The operator interacts only with the supervisor —
+never directly with a worker process; a worker is a fire-and-background build task, not a chat
+partner. One worker per issue:
 
+```bash
+. config/surf-worker.sh
+surf_worker_command <issue>      # numeric-validates <issue>; PRINTS (does not fork) exactly:
+#   claude --dangerously-bypass-permissions -p "/sail <issue> --unattended"
+# The supervisor then runs THAT command with the Bash tool, run_in_background: true (harness-owned
+# lifecycle). It records the harness task id + the spawn time for the wall-clock cap.
 ```
-TeamCreate(team_name: "surf", description: "/surf board run")
-Agent(team_name: "surf", name: "issue-<n>", model: "sonnet",
-      description: "Build issue #<n>",
-      prompt: "<spawn contract — see below>")
-```
 
-**Why a teammate and not a subagent (the load-bearing rationale).** The teammate runs `/sail`
-(or `/ship`), and those skills **spawn their own crew** (compass / leadsman / red-team / board).
-A one-shot subagent (the `Agent` tool with `subagent_type`) **cannot** host them: a subagent is
-terminal — it cannot spawn its own sub-subagents ("no nested teams"). Only an **agent-team
-teammate** (`TeamCreate` → `Agent(team_name)`) runs as its own full session and can host
-`/sail`/`/ship` with their crews. So the delegation mechanism is a teammate for **every** issue,
-in both modes — there is no subagent path.
+**Why a headless `claude -p` worker hosts the crew (the load-bearing fact).** `/sail` (and `/ship`)
+**spawn their own crew** (compass / leadsman / red-team / board). A top-level headless `claude -p`
+process is **depth-0**, and `/sail`'s lenses are ordinary CLI subprocesses (`claude -p` /
+`codex exec`) and Agent-tool subagents — **not** agent-team teammates — so they nest comfortably
+inside a `-p` process: the depth-5 subagent-nesting limit never bites at depth-0. A `-p` worker
+therefore hosts `/sail` with its full crew. (This corrects the prior premise that "only a teammate
+can host the crew / agent teams cannot run headless"; that premise is now verified FALSE — see the
+decision record below and docs §4.) There is no need for the agent-teams feature on the default
+path, and no tmux pane.
 
-> **This replaces the old "autonomous = subagent" rule.** Earlier `/surf` delegated heavy issues
-> to a visible teammate in supervised mode but to an invisible `subagent_type: "general-purpose"`
-> subagent in autonomous mode (treated as a deliberate exception to `commands/fleet.md`'s
-> no-invisible-workers rule). That rule is **retired**: a subagent can't host `/sail`'s crew, so
-> it was never a viable engine host. `/surf` now follows fleet's visible-teammate rule in **both**
-> modes — the mode no longer changes the delegation mechanism, only decision behavior and whether
-> a human is watching the panes (Step 0).
-
-**Engine: `/sail` by default, `/ship` optional.** The teammate runs **`/sail`**
-(`SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c model_reasoning_effort=high" python3 -m sail run --diff main --dual-lens
---run-dir .surf/runs/<n>`) as its default engine — `--dual-lens` + `SAIL_REVIEW_CMD2` give the
+**Engine: `/sail` by default, `/ship` optional.** The worker runs **`/sail`** in `--unattended`
+mode (the #108 front-door terminus). `/sail --unattended` internally drives
+`SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c model_reasoning_effort=high" python3 -m sail run
+--diff main --dual-lens --run-dir .surf/runs/<n>` — `--dual-lens` + `SAIL_REVIEW_CMD2` give the
 delegated build a real cross-family review via **CLI-subprocess lenses** (codex + `claude`), with
-no `advisor()` dependency, so the second lens is available even in a nested teammate (#74; see
-Step 7's degradation guard). **`/ship`** is the optional heavier engine for an unusually demanding
-issue. Both produce the exit-0-green / exit-1-blocking contract `/surf` reads.
+no `advisor()` dependency, so the second lens is reachable inside the headless worker exactly as it
+is inside the supervisor (#74; see Step 7's degradation guard). **`/ship`** is the optional heavier
+engine for an unusually demanding issue. Both write the durable run-dir artifacts `/surf` reads.
 
-**Spawn contract (the teammate's prompt).** The prompt handed to each teammate must tell it to:
+**Worker→supervisor result contract (durable artifacts, fail-CLOSED).** The supervisor reads the
+outcome with `surf_worker_result <run-dir>`. The **claude `-p` exit code is IGNORED for the
+decision** — it reflects the claude process, not `/sail`'s commit-vs-park terminus (decided inside
+the agent turn), and the harness, not the exit code, tells the supervisor whether the task is still
+running. The verdict is read SOLELY from `/sail`'s durable artifacts: **`wip-handoff.md`** (present
+⇒ parked), **`run-state.json`** (every gate `status` in `{passed, skipped}`), and **`review.json`**
+(status `completed`; no CRITICAL/HIGH; every plan-verification AC `met`; no blocking tidiness; **and
+review currency** — `diff_hash`/`plan_hash`/`target` match the live diff via `sail.review`
+fingerprints, so a STALE review never merges). It is **GREEN only when positively confirmed** on all
+of these; otherwise → **park**. These structured artifacts are the **only** result signal — never
+the worker's stdout, log, exit code, or any pane.
+**Polarity: FAIL-CLOSED** — any ambiguity (missing/garbage run-state, unconfirmed/stale review)
+**parks**; we never merge a run that isn't positively confirmed green. (This is the opposite of the
+worker *liveness* path below, which is fail-OPEN so a healthy run is never wedged.)
 
-1. **Start immediately and run autonomously to terminus — do not idle waiting for input.**
-   (Freshly spawned teammates have been observed going idle on spawn instead of starting, forcing
-   an extra orchestrator round-trip; this directive in the spawn prompt removes that nudge.)
-2. Create branch `surf/<n>` off current `main` and run the engine (`/sail` default) in run-dir
-   `.surf/runs/<n>`.
-3. Report back a **compact result only**: the exit code, a one-line summary, and the branch name
-   — the orchestrator does the land/merge itself (Step 7), so the teammate does **not** merge.
+**Injection-safe boundary.** The issue id is **numeric-validated** (`^[0-9]+$`) before it appears in
+the emitted command; `surf_worker_command` embeds only that validated integer (no string
+interpolation of arbitrary text, no indirect execution); and any user/domain answer reaches the
+worker only **via a file** referenced by path (Step 11b) — never interpolated onto a command line.
 
-**Teammate model.** Build teammates **default to the same model as the orchestrator** (the `/surf`
-manager session) — e.g. if the orchestrator is opus, spawn build teammates on opus. This is a
-deliberate departure from `fleet.md`'s sonnet-worker-under-opus pattern: `/surf` builds
-quality-critical issues, so the build host should match the manager's tier rather than drop to
-sonnet. The user may still override per-issue (e.g. lower it for a trivial issue).
+**Liveness/cleanup boundary (harness-owned).** The worker is a **harness background task**, so its
+lifecycle and kill are the harness's job, not bash's. Liveness is the supervisor's **poll**
+(Step 7 step 2): each tick reads the harness task status (running vs exited) and compares
+elapsed-since-spawn against the wall-clock cap; on overrun it stops the worker via the **harness
+background-task kill** (task-stop / KillShell), then classifies it **timed-out → park**.
+`surf_worker_cleanup` removes only what the worker created (`git worktree remove` **without
+`--force`**, run-dir left as the resume checkpoint). There is **no** bash process-group kill,
+PID-reuse pid-file guard, or `surf_worker_wait`/`surf_worker_pgkill` — pure-bash daemonization was
+removed (Step 8b: it fights macOS). Full hang-detection of a *wedged-but-not-capped* worker
+(heartbeat/adaptive timeout) is a **deferred follow-up** (docs §5a) — the wall-clock cap is the
+minimal boundary here.
 
-**Fresh teammate per issue, dismissed at terminus.** Spawn a new teammate for each issue and
-**dismiss it** the moment that issue is merged or parked — graceful `SendMessage` shutdown, then
-**kill its now-idle pane** (in tmux the framework leaves an idle `zsh` shell, so the pane-kill is a
-standard step; see Step 7 step 5 for the full mechanism). Never reuse a teammate across issues —
-stale context is exactly the drift `/surf` is built to avoid. Per-issue dismissal + pane-kill is
-what keeps the Step 14 teardown cheap (no board's worth of idle panes piling up).
+**Worker model.** Workers inherit the orchestrating session's tier by default — e.g. an opus
+supervisor spawns opus workers (`--unattended` runs `/sail`, whose own backends are configured via
+the `SAIL_*` env, so the worker need not be told a model). `/surf` builds quality-critical issues,
+so the build host should match the manager's tier rather than drop to sonnet.
+
+**Fresh worker per issue, reaped at terminus.** Spawn a new worker for each issue; it exits at the
+issue's terminus and is `wait`-reaped (Step 7 step 5). Never reuse a worker across issues — stale
+context is exactly the drift `/surf` is built to avoid.
+
+> **Optional supervised (panes) lens.** Step 3b's panes wrap this **same** worker substrate inside
+> a tmux session purely for visibility — the per-issue process and `.surf/runs/<n>` artifacts are
+> identical. The optional lens uses the agent-teams feature only to render panes; it is **not** a
+> second execution body and adds no separate result contract or resume path.
+
+**Recommended deferred — parallel workers.** This land runs workers **sequentially** (one issue at
+a time), matching convoy's proven floor. Running independent issues concurrently (a bounded worker
+pool ordered by the Step 5b dependency DAG) is a **recommended follow-up**, deferred so the
+single-worker cleanup/identity/resume surface is proven first — see docs §7.
+
+### Step 8b: Reuse-vs-optimize decision record (#124)
+
+The #124 body swap reuses what `/convoy` proves useful (cc-dotfiles `home/shell/convoy.sh`,
+`home/lib/ship-tide.py`) but, after hitting macOS limits, puts the **worker lifecycle on the
+harness instead of bash**. The authoritative per-mechanic table —
+**durable-artifact result contract, FAIL-CLOSED** (run-state.json + review.json + wip-handoff.md +
+review currency, never the claude exit code; not log-scraping), **worker lifecycle owned by the
+orchestrator's `run_in_background` harness facility** (survives turns; harness-managed kill; the
+supervisor enforces the wall-clock cap by elapsed-vs-spawn) — chosen over pure-bash daemonization,
+which fights macOS (no `setsid` → no cross-tick survival + unsafe process-group kill), **split
+polarity** (merge gate fail-closed vs liveness fail-open), **durable-journal + `.done`-sentinel
+resume** (in-flight = orphaned), and **deferred parallelism** —
+with one-line rationales and best-in-class citations, lives in
+`docs/surf-convoy-comparison-and-backlog.md` **§7. #124 convoy reuse-vs-optimize decision record**.
+That section also records two load-bearing lessons: the #73 "agent teams cannot run headless / only
+a teammate can host the crew" claim is **verified false** (depth-0 `-p` process; CLI/subagent
+lenses), and the **platform-fit lesson** that pure-bash process daemonization is the wrong home for
+worker lifecycle on macOS — the harness `run_in_background` facility (built to survive turns) is.
 
 ---
 
@@ -842,6 +931,18 @@ the domain ones. A domain call that is genuinely **irreversible** or has **no de
 default** is **parked** with a written recommendation (the only "stop" path — Guardrails,
 Step 13), never best-bet-guessed.
 
+**Domain input under the headless worker (file-mediated park→answer→re-launch).** A headless
+worker cannot prompt the operator mid-build, so an **unresolved domain assumption parks the
+worker**: the worker writes the question to `.surf/open-questions.md` (a file, never an interactive
+prompt) and exits blocking. The supervisor surfaces it per the mode above; on an answer, the
+supervisor **re-launches that issue against the SAME `--run-dir`** — the answer reaches the
+worker only **via a file** (the open-questions file the worker re-reads, mirroring `/sail`'s
+`--body-file` convention), **never** interpolated onto the worker's command line. Because resume
+re-uses the already-green gates in that run-dir (#105), the re-launch is a cheap continuation, not
+a full rebuild. **Note:** `/sail` does **not** re-read `.ship/domain.md` per stage today, so this
+is **boundary-level** park-then-relaunch, not mid-build pickup; in-build domain pickup is a
+deferred follow-up (#125).
+
 **`.ship/domain.md` is the memory that stops re-asking — but only *confirmed* answers persist.**
 A **user-confirmed** domain answer is written back to `.ship/domain.md` so the same question is
 not asked twice. An **autonomous best-bet is not** a confirmed answer: it is recorded as
@@ -959,14 +1060,22 @@ work-remaining gate in Step 16 treats it as "nothing to resume," so the watcher 
 a completed run. (If the marker is already present from a self-healing resume — see Step 15 — keep
 it.) A user-stopped (not exhausted) run is **not** marked done — it is left resumable on purpose.
 
+**A deliberate user-stop writes a paused sentinel (#124 R5-5).** A run the operator stops on
+purpose (not board-exhausted) writes `.surf/<charter>-paused`. This is **distinct from a cap-stop**:
+the Step 16 watcher's `should_launch` gate treats the paused sentinel like a done-marker (it does
+**not** auto-relaunch a deliberately-paused run), whereas a usage-cap stop writes no sentinel and so
+is auto-resumed. `/surf resume` **clears** the paused sentinel on re-entry, restoring auto-recovery.
+Do **not** write it for a cap-stop or a crash (those should auto-resume).
+
 **Remove the live-session marker.** On any clean exit — board exhausted or user-stopped — delete
-`.surf/active` (the PID marker written at Step 7) and `.surf/orchestrator-pane` so the watcher
-sees no live session to revive.
+`.surf/active` (the PID marker written at Step 7) so the cap-recovery watcher (Step 16) sees no
+live session and does not relaunch on top of a finished run.
 
-### Step 14b: Teardown — dismiss every teammate and tear down the panes (every stop path)
+### Step 14b: Teardown — stop any in-flight worker task (every stop path)
 
-`/surf` spawns a teammate per issue, so a run that ends must never leave orphaned teammates or
-panes behind. **Teardown is mandatory on every stop path**, not just the happy one:
+A headless worker normally exits at its issue's terminus (the harness task ends), so a clean
+board-exhausted stop usually has nothing left to stop. But a run can stop **mid-issue**, so teardown
+is **mandatory on every stop path**, not just the happy one:
 
 - **Board exhausted** (Step 14 wrap-up),
 - **User-stop** (the user halts the run mid-board),
@@ -974,28 +1083,21 @@ panes behind. **Teardown is mandatory on every stop path**, not just the happy o
 
 On any of these, before the process exits:
 
-1. **Dismiss every teammate, then kill its now-idle pane.** Send each live teammate a graceful
-   `SendMessage` shutdown; once it has exited (its pane shows an idle `zsh`, not `claude`),
-   `tmux kill-pane -t <paneId>` using its recorded `tmuxPaneId` from
-   `~/.claude/teams/<team>/config.json`. In tmux this pane-kill is standard (the framework leaves
-   idle shells); where the framework auto-closes, it is a no-op.
-2. **Sweep anything left via `TeamDelete` — follow `/fleet` Step 22b.** Call `TeamDelete` to tear
-   down the team and close any pane not already cleaned. `TeamDelete` fails if any teammate is still
-   active — on error, identify the still-running teammate, send it a `SendMessage` shutdown, wait
-   for it to exit, kill its pane, then retry `TeamDelete` (the `/fleet` retry loop). Also sweep
-   `tmux list-panes -s -t surf` for any idle-`zsh` pane that is **not** the orchestrator
-   (`.surf/orchestrator-pane`) and kill it — in case a straggler's id was never recorded. The
-   **`surf` session itself is left alive** (the persistent session the next run / resume reuses and
-   the resume watcher revives — Step 16) and the **orchestrator pane is never killed** —
-   `TeamDelete` clears the team, not the tmux session.
-3. **Verify clean.** The operator can `tmux attach -t surf` to confirm only the orchestrator pane
-   remains (the monitoring-meets-teardown check from Step 3b). A residual teammate pane means
-   teardown didn't complete.
+1. **Stop the in-flight worker task via the harness.** If the worker's harness background task is
+   still running, stop it with the **harness background-task kill** (task-stop / KillShell) — the
+   harness owns the worker's process group, so there is no bash `kill` here. (The supervisor knows
+   the live task id from when it backgrounded the worker in Step 7.)
+2. **Safe cleanup.** Call `surf_worker_cleanup` for the in-flight issue — `git worktree remove`
+   without `--force` (refuses to drop uncommitted work), never a force directory delete. The stable
+   run-dir is **left in place** as the resume checkpoint (Step 15 re-uses it).
+3. **No tmux teardown on the default path.** There are no per-issue panes to kill — the default run
+   uses no tmux. *(In the optional supervised lens, Step 3b's tmux session and its agent-teams
+   panes are torn down by the framework when the session ends; the worker substrate underneath is
+   reaped exactly as above.)*
 
-This must hold for **long runs** too: because each teammate is already dismissed at its own issue
-boundary (Step 7 step 5), teardown at the end normally has only the current/last teammate to
-clean — but it must still sweep for and dismiss **any** straggler so a 30-issue run ends as clean
-as a 1-issue run.
+This holds for **long runs** too: because each worker is reaped at its own issue boundary
+(Step 7 step 5), teardown at the end normally has only the current in-flight worker (if any) to
+reap, so a 30-issue run ends as clean as a 1-issue run.
 
 ---
 
@@ -1003,18 +1105,17 @@ as a 1-issue run.
 
 ### Step 15: Resuming after a stop
 
-A `/surf` run can be cut off mid-board. With the persistent-tmux model (Step 16) the **common
-case — a usage-cap window — is no longer a hard stop**: the named `surf` session stays alive
-across the cap, and the resume watcher revives it in place so the teammates survive. Resume
-(`/surf resume`) is therefore for a **genuine hard stop** that destroys the session: a machine
-reboot, or the tmux session being killed. The durable charter + journal + decision-log +
-parked-issues files (all under the gitignored `.surf/`) plus git itself hold everything needed to
-pick the board back up. Resume reads those, not chat history.
+A `/surf` run can be cut off mid-board — a usage-cap window, a crash, a reboot, or a user-stop.
+Recovery is the **same durable-file path** in every case: `/surf resume` rebuilds board position
+from the charter + journal + decision-log + parked-issues files (all under the gitignored `.surf/`)
+plus git itself. Resume reads those, **not** chat history. The default cap-recovery (Step 16)
+**relaunches `/surf resume` headlessly** once the cap resets — there is no persistent session to
+keep alive, so there is nothing special about a cap versus any other stop.
 
-- **Invocation:** `/surf resume` — used manually (e.g. after a reboot, inside a fresh
-  `tmux new -s surf` → `claude --dangerously-bypass-permissions` → `/surf resume`) and as the
-  reboot/last-resort path the watcher points operators to when there is no live session to revive
-  (Step 16).
+- **Invocation:** `/surf resume` — relaunched **headlessly** by the Step 16 watcher
+  (`claude --dangerously-bypass-permissions -p "/surf resume"`) after a usage cap, and runnable
+  **manually** the same way (e.g. after a reboot: `claude --dangerously-bypass-permissions` →
+  `/surf resume`).
 - **Short-circuit the start gate, but verify bypass.** The original run already confirmed the repo
   and `--dangerously-bypass-permissions` and recorded the run mode in the charter, so resume does
   **not** re-prompt Step 1–2. It **does** verify that `--dangerously-bypass-permissions` is
@@ -1029,11 +1130,23 @@ pick the board back up. Resume reads those, not chat history.
   merged, confirm `surf/<issue>` is actually merged into `main` (capture the SHA); for each in-flight
   issue, check whether the `surf/<issue>` branch exists. From that, rebuild the merged-issue→SHA map,
   the parked set, the **generation-set + deferred-backlog set** (whole-board mode), and the **next
-  unfinished issue**. Append `- ↺ resume <ISO>` to the journal
+  unfinished issue**. **Re-rank any Step 7c auto-pickup issue into dependency order before launch**
+  (re-run the Step 10 dependent-issue guard) so a parent discovered mid-run never sequences after a
+  dependent. Append `- ↺ resume <ISO>` to the journal
   (mirroring `/sail`'s decision-log resume marker), then re-enter the Step 7 per-issue loop at the
   next unfinished issue — **without** re-charter. As in a fresh run, write `.surf/active` with this
   process's PID before re-entering the loop, and remove it on clean exit (this is the live-session
-  marker the revive watcher checks; see Step 16).
+  marker the cap-recovery watcher checks; see Step 16). **Clear the user-stop sentinel:** delete
+  `.surf/<charter>-paused` if present (a manual `/surf resume` re-arms auto-recovery — #124 R5-5).
+- **Completion sentinel — orphan vs done (load-bearing, round-2 risk #1).** A worker writes a
+  per-issue **completion sentinel** (`.surf/runs/<issue>/.done`) **only on a clean terminus** (the
+  supervisor writes it the moment it records the issue's outcome in the journal at Step 7 step 4).
+  On resume, an in-flight `.surf/runs/<issue>` **without** that sentinel is treated as **ORPHANED**
+  — re-checked and re-run against the **same `--run-dir`**, **never** silently treated as done.
+  Without this rule, a worker that died after building but before journaling would look "finished"
+  and surf would skip an unbuilt issue (a silent board gap). The sentinel is the durable
+  orphan-vs-done discriminator; git cross-check (above) confirms whether the branch actually
+  merged.
 - **Self-heal an already-exhausted board (scope-aware).** If reconstruction finds the board is
   **already exhausted** — for **selected-set** scope, every selected issue at a terminal outcome;
   for **whole-board** scope, a Step 7c re-scan (with the generation-set loaded) finds no
@@ -1051,112 +1164,81 @@ pick the board back up. Resume reads those, not chat history.
   2. **Branch merged AND it was a stacked parent** → re-run the Step 10 dependent-issue guard for
      its dependents (a parent merging may now unblock or re-order them) before advancing — don't
      blindly skip.
-  3. **Branch exists, unmerged, and a valid `.surf/runs/<issue>/` run-dir exists** → re-invoke
+  3. **Branch exists, unmerged, and a valid `.surf/runs/<issue>/` run-dir exists but has no
+     completion sentinel (`.done`)** → the run-dir is **orphaned** (in-flight, no clean terminus) →
+     re-launch against the **same `--run-dir`** via a fresh headless worker (Step 7: `surf_worker_command
+     <issue>` → harness `run_in_background`), which runs `/sail <issue> --unattended` over
      `python3 -m sail run --diff main --run-dir .surf/runs/<issue>`. `/sail` skips the gates it
-     already finished, and `--diff main` re-derives the baseline against **current** `main` — so a
-     parent that merged since is included.
+     already finished (per-gate reuse, #105), and `--diff main` re-derives the baseline against
+     **current** `main` — so a parent that merged since is included. An in-flight run-dir is never
+     treated as done just because it exists.
   4. **Run-dir missing, or corrupt/partial** (a crash mid-write) → discard it and build the issue
      **fresh**.
   5. **No branch at all** → build the issue **fresh**.
 - **The per-issue journal entry is the checkpoint.** Because each issue's outcome is journaled as
   it lands, a hard stop loses at most the one in-flight issue — never the merged board behind it.
 
-### Step 16: Persistent-tmux + revive (usage-cap auto-resume)
+### Step 16: Durable-file `/surf resume` relaunch (usage-cap auto-resume)
 
 The subscription usage window is **not** API-readable (the `anthropic-ratelimit-*` headers report
 API-key per-minute throughput, a different pool), so auto-resume is **reactive**: capture the reset
 time the cap reports and resume after it — not a proactive remaining-quota monitor.
 
-**Why not the old headless relaunch.** `/surf` used to be relaunched headlessly
-(`claude --dangerously-bypass-permissions -p "/surf resume"`) by a LaunchAgent on a timer. That is
-**retired** as the primary mechanism: a teammate-based build needs the **agent-teams** feature, and
-agent teams **cannot run in headless `-p` mode** — they require an interactive terminal. A headless
-relaunch could not host the per-issue teammates at all, so it is fundamentally incompatible with the
-"teammate for every issue" model (Step 8). The replacement keeps the session **interactive and
-alive** across the cap.
+**The model: durable-file headless relaunch (the #53 model, restored).** Because a headless
+`claude -p` process **can** host `/sail`'s crew (Step 8 — depth-0 subagents, verified), the default
+cap-recovery is simply to **relaunch `/surf resume` headlessly** once the cap resets:
+`claude --dangerously-bypass-permissions -p "/surf resume"`. Nothing needs to stay alive across the
+cap — the durable `.surf/` files + git are the entire state, and the relaunched headless run
+rebuilds board position from them (Step 15) and spawns fresh per-issue workers. This **supersedes**
+the #73 persistent-tmux send-keys revive (which existed only because the old teammate body could
+not run headless — a premise now verified false).
 
-**The model: persistent tmux + in-place revive.** `/surf` runs in the long-lived named `surf` tmux
-session (Step 3b). The session — orchestrator pane **and** the live per-issue teammate pane — is
-**not killed** when the usage cap hits; it just stalls. An **external revive watcher** (out of
-band, unaffected by the cap) waits for the reset and then **wakes the still-alive session in place**
-with `tmux send-keys -t surf` (a one-line nudge to continue). Because the session was never
-restarted, the teammate survives the cap window — which restarting the Claude process (`claude
---resume`) or a headless relaunch could not guarantee.
-
-- **The revive watcher.** `config/surf-resume.sh`, fired on an interval by the LaunchAgent
-  (`config/com.surf.resume.plist`), is **reframed** from a headless relauncher into the
-  session-bound watcher: instead of `claude -p`, it enumerates every live pane in the named
-  `surf` session and uses `tmux send-keys` on the pane(s) where the cap was actually observed.
-  It is **not** a headless `claude -p` relaunch — it touches no Claude tokens to decide, and it
-  only ever revives a session that is already alive.
-- **The watcher is pure bash and gates before any Claude call** — zero Claude tokens on an idle
-  tick. It acts only when **all** of: no live revive lock; a **live `.surf/active` session**
-  exists (a PID marker whose process is still alive — written by a running interactive or resumed
-  `/surf`, Steps 7 and 15 — and a live named `surf` tmux session to send keys to; a stale marker
-  with a dead PID, or no session to revive, means there is nothing to nudge → it logs and exits);
-  and **real unfinished work remains**. Otherwise it exits immediately.
-- **Positive stall evidence is required before any nudge (state machine).** The watcher never
-  guesses from historical scrollback and never nudges a healthy session. It reads the **current
-  visible screen** of the orchestrator pane and runs a four-state machine:
-  1. **Cap still in effect** (the cap notice is the pane's active tail **and** its reset time is
-     still in the future, or it is the first sight of a cap) → **arm** `.surf/resume-after` from
-     the reset time and exit — never nudge a still-capped session. A **lingering** cap notice
-     whose reset has already passed does **not** re-arm (re-arming a notice that stays on screen
-     until the nudge would push the floor forward every tick and never revive — a livelock); it
-     falls through to state 2.
-  2. **Armed AND `now ≥ .surf/resume-after`** → the session *was* observed capped and the window
-     has reset → **revive once** (send-keys to each pane recorded in `.surf/resume-panes`, or the
-     orchestrator pane if no record exists), then **disarm** (delete both markers).
-  3. **Armed AND reset still pending** → wait.
-  4. **Not capped AND not armed** → a healthy/working session that was never observed capped →
-     **do nothing.** The armed floor is the proof-of-prior-cap that licenses a nudge; without it
-     the watcher will not send keys.
-- **"Work remains" = charter present AND no done-marker.** The gate is deliberately broad: if the
-  newest `.surf/charter-*.md` exists and there is **no** done-marker (no `.surf/<charter>-done` file
-  and no `- done:` journal line — written as `board exhausted` or `superseded`), the watcher treats
-  the board as unfinished. The **done-marker is the single authoritative quiet signal** — it is how a
-  finished run (written at Wrap-up, Step 14), an abandoned one (written by self-healing resume,
-  Step 15), or a superseded one (tombstoned when a fresh run starts over it, Step 0-pre) silences the
-  watcher. To stop a mid-board run that you do **not** want revived, either `touch` the done-marker
+- **The watcher.** `config/surf-resume.sh`, fired on an interval by the LaunchAgent
+  (`config/com.surf.resume.plist`), is a **pure-bash gate** that decides whether to relaunch and,
+  when it does, runs `claude --dangerously-bypass-permissions -p "/surf resume"`. It touches **zero
+  Claude tokens on an idle tick** — the "is it time yet?" decision is entirely in shell, never in a
+  Claude call.
+- **The gate (cheap-shell, no Claude call).** The watcher relaunches only when **all** hold: no
+  live relaunch lock; **no live `.surf/active` session** already running (a live PID marker means a
+  `/surf` is already working — do not launch on top of it; a stale marker with a dead PID is
+  ignored and cleaned, so a crash self-heals); the armed `.surf/resume-after` floor is absent or
+  has passed; and **real unfinished work remains**. Otherwise it exits immediately.
+- **"Work remains" = charter present AND no done-marker.** If the newest `.surf/charter-*.md` (by
+  its sortable `<timestamp>` suffix) exists and there is **no** done-marker (no `.surf/<charter>-done`
+  file and no `- done:` line in **that charter's own** journal — written as `board exhausted` or
+  `superseded`), the watcher treats the board as unfinished. The **done-marker is the single
+  authoritative quiet signal** — it is how a finished run (Wrap-up, Step 14), an abandoned one
+  (self-healing resume, Step 15), or a superseded one (tombstoned at Step 0-pre) silences the
+  watcher. To stop a mid-board run you do **not** want resumed, either `touch` the done-marker
   (`.surf/<charter>-done`) or bootout the LaunchAgent.
-- **Reset capture (conservative floor).** When state (1) observes the cap on the current screen,
-  the watcher arms `resume-after = max(parsed_reset, now + MIN_BACKOFF)`. If the reset time is
-  **unparseable**, it arms a long default (`now + DEFAULT_BACKOFF`, multi-hour — subscription
-  windows are multi-hour). A parse-miss is therefore a *long* wait, never a per-tick hot-loop.
-- **Precise pane targeting.** So the revive keystroke lands on the pane that actually stalled,
-  the watcher records the capped tmux pane id(s) to `.surf/resume-panes` when it arms, and it
-  sends keys back to those pane ids on revive. If no pane record exists, it falls back to the
-  orchestrator pane id from `.surf/orchestrator-pane`, then to the named session only if that file
-  is absent.
-- **Cap detection is pane-read, and that is a documented limitation.** The watcher reads the
-  active tail (`tmux capture-pane`, last few non-empty lines) of every live pane in the named
-  session to spot the cap notice. This is the **only** out-of-band cap signal available: a capped
-  session is blocked on the API and **cannot write a marker itself**, so there is nothing
-  machine-readable to gate on instead. The fragility is bounded by design — the conservative
-  `MIN_BACKOFF` floor, the active-tail restriction, and the single-shot idempotent nudge mean a
-  misread costs at most one harmless keystroke or a longer wait, never a hot-loop. The cap-notice
-  patterns should be **validated against a real capped Claude Code pane** before being trusted in
-  production.
+- **Reset capture (conservative floor).** When the relaunched run hits the cap again, the watcher
+  parses the reset time from the run's **own output** (a structured signal, not pane-scraping) and
+  arms `resume-after = max(parsed_reset, now + MIN_BACKOFF)`. If the reset time is **unparseable**,
+  it arms a long default (`now + DEFAULT_BACKOFF`, multi-hour — subscription windows are
+  multi-hour). A parse-miss is therefore a *long* wait, never a per-tick hot-loop.
 - **Anti-pattern guard.** Never put the "is it time yet?" decision inside a Claude call — that would
-  burn tokens on every idle tick and can't run while the session is capped. The decision lives in
-  the pure-shell watcher; the live session is nudged only once the gate has already said yes.
+  burn tokens on every idle tick and can't run while the API is capped. The decision lives in the
+  pure-shell gate; `/surf resume` is relaunched only once the gate has already said yes.
 
-**The reboot trade-off (documented, accepted).** The persistent-tmux model survives a **usage-cap
-window** but **not a machine reboot** — a reboot destroys the tmux session, so there is no live
-session for the watcher to revive, and **automatic recovery is lost**. That is the accepted
-trade-off for keeping teammates alive across caps. Recovery after a reboot is **manual**: start a
-fresh named session and resume —
+> **Optional supervised (panes) lens — in-place revive.** If you opted into the Step 3b panes lens
+> (a long-lived `surf` tmux session), the watcher can instead **revive the still-alive session in
+> place** with `tmux send-keys` rather than relaunch headlessly — keeping the visible panes intact
+> across the cap. This is a **visibility convenience of the optional lens only**; the **default**
+> cap-recovery is the durable-file headless relaunch above, and resume behaviour (the `.surf/`
+> files Step 15 reconstructs from) is identical either way.
+
+**Recovery in every case is the same durable-file path.** A usage cap, a crash, a reboot, or a
+user-stop all recover via `/surf resume` reading the durable `.surf/` files + git — there is no
+session to keep alive, so a reboot is no longer a special "automatic recovery lost" case. After any
+hard stop, the watcher relaunches automatically once its gate opens, or you can run it manually:
 
 ```bash
-tmux new -s surf
 claude --dangerously-bypass-permissions
 #   …then at the Claude prompt:
 /surf resume
 ```
 
-— which rebuilds board position from charter + journal + git (Step 15). The `claude --resume
-<uuid>` form may also be used to rehydrate the prior session id, but `/surf resume` reconstructing
-from the durable files is the canonical path.
+— which rebuilds board position from charter + journal + git (Step 15).
 
 ---
 
@@ -1190,20 +1272,30 @@ from the durable files is the canonical path.
   instruction on the same line** — zero user memory required.
 - One `--no-ff` merge commit per green issue; log every merge SHA so each is `git revert`-able.
 - **Sandbox repo only. No force-push or destructive git.** Park anything irreversible.
-- **Every issue is built by a fresh per-issue `Agent(team_name)` teammate — in both modes**, never
-  inline and never a one-shot subagent (a subagent can't host `/sail`'s crew). The teammate runs
-  `/sail` by default (`/ship` optional). The mode changes only decision behavior and whether a
-  human watches the panes — not the delegation mechanism. Run `/surf` inside the named `surf` tmux
-  session; the agent-teams framework splits panes within it — never split panes by hand.
-- **Teardown is mandatory on every stop path** (board-exhausted, user-stop, error): dismiss every
-  teammate via graceful `SendMessage` shutdown, then **kill each now-idle teammate pane** (standard
-  in tmux — the framework leaves idle `zsh` shells), then `TeamDelete` to sweep anything left (the
-  `/fleet` Step 22b retry pattern); leave the `surf` session and the orchestrator pane alive for
-  resume.
-- **Auto-resume is persistent-tmux + revive, not headless relaunch.** The named session stays
-  alive across a usage cap and an external watcher revives it in place (`tmux send-keys`); the
-  headless `claude -p` LaunchAgent relaunch is retired (can't host teammates). A reboot loses
-  automatic recovery → manual `/surf resume`.
+- **Every issue is built by a fresh per-issue headless `claude -p` worker — in both modes**, never
+  inline. The worker runs `claude --dangerously-bypass-permissions -p "/sail <n> --unattended"`
+  (a depth-0 process that hosts `/sail`'s crew — `/ship` optional), **backgrounded by the harness**
+  (`run_in_background`), which owns its lifecycle and kill. The mode changes only decision behavior,
+  never the delegation mechanism. The default path needs **no tmux and no agent-teams feature**; the
+  optional supervised (panes) lens (Step 3b) wraps the same worker substrate inside a tmux session
+  purely for visibility.
+- **Worker launch is injection-safe; lifecycle is harness-owned.** `surf_worker_command` numeric-
+  validates the issue id and EMITS the exact command (no string interpolation of arbitrary text, no
+  forking); the supervisor runs it via the harness Bash `run_in_background` facility. Domain answers
+  reach the worker only via a file (Step 11b). The wall-clock cap is enforced by the SUPERVISOR
+  (elapsed-vs-spawn) issuing the **harness background-task kill** — there is **no** bash
+  process-group kill / PID-reuse pid-file guard (pure-bash daemonization was removed; it fights
+  macOS). `surf_worker_cleanup` never force-deletes a tree and uses `git worktree remove` without
+  `--force`. These thin helpers live in `config/surf-worker.sh`.
+- **Teardown is mandatory on every stop path** (board-exhausted, user-stop, error): stop any
+  in-flight worker via the harness background-task kill, then `surf_worker_cleanup` (safe, no force
+  delete), leaving the run-dir as the resume checkpoint. No tmux teardown on the default path.
+- **Auto-resume is the durable-file `/surf resume` headless relaunch (the #53 model).** A usage cap,
+  crash, reboot, or user-stop all recover the same way: the Step 16 watcher relaunches
+  `claude --dangerously-bypass-permissions -p "/surf resume"` once its pure-shell gate opens, which
+  rebuilds board position from the durable `.surf/` files + git. An in-flight run-dir without a
+  completion sentinel is treated as **orphaned** (re-run against the same `--run-dir`), never as
+  done.
 - The charter + journal are the source of truth; re-anchor from them at the top of every issue.
   Do not rely on `/compact` or chat history.
 
@@ -1247,12 +1339,22 @@ single-lens). Extend it to every status line the run prints.
 ## Cross-references
 
 - `commands/idea.md` — triage skill; `/surf` is the board-level autopilot above per-issue pipelines
-- `commands/fleet.md` — parallel epic build; source of the `TeamCreate`/`Agent(team_name)`/dismiss
-  teammate pattern, the named-tmux/agent-teams setup, and the visible-teammate rule `/surf` now
-  follows in **both** modes for **every** issue (no subagent exception)
+- `config/surf-worker.sh` — the tested thin helper: `surf_worker_validate_id`,
+  `surf_worker_command` (EMIT the injection-safe worker command — the harness backgrounds it),
+  `surf_worker_result` (the fail-closed durable-artifact merge contract incl. review currency), and
+  `surf_worker_cleanup` (safe `git worktree remove` without `--force`). Worker lifecycle/kill is the
+  harness's job (`run_in_background`), not bash — no daemonization/process-group kill here
+- `cc-dotfiles: home/shell/convoy.sh` + `home/lib/ship-tide.py` — proven patterns reused (safe
+  worktree cleanup, fail-open liveness polarity); but worker lifecycle is harness-owned, not the
+  bash daemonization convoy uses — see the `#124 convoy reuse-vs-optimize decision record` in
+  `docs/surf-convoy-comparison-and-backlog.md` §7 (incl. the macOS platform-fit lesson)
+- `commands/fleet.md` — parallel epic build using agent-team teammates; the **optional** supervised
+  (panes) lens (Step 3b) borrows its named-tmux/agent-teams pane setup, but the `/surf` default no
+  longer uses teammates at all (the body swapped to headless workers, #124)
 - `cc-dotfiles: home/commands/sail.md` (and the `/sail` README) — the **default engine** each
-  per-issue teammate runs via `python3 -m sail run --diff main` (`/ship` is the optional heavier
-  engine); defines the exit-0/exit-1 and fail-closed-review contract `/surf` relies on
+  per-issue worker runs via `/sail <n> --unattended` (→ `python3 -m sail run --diff main`; `/ship`
+  is the optional heavier engine); defines the exit-0/exit-1 and fail-closed-review contract
+  `/surf` relies on
 - `/train` — maintains `.ship/domain.md`, the domain memory **domain gating** (Step 11b) reads
   first; teaching the crew there turns repeated domain windows into already-answered questions so
   a domain-bearing board runs with fewer pauses

@@ -1,40 +1,38 @@
 #!/usr/bin/env bash
-# surf-resume.sh — session-bound revive watcher for /surf's persistent-tmux + revive
-# auto-resume (surf.md Step 16).
+# surf-resume.sh — durable-file headless-relaunch watcher for /surf's usage-cap auto-resume
+# (surf.md Step 16).
 #
-# REFRAMED (issue #73): this is NO LONGER a headless relauncher. /surf delegates every issue
-# to an agent-team teammate, and agent teams CANNOT run in headless `claude -p` mode — so the
-# old `claude -p "/surf resume"` relaunch could never host the per-issue teammates. Instead /surf
-# now runs in a long-lived NAMED tmux session ("surf") that stays alive across a usage-cap window,
-# and this watcher REVIVES that still-alive session IN PLACE with `tmux send-keys` once the cap
-# resets — so the teammates survive the cap.
+# #124: this is the DEFAULT cap-recovery — a headless relaunch of `/surf resume`, the proven #53
+# LaunchAgent model. /surf delegates each issue to a headless `claude -p` worker, and a headless
+# `claude -p` process CAN host /sail's crew (depth-0 subagents) — so there is no session that must
+# stay alive across the cap, and no need for an in-place tmux send-keys revive. Nothing needs to
+# persist: the durable `.surf/` files + git are the entire state, and the relaunched headless run
+# (`claude --dangerously-bypass-permissions -p "/surf resume"`) rebuilds board position from them.
+#
+# This SUPERSEDES the #73 persistent-tmux send-keys revive, which existed only because the old
+# teammate-pane build body could not run headless — a premise now verified FALSE. The optional
+# supervised (panes) lens (surf.md Step 3b) may still revive a long-lived session in place; that is
+# a visibility convenience of the optional lens, not this default watcher.
 #
 # Fired on an interval by the com.surf.resume LaunchAgent. The gate is PURE BASH: it spends zero
-# Claude tokens on an idle tick and only sends a revive keystroke when there is real unfinished
-# board work, a LIVE named session to revive, and the usage-cap reset time has passed.
-#
-# REBOOT TRADE-OFF: this survives a usage-cap window, NOT a machine reboot. A reboot destroys the
-# tmux session, so there is no live session to revive (the gate stays closed); recovery is then a
-# MANUAL `tmux new -s surf` → `claude --dangerously-bypass-permissions` → `/surf resume`.
+# Claude tokens on an idle tick and only relaunches when there is real unfinished board work, no
+# /surf already running, and the usage-cap reset time has passed.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # --- Tunables (overridable by env, e.g. for the functional test) ---
-MIN_BACKOFF="${SURF_RESUME_MIN_BACKOFF:-300}"        # never revive sooner than 5 min after a cap
+MIN_BACKOFF="${SURF_RESUME_MIN_BACKOFF:-300}"        # never relaunch sooner than 5 min after a cap
 DEFAULT_BACKOFF="${SURF_RESUME_DEFAULT_BACKOFF:-18000}"  # parse-miss → 5h long default
 MAX_RUN_AGE="${SURF_RESUME_MAX_RUN_AGE:-7200}"       # a lockdir older than 2h is stale → reclaim
-SESSION="${SURF_RESUME_SESSION:-surf}"               # the canonical named tmux session
 LOG="${SURF_RESUME_LOG:-/tmp/surf-resume.log}"
 CAP_NOTICE_RE='weekly limit|hit your .*limit|usage limit|usage cap|rate limit|try again later|limit will reset|limit reached|resets at|/usage-credits'
 
 SURF_DIR="${SURF_RESUME_DIR:-$REPO_ROOT/.surf}"   # overridable so the functional test can point at a fixture dir
 RESUME_AFTER="$SURF_DIR/resume-after"
-RESUME_PANES="$SURF_DIR/resume-panes"
 LOCKDIR="$SURF_DIR/resume.lock"
 ACTIVE="$SURF_DIR/active"
-ORCH_PANE_FILE="$SURF_DIR/orchestrator-pane"   # tmux pane id the orchestrator records at Step 7
 
 log() { printf '%s surf-resume: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >>"$LOG" 2>/dev/null || true; }
 
@@ -68,11 +66,6 @@ mtime_of() {
   stat -c %Y "$p" 2>/dev/null || true
 }
 
-# Live pane ids for the named tmux session, one per line.
-live_panes() {
-  tmux list-panes -s -t "$SESSION" -F '#{pane_id}' 2>/dev/null || true
-}
-
 # Is there real unfinished board work? The done-marker is the authoritative "quiet"
 # signal: a charter exists (latest by its sortable `<timestamp>` suffix) AND there is no
 # done-marker → work remains. A finished or abandoned run is silenced by writing the done-marker at
@@ -91,11 +84,19 @@ work_remains() {
   done
   shopt -u nullglob
 
-  [ -n "$latest_charter" ] || { log "no charter — nothing to revive"; return 1; }
+  [ -n "$latest_charter" ] || { log "no charter — nothing to resume"; return 1; }
 
   # Done-marker for the latest charter → run finished, gate goes quiet.
   if [ -e "${latest_charter}-done" ]; then
-    log "done-marker present for $(basename "$latest_charter") — nothing to revive"
+    log "done-marker present for $(basename "$latest_charter") — nothing to resume"
+    return 1
+  fi
+
+  # User-stop sentinel → a DELIBERATE pause, not a cap (#124 R5-5). The watcher must NOT auto-relaunch
+  # a run the operator stopped on purpose. `/surf resume` clears `.surf/<charter>-paused` on re-entry,
+  # so a manual resume restarts auto-recovery; a cap-stop never writes this sentinel, so it relaunches.
+  if [ -e "${latest_charter}-paused" ]; then
+    log "user-stop sentinel present for $(basename "$latest_charter") — deliberately paused, not resuming"
     return 1
   fi
 
@@ -107,7 +108,7 @@ work_remains() {
   charter_ts="$(basename "$latest_charter" .md)"; charter_ts="${charter_ts#charter-}"
   latest_journal="$SURF_DIR/journal-${charter_ts}.md"
   if [ -f "$latest_journal" ] && grep -qsiE '^- done:|done: board exhausted' "$latest_journal" 2>/dev/null; then
-    log "journal done: line present for $(basename "$latest_journal") — nothing to revive"
+    log "journal done: line present for $(basename "$latest_journal") — nothing to resume"
     return 1
   fi
 
@@ -115,43 +116,45 @@ work_remains() {
   return 0
 }
 
-# Is there a LIVE /surf session to revive? Requires BOTH a live `.surf/active` PID marker AND a
-# live named tmux session to send keys to. In the reframed model a live session is REQUIRED (we
-# revive it in place); a stale marker or a missing session means there is nothing to nudge — the
-# reboot/last-resort path is a manual `/surf resume`, never an automatic headless relaunch.
-live_session() {
-  if [ ! -f "$ACTIVE" ]; then
-    log "no .surf/active marker — no live session to revive"
-    return 1
-  fi
+# Is a /surf session already running? A live `.surf/active` marker holds a PID; if that PID is
+# still alive we must NOT relaunch on top of it. A stale marker (dead PID, or unreadable) is
+# ignored and cleaned, so a crash that skipped the EXIT trap self-heals.
+active_session() {
+  [ -f "$ACTIVE" ] || return 1
   local pid
   pid="$(cat "$ACTIVE" 2>/dev/null || true)"
-  if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
-    log "stale .surf/active marker (dead pid '$pid') — cleaning; no live session to revive"
-    rm -f "$ACTIVE" 2>/dev/null || true
-    return 1
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    log "live .surf/active (pid $pid) — a /surf is already running"
+    return 0
   fi
-  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-    log "live pid $pid but no tmux session '$SESSION' — session gone (reboot?); manual /surf resume needed"
-    return 1
-  fi
-  return 0
+  log "stale .surf/active marker (dead pid '$pid') — cleaning"
+  rm -f "$ACTIVE" 2>/dev/null || true
+  return 1
 }
 
-# Pure-bash gate. No Claude call. Returns 0 only when a revive should happen.
-# Reclaims a stale lockdir (older than MAX_RUN_AGE) as a side effect.
-should_revive() {
-  # (a) lock not held — or held but stale (covers a SIGKILL that never fired the trap).
+# Pure-bash gate. No Claude call. Returns 0 only when a headless relaunch should happen.
+# Reclaims a lockdir only when its recorded relaunch PID is dead AND it has aged out.
+should_launch() {
+  # (a) lock held? A relaunch can legitimately run for HOURS (a full board pass), far longer than
+  #     MAX_RUN_AGE — so age ALONE must NOT make the lock look stale (#124 R5-4: that race let a
+  #     second tick relaunch concurrently). The authoritative liveness signal is the relaunch PID
+  #     recorded in the lockdir: a LIVE pid → lock is live regardless of age; only a DEAD-or-absent
+  #     pid that ALSO aged past MAX_RUN_AGE is reclaimed (covers a SIGKILL that never fired the trap).
   if [ -d "$LOCKDIR" ]; then
-    local lmt age
+    local lpid lmt age
+    lpid="$(cat "$LOCKDIR/pid" 2>/dev/null || true)"
+    if [ -n "$lpid" ] && kill -0 "$lpid" 2>/dev/null; then
+      log "live lockdir (relaunch pid $lpid alive) — another resume is running"
+      return 1
+    fi
     lmt="$(mtime_of "$LOCKDIR")"
     if [ -n "$lmt" ]; then
       age=$(( $(now_epoch) - lmt ))
       if [ "$age" -ge "$MAX_RUN_AGE" ]; then
-        log "stale lockdir (age ${age}s ≥ ${MAX_RUN_AGE}s) — reclaiming"
+        log "stale lockdir (pid '${lpid:-none}' dead, age ${age}s ≥ ${MAX_RUN_AGE}s) — reclaiming"
         rm -rf "$LOCKDIR"
       else
-        log "live lockdir (age ${age}s) — another revive is running"
+        log "lockdir pid dead but young (age ${age}s) — holding to avoid a kill/restart race"
         return 1
       fi
     else
@@ -161,46 +164,54 @@ should_revive() {
     fi
   fi
 
-  # (b) a LIVE interactive/resumed /surf session must exist to revive.
-  if ! live_session; then
+  # (b) no live interactive/resumed /surf session already running.
+  if active_session; then
     return 1
   fi
 
-  # (c) real unfinished work.
+  # (c) resume-after absent, or now ≥ it.
+  if [ -f "$RESUME_AFTER" ]; then
+    local ra_ts ra_epoch
+    ra_ts="$(cat "$RESUME_AFTER" 2>/dev/null || true)"
+    ra_epoch="$(epoch_of_rfc3339 "$ra_ts")"
+    if [ -n "$ra_epoch" ] && [ "$(now_epoch)" -lt "$ra_epoch" ]; then
+      log "resume-after $ra_ts not yet reached — waiting"
+      return 1
+    fi
+  fi
+
+  # (d) real unfinished work.
   work_remains || return 1
 
   return 0
 }
 
-# Best-effort parse of a cap reset time (RFC3339 Z) from the captured pane. Empty if none.
-# Anchored: only consider RFC3339 timestamps on lines that actually mention the cap/reset
-# (the same wording hit_cap uses), so an earlier unrelated timestamp — e.g. an echoed
-# `↺ resume <ISO>` or a merge line — can't be mistaken for the reset time.
+# Best-effort parse of a cap reset time (RFC3339 Z) from the relaunched run's OWN output. Empty if
+# none. Anchored: only consider RFC3339 timestamps on lines that actually mention the cap/reset
+# (the same wording hit_cap uses), so an unrelated timestamp can't be mistaken for the reset time.
 parse_reset_time() {
   local out="$1"
   local line ts time tz
-  line="$(
-    grep -iE "$CAP_NOTICE_RE" \
-      "$out" 2>/dev/null | head -1 || true
-  )"
+  # Anchor to the SAME tail buffer hit_cap matched (#124 r3): only consider a cap-wording line within
+  # the last N non-empty lines, so a reset time is never parsed from unrelated board content earlier
+  # in the output (the timestamp that hit_cap's tail anchor already refused to treat as a cap notice).
+  line="$(cap_tail "$out" | grep -iE "$CAP_NOTICE_RE" 2>/dev/null | head -1 || true)"
   [ -n "$line" ] || return 0
 
+  # Preferred: an explicit RFC3339 Z timestamp on the cap line.
   ts="$(printf '%s\n' "$line" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' 2>/dev/null | head -1 || true)"
   if [ -n "$ts" ]; then
     printf '%s\n' "$ts"
     return 0
   fi
 
-  time="$(
-    printf '%s\n' "$line" | sed -nE 's/.*([0-9]{1,2}(:[0-9]{2})?[[:space:]]*[AaPp][Mm]).*/\1/p' | head -1 || true
-  )"
-  tz="$(
-    printf '%s\n' "$line" | sed -nE 's/.*\(([A-Za-z_]+\/[A-Za-z_]+)\).*/\1/p' | head -1 || true
-  )"
+  # Fallback (#119 weekly cap): a relative am/pm clock time + an IANA TZ, e.g.
+  # "resets 8pm (America/New_York)". Roll it FORWARD to the next future epoch and emit RFC3339 Z.
+  time="$(printf '%s\n' "$line" | sed -nE 's/.*([0-9]{1,2}(:[0-9]{2})?[[:space:]]*[AaPp][Mm]).*/\1/p' | head -1 || true)"
+  tz="$(printf '%s\n' "$line" | sed -nE 's/.*\(([A-Za-z_]+\/[A-Za-z_]+)\).*/\1/p' | head -1 || true)"
   if [ -z "$time" ] || [ -z "$tz" ] || ! command -v python3 >/dev/null 2>&1; then
     return 0
   fi
-
   python3 - "$time" "$tz" <<'PY' 2>/dev/null || true
 import re
 import sys
@@ -231,155 +242,75 @@ print(candidate.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 PY
 }
 
-# Does the captured pane show the session is currently capped? We capture only the CURRENT,
-# VISIBLE screen (no deep `-S` scrollback) so a cap message that already scrolled away cannot
-# falsely read as "currently capped" — the cap notice on a stalled Claude session is its active
-# tail. This is the authoritative current-state read, not a grep over historical output.
+# Did the relaunched run hit the usage cap? ANCHORED TO THE TAIL (#124 R2-6): read only the last N
+# non-empty lines, because a genuine cap notice is the TERMINAL state of a capped run (the run stops
+# at it), never buried mid-output. This stops ordinary board content mentioning "rate limit"/"resets
+# at" earlier in the output from triggering a spurious multi-hour backoff. A cap notice WITHOUT a
+# parseable reset time is still detected here (it then arms the conservative DEFAULT_BACKOFF floor),
+# so the never-hot-loop guarantee holds whether or not a reset token co-occurs.
+# The last N non-empty lines of the relaunch output — the only window where a genuine cap notice
+# (the TERMINAL state of a capped run) can legitimately appear. Shared by hit_cap and
+# parse_reset_time so the two can never drift (#124 r3). N is env-overridable.
+cap_tail() {
+  local out="$1" tail_n="${SURF_RESUME_CAP_TAIL:-3}"
+  grep -v '^[[:space:]]*$' "$out" 2>/dev/null | tail -n "$tail_n" || true
+}
+
 hit_cap() {
-  local out="$1"
-  grep -qiE "$CAP_NOTICE_RE" "$out" 2>/dev/null
-}
-
-# The tmux target for capture/send — the recorded orchestrator pane id if /surf wrote one
-# (Step 7), else the named session's active pane. Sending to a precise pane keeps the revive
-# keystroke out of a teammate's pane.
-orch_target() {
-  if [ -f "$ORCH_PANE_FILE" ]; then
-    local p
-    p="$(cat "$ORCH_PANE_FILE" 2>/dev/null || true)"
-    if [ -n "$p" ]; then printf '%s' "$p"; return 0; fi
-  fi
-  printf '%s' "$SESSION"
-}
-
-# Arm the resume-after floor from an observed cap: max(parsed_reset, now + MIN_BACKOFF), or a
-# long default when the reset time is unparseable (never a near-term hot-loop).
-arm_resume_after() {
-  local out="$1" parsed parsed_epoch floor_epoch chosen_epoch
-  parsed="$(parse_reset_time "$out")"
-  floor_epoch=$(( $(now_epoch) + MIN_BACKOFF ))
-  if [ -n "$parsed" ]; then parsed_epoch="$(epoch_of_rfc3339 "$parsed")"; else parsed_epoch=""; fi
-  if [ -n "$parsed_epoch" ]; then
-    if [ "$parsed_epoch" -gt "$floor_epoch" ]; then chosen_epoch="$parsed_epoch"; else chosen_epoch="$floor_epoch"; fi
-    log "session capped; parsed reset $parsed → armed resume-after $(rfc3339_of_epoch "$chosen_epoch")"
-  else
-    chosen_epoch=$(( $(now_epoch) + DEFAULT_BACKOFF ))
-    log "session capped; reset unparseable → long default armed resume-after $(rfc3339_of_epoch "$chosen_epoch")"
-  fi
-  rfc3339_of_epoch "$chosen_epoch" >"$RESUME_AFTER"
+  local out="$1" tail_buf
+  tail_buf="$(cap_tail "$out")"
+  [ -n "$tail_buf" ] || return 1
+  printf '%s\n' "$tail_buf" | grep -qiE "$CAP_NOTICE_RE" 2>/dev/null
 }
 
 main() {
   mkdir -p "$SURF_DIR"
 
-  should_revive || { log "gate closed — exiting"; exit 0; }
+  should_launch || { log "gate closed — exiting"; exit 0; }
 
   # Atomic acquire: mkdir fails if another tick already holds it.
   if ! mkdir "$LOCKDIR" 2>/dev/null; then
     log "lost lock race — exiting"
     exit 0
   fi
-  local out target full
+  # Record THIS process's pid in the lock so a concurrent tick can tell a live multi-hour relaunch
+  # from a genuinely-dead one by liveness, not by age alone (#124 R5-4). This tick holds the lock
+  # for the relaunch's whole lifetime; should_launch keeps the lock live while this pid is alive.
+  printf '%s\n' "$$" >"$LOCKDIR/pid" 2>/dev/null || true
+  local out
   out="$(mktemp)"
-  full="$(mktemp)"
-  local best
-  best="$(mktemp)"
-  trap 'rm -rf "$LOCKDIR"; rm -f "${out:-}" "${full:-}" "${best:-}"' EXIT
-  target="$(orch_target)"
-  local parsed_raw parsed_epoch armed_raw armed_epoch nowe floor_epoch
-  local active_cap=0 best_epoch="" best_out="" capped_panes="" pane_list pane candidate_epoch
-  local revive_targets
+  trap 'rm -rf "$LOCKDIR"; rm -f "${out:-}"' EXIT
 
-  armed_raw=""
-  armed_epoch=""
-  if [ -f "$RESUME_AFTER" ]; then
-    armed_raw="$(cat "$RESUME_AFTER" 2>/dev/null || true)"
-    armed_epoch="$(epoch_of_rfc3339 "$armed_raw")"
-  fi
-  nowe="$(now_epoch)"
-  floor_epoch=$((nowe + MIN_BACKOFF))
+  # NOTE (deferred → §5c): no crash-loop escalating backoff here — bounded retry-on-transient is the
+  # §5c backlog item, out of scope for this swap-only land. A persistent cap is bounded by the
+  # resume-after floor below; a persistent non-cap failure simply re-relaunches each tick.
+  log "relaunching: claude --dangerously-bypass-permissions -p \"/surf resume\""
+  claude --dangerously-bypass-permissions -p "/surf resume" >"$out" 2>&1 || true
+  cat "$out" >>"$LOG" 2>/dev/null || true
 
-  pane_list="$(live_panes)"
-  [ -n "$pane_list" ] || pane_list="$target"
-  while IFS= read -r pane; do
-    [ -n "$pane" ] || continue
-    tmux capture-pane -t "$pane" -p >"$full" 2>/dev/null || true
-    grep -v '^[[:space:]]*$' "$full" 2>/dev/null | tail -n 12 >"$out" || true
-    if hit_cap "$out"; then
-      active_cap=1
-      capped_panes="${capped_panes}${pane}"$'\n'
-      parsed_raw="$(parse_reset_time "$out")"
-      if [ -n "$parsed_raw" ]; then
-        parsed_epoch="$(epoch_of_rfc3339 "$parsed_raw")"
-        if [ -n "$parsed_epoch" ] && [ "$parsed_epoch" -gt "$nowe" ]; then
-          candidate_epoch=$(( parsed_epoch > floor_epoch ? parsed_epoch : floor_epoch ))
-          if [ -z "$best_epoch" ] || [ "$candidate_epoch" -gt "$best_epoch" ]; then
-            best_epoch="$candidate_epoch"
-            cp "$out" "$best"
-            best_out="$best"
-          fi
-        elif [ -z "$armed_epoch" ] && [ -z "$best_out" ]; then
-          cp "$out" "$best"
-          best_out="$best"
-        fi
-      elif [ -z "$armed_epoch" ] && [ -z "$best_out" ]; then
-        cp "$out" "$best"
-        best_out="$best"
-      fi
-    fi
-  done <<<"$pane_list"
-
-  # Read both signals up front: the reset time shown in the tail (if any) and the armed floor.
-  # A cap notice is only "still in effect" when its reset time is in the future, or it is the
-  # first sight of a cap and there is no armed floor yet. A lingering notice whose reset has
-  # already passed must NOT re-arm, or the revive would livelock.
-  if [ "$active_cap" -eq 1 ]; then
-    printf '%s\n' "$capped_panes" | awk 'NF && !seen[$0]++' >"$RESUME_PANES"
-    # Relative reset strings (e.g. "resets 8pm") always parse to a future epoch, so once an
-    # armed floor has already been crossed we must not treat the lingering notice as a fresh cap.
-    if [ -n "$best_out" ] && { [ -z "$armed_epoch" ] || [ "$nowe" -lt "$armed_epoch" ]; }; then
-      arm_resume_after "$best_out"
-      exit 0
-    fi
-  fi
-
-  # State machine — positive stall evidence is REQUIRED before any nudge:
-  #   (1) cap STILL IN EFFECT → arm/refresh resume-after, never nudge.
-  #   (2) armed AND reset passed → the session WAS observed capped and the window has reset
-  #                               → revive once, then disarm.
-  #   (3) armed AND reset pending → wait.
-  #   (4) not capped, not armed   → healthy/working session → DO NOTHING.
-  #
-  # A cap notice is only "still in effect" when its parsed reset time is in the FUTURE, OR it is
-  # the first sight of a cap (unparseable reset, no floor yet). A LINGERING cap notice whose reset
-  # has already passed must NOT re-arm — the notice stays on the tail until we nudge, so re-arming
-  # it would push the floor forward every tick and the revive (state 2) would never fire (livelock).
-  # In that case we fall through to the armed-floor check and revive.
-  if [ -n "$armed_epoch" ]; then
-    if [ "$nowe" -lt "$armed_epoch" ]; then
-      log "armed resume-after $armed_raw not yet reached — waiting"   # (3)
-      exit 0
-    fi
-    # (2) armed and the floor has been crossed → the session stalled at a cap that has now reset.
-    # Revive it IN PLACE with a keystroke to the pane(s) that actually stalled — no headless
-    # relaunch, no process restart, so the still-alive teammate panes survive.
-    if [ -s "$RESUME_PANES" ]; then
-      revive_targets="$(cat "$RESUME_PANES" 2>/dev/null || true)"
+  # If the relaunched run hit the cap again, arm a conservative resume-after floor so the next tick
+  # waits rather than hot-looping.
+  if hit_cap "$out"; then
+    local parsed parsed_epoch floor_epoch chosen_epoch
+    parsed="$(parse_reset_time "$out")"
+    floor_epoch=$(( $(now_epoch) + MIN_BACKOFF ))
+    if [ -n "$parsed" ]; then parsed_epoch="$(epoch_of_rfc3339 "$parsed")"; else parsed_epoch=""; fi
+    if [ -n "$parsed_epoch" ]; then
+      if [ "$parsed_epoch" -gt "$floor_epoch" ]; then chosen_epoch="$parsed_epoch"; else chosen_epoch="$floor_epoch"; fi
+      log "cap hit; parsed reset $parsed → resume-after $(rfc3339_of_epoch "$chosen_epoch")"
     else
-      revive_targets="$(orch_target)"
+      chosen_epoch=$(( $(now_epoch) + DEFAULT_BACKOFF ))
+      log "cap hit; reset unparseable → long default resume-after $(rfc3339_of_epoch "$chosen_epoch")"
     fi
-    while IFS= read -r pane; do
-      [ -n "$pane" ] || continue
-      log "reviving '$pane' via tmux send-keys (armed floor crossed)"
-      tmux send-keys -t "$pane" "Cap window has reset — continue the /surf board run; do not idle." Enter 2>/dev/null || \
-        log "send-keys failed for '$pane' (session gone?) — manual /surf resume needed"
-    done <<<"$revive_targets"
-    rm -f "$RESUME_AFTER" "$RESUME_PANES" 2>/dev/null || true   # disarm so we nudge exactly once
-    exit 0
+    rfc3339_of_epoch "$chosen_epoch" >"$RESUME_AFTER"
+  else
+    # Clean relaunch (no cap on the rerun): clear any crossed floor so the next tick is not gated by
+    # a stale resume-after. (We only reach the relaunch when should_launch already passed — i.e. the
+    # floor was absent or crossed — so removing it here is safe and restores the floor-cleared
+    # behavior the pre-#124 revive model had. #124 R2-3.)
+    rm -f "$RESUME_AFTER" 2>/dev/null || true
+    log "run finished without hitting the cap — cleared any crossed resume-after floor"
   fi
-
-  # (4) not capped and never armed → nothing to revive.
-  log "live session, not capped, no armed floor — nothing to do"
   # lockdir + tmp removed by the EXIT trap.
 }
 

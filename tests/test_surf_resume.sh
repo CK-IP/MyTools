@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# test_surf_resume.sh — functional test for config/surf-resume.sh, the /surf revive watcher.
+# test_surf_resume.sh — functional test for config/surf-resume.sh, the /surf cap-recovery watcher.
 #
-# Stubs `tmux` (has-session / capture-pane / send-keys / display-message) and seeds a temp .surf/
-# so we can assert the watcher's stall-evidence state machine WITHOUT a real tmux session or any
-# Claude call:
-#   (a) armed + reset crossed (stalled-then-reset) → exactly ONE send-keys, floor disarmed.
-#   (b) currently capped, not armed                → NO send-keys, resume-after gets armed.
-#   (c) healthy session, not armed                 → NO send-keys, no resume-after written.
+# #124 INVERSION: the default cap-recovery is now the durable-file HEADLESS RELAUNCH of
+# `/surf resume` (the proven #53 LaunchAgent model), NOT a persistent-tmux `send-keys` revive.
+# A headless `claude -p` process can host /sail's crew (depth-0 subagents), so the headless
+# relaunch is viable again. This test stubs `claude` on PATH and seeds a temp .surf/ to assert
+# the watcher's pure-bash gate + reset-capture WITHOUT any real Claude call:
+#   (a) gate open (charter, no done-marker, no live session, floor passed) → exactly ONE relaunch.
+#   (b) currently capped on relaunch → resume-after armed to a FUTURE floor, no hot-loop.
+#   (c) done-marker present → gate closed → NO relaunch.
+#   (d) live .surf/active PID → a /surf already running → NO relaunch.
+#   (e) armed resume-after still in the future → NO relaunch (waiting).
+# The #86 charter-scoping of work_remains() (sortable suffix, scoped journal) is exercised by
+# tests/test_surf.sh S16b/S16c, which source this script's functions directly.
 
 set -euo pipefail
 
@@ -20,200 +26,201 @@ fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 [ -f "$SCRIPT_SRC" ] || { echo "FAIL: surf-resume.sh not found at $SCRIPT_SRC"; exit 1; }
 
-# --- scratch repo + tmux stub -------------------------------------------------
+# Small constants so the floor logic runs fast.
+export SURF_RESUME_MIN_BACKOFF=60          # 1 min floor
+export SURF_RESUME_DEFAULT_BACKOFF=36000   # 10h long default
+export SURF_RESUME_MAX_RUN_AGE=2           # 2s -> easy to make a lock stale
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-
-mkdir -p "$WORK/config" "$WORK/.surf" "$WORK/stubbin"
+mkdir -p "$WORK/config" "$WORK/.surf" "$WORK/bin"
 cp "$SCRIPT_SRC" "$WORK/config/surf-resume.sh"
 chmod +x "$WORK/config/surf-resume.sh"
 
-SENDKEYS_REC="$WORK/sendkeys.log"
-CAP_FIXTURE="$WORK/pane.txt"
-: >"$SENDKEYS_REC"
+CLAUDE_REC="$WORK/claude-argv.log"
+: >"$CLAUDE_REC"
 
-# Stub tmux: capture-pane prints the fixture; send-keys is recorded; has-session/display succeed.
-# Multi-pane (#119): list-panes enumerates the live set ($WORK/panes.txt, one id per line, default
-# just the orchestrator '%0' so legacy single-pane cases are unchanged); capture-pane honors a
-# per-pane fixture ($WORK/pane-<id>.txt) when present, else falls back to the shared $CAP_FIXTURE.
-cat >"$WORK/stubbin/tmux" <<STUB
+now_epoch() { date +%s; }
+rfc3339_at() {
+  local target=$(( $(now_epoch) + $1 ))
+  date -u -r "$target" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d "@$target" "+%Y-%m-%dT%H:%M:%SZ"
+}
+
+# Stub `claude` on PATH: records one INVOKE line per call (so a double-relaunch is countable),
+# then emits the requested output ($CLAUDE_OUT) so the cap-capture path can be exercised.
+cat >"$WORK/bin/claude" <<STUB
 #!/usr/bin/env bash
-cmd="\$1"
-# Resolve a '-t <target>' anywhere in the args (per-pane capture / send-keys support).
-target=""; prev=""
-for a in "\$@"; do [ "\$prev" = "-t" ] && target="\$a"; prev="\$a"; done
-case "\$cmd" in
-  has-session)     [ -n "\${TMUX_NO_SESSION:-}" ] && exit 1 || exit 0 ;;
-  display-message) echo '%0' ;;
-  list-panes)      if [ -f "$WORK/panes.txt" ]; then cat "$WORK/panes.txt"; else echo '%0'; fi ;;
-  capture-pane)    if [ -n "\$target" ] && [ -f "$WORK/pane-\${target}.txt" ]; then cat "$WORK/pane-\${target}.txt"; else cat "$CAP_FIXTURE" 2>/dev/null || true; fi ;;
-  send-keys)       echo "send-keys \$*" >> "$SENDKEYS_REC" ;;
-  *)               exit 0 ;;
-esac
+printf 'INVOKE %s\n' "\$*" >>"$CLAUDE_REC"
+printf '%s\n' "\${CLAUDE_OUT:-run finished cleanly}"
 STUB
-chmod +x "$WORK/stubbin/tmux"
+chmod +x "$WORK/bin/claude"
+
+seed_charter() {
+  printf '# charter\n- mission: test\n' >"$WORK/.surf/charter-20260101T000000.md"
+  printf '# journal\n- merged #10 abc1230\n' >"$WORK/.surf/journal-20260101T000000.md"
+}
 
 run_watcher() {
-  # Fresh per-scenario state: live PID marker (this test process is alive), a charter so
-  # work_remains() is true, a recorded orchestrator pane, no lock.
   rm -rf "$WORK/.surf/resume.lock"
-  echo "$$" >"$WORK/.surf/active"
-  echo '%0'  >"$WORK/.surf/orchestrator-pane"
-  printf '# charter\n- mission: test\n' >"$WORK/.surf/charter-20260101T000000.md"
-  : >"$SENDKEYS_REC"
-  PATH="$WORK/stubbin:$PATH" \
-    SURF_RESUME_SESSION=surf \
+  run_watcher_keeplock
+}
+
+# Same as run_watcher but does NOT clear a pre-seeded lockdir (for the R5-4 stale-lock cases).
+run_watcher_keeplock() {
+  : >"$CLAUDE_REC"
+  PATH="$WORK/bin:$PATH" \
     SURF_RESUME_LOG="$WORK/.surf/watch.log" \
+    SURF_RESUME_MAX_RUN_AGE="${SURF_RESUME_MAX_RUN_AGE:-7200}" \
+    CLAUDE_OUT="${CLAUDE_OUT:-run finished cleanly}" \
     bash "$WORK/config/surf-resume.sh" >/dev/null 2>&1 || true
 }
 
-sendkeys_count() { grep -c 'send-keys' "$SENDKEYS_REC" 2>/dev/null | head -1 || true; }
+invoke_count() { grep -c 'INVOKE' "$CLAUDE_REC" 2>/dev/null | head -1 || true; }
 
-# --- (a) armed + reset crossed → exactly one send-keys, floor disarmed -------
-printf 'all good, working...\n' >"$CAP_FIXTURE"          # healthy current screen
-echo '2020-01-01T00:00:00Z' >"$WORK/.surf/resume-after"  # armed floor in the past
+# --- (a) gate open → exactly ONE headless relaunch of `/surf resume` -----------
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
 run_watcher
-c="$(sendkeys_count)"
-if [ "$c" -eq 1 ]; then pass "(a) stalled-then-reset → exactly one send-keys"; else fail "(a) expected 1 send-keys, got $c"; fi
-if [ ! -f "$WORK/.surf/resume-after" ]; then pass "(a) floor disarmed after revive"; else fail "(a) resume-after not disarmed"; fi
+c="$(invoke_count)"
+if [ "$c" -eq 1 ]; then pass "(a) gate open → exactly one claude relaunch"; else fail "(a) expected 1 relaunch, got $c"; fi
+if grep -q -- '-p .*/surf resume' "$CLAUDE_REC" 2>/dev/null; then pass "(a) relaunch invokes \"/surf resume\""; else fail "(a) relaunch did not invoke /surf resume"; fi
+if grep -q -- '--dangerously-bypass-permissions' "$CLAUDE_REC" 2>/dev/null; then pass "(a) relaunch carries --dangerously-bypass-permissions"; else fail "(a) bypass flag not carried on relaunch"; fi
 
-# --- (b) currently capped, not armed → no send-keys, floor armed -------------
-printf 'Claude usage limit reached. limit will reset at 2099-01-01T00:00:00Z\n' >"$CAP_FIXTURE"
-rm -f "$WORK/.surf/resume-after"
-run_watcher
-c="$(sendkeys_count)"
-if [ "$c" -eq 0 ]; then pass "(b) still-capped → no send-keys"; else fail "(b) expected 0 send-keys, got $c"; fi
-if [ -f "$WORK/.surf/resume-after" ]; then pass "(b) resume-after armed from observed cap"; else fail "(b) resume-after not armed"; fi
-
-# --- (c) healthy, not armed → no send-keys, no floor written -----------------
-printf 'all good, working...\n' >"$CAP_FIXTURE"
-rm -f "$WORK/.surf/resume-after"
-run_watcher
-c="$(sendkeys_count)"
-if [ "$c" -eq 0 ]; then pass "(c) healthy session → no send-keys"; else fail "(c) expected 0 send-keys, got $c"; fi
-if [ ! -f "$WORK/.surf/resume-after" ]; then pass "(c) no spurious resume-after on healthy session"; else fail "(c) resume-after wrongly written"; fi
-
-# --- (d) LINGERING cap notice w/ PAST reset + armed crossed → revive, no re-arm-livelock
-# Regression for the round-3 finding: a cap notice stays on the tail until we nudge; if its
-# reset time has already passed it must NOT re-arm (which would push the floor forward forever
-# and never revive). Expect exactly one send-keys and the floor disarmed.
-printf 'Claude usage limit reached. limit will reset at 2020-01-01T00:00:00Z\n' >"$CAP_FIXTURE"
-echo '2020-01-01T00:00:00Z' >"$WORK/.surf/resume-after"   # armed, and crossed (past)
-run_watcher
-c="$(sendkeys_count)"
-if [ "$c" -eq 1 ]; then pass "(d) lingering-past-cap → revive (no livelock)"; else fail "(d) expected 1 send-keys, got $c"; fi
-if [ ! -f "$WORK/.surf/resume-after" ]; then pass "(d) floor disarmed after lingering-cap revive"; else fail "(d) resume-after not disarmed"; fi
-
-# --- Gate coverage (#57 cleanup — reconciled from the retired test_surf_resume_wrapper.sh).
-# should_revive must be CLOSED (no send-keys) when work_remains is false or there is no LIVE
-# session. These replace the old relauncher's launch-gating cases under #73's revive model.
-gate_setup() {  # fresh state: armed+crossed floor + healthy pane (so ONLY the gate can stop a revive)
-  rm -rf "$WORK/.surf/resume.lock"
-  echo '%0' >"$WORK/.surf/orchestrator-pane"
-  printf '# charter\n- mission: test\n' >"$WORK/.surf/charter-20260101T000000.md"
-  rm -f "$WORK/.surf/charter-20260101T000000.md-done"
-  printf 'all good, working...\n' >"$CAP_FIXTURE"
-  echo '2020-01-01T00:00:00Z' >"$WORK/.surf/resume-after"
-  : >"$SENDKEYS_REC"
-}
-gate_run() { PATH="$WORK/stubbin:$PATH" SURF_RESUME_SESSION=surf SURF_RESUME_LOG="$WORK/.surf/watch.log" "$@" bash "$WORK/config/surf-resume.sh" >/dev/null 2>&1 || true; }
-
-# (e) done-marker present → work_remains false → gate closed → no revive
-gate_setup; echo "$$" >"$WORK/.surf/active"; touch "$WORK/.surf/charter-20260101T000000.md-done"
-gate_run
-c="$(sendkeys_count)"
-if [ "$c" -eq 0 ]; then pass "(e) done-marker → gate closed, no revive"; else fail "(e) expected 0 send-keys, got $c"; fi
-
-# (f) stale/dead .surf/active PID → no live session → gate closed → no revive (#73 semantics flip)
-gate_setup; echo '999999' >"$WORK/.surf/active"
-gate_run
-c="$(sendkeys_count)"
-if [ "$c" -eq 0 ]; then pass "(f) dead .surf/active pid → no live session, no revive"; else fail "(f) expected 0 send-keys, got $c"; fi
-
-# (g) no tmux session (has-session fails) → no live session → gate closed → no revive
-gate_setup; echo "$$" >"$WORK/.surf/active"
-gate_run env TMUX_NO_SESSION=1
-c="$(sendkeys_count)"
-if [ "$c" -eq 0 ]; then pass "(g) no tmux session → no live session, no revive"; else fail "(g) expected 0 send-keys, got $c"; fi
-
-# --- Multi-pane teammate-cap awareness (#119) --------------------------------
-# The watcher must enumerate ALL live panes (orchestrator + teammates), arm from whichever pane
-# is capped, persist the capped pane id(s) across the arm/revive tick gap, and nudge the pane that
-# actually stalled — not a fixed orchestrator-only target.
-multipane_reset() {  # clear only the multi-pane fixtures; run_watcher re-seeds active/charter/orch-pane
-  rm -f "$WORK"/pane-*.txt "$WORK/panes.txt" "$WORK/.surf/resume-panes" "$WORK/.surf/resume-after"
-}
-
-# (h) teammate pane capped while orchestrator is idle → arm + record the teammate pane, NO nudge
-multipane_reset
-printf '%%0\n%%1\n' >"$WORK/panes.txt"
-printf 'all good, working...\n' >"$WORK/pane-%0.txt"
-printf 'Claude usage limit reached. limit will reset at 2099-01-01T00:00:00Z\n' >"$WORK/pane-%1.txt"
-run_watcher
-c="$(sendkeys_count)"
-if [ "$c" -eq 0 ]; then pass "(h) teammate capped, orch idle → no send-keys (arming tick)"; else fail "(h) expected 0 send-keys, got $c"; fi
-if [ -s "$WORK/.surf/resume-after" ]; then pass "(h) resume-after armed from teammate pane"; else fail "(h) resume-after not armed"; fi
-if grep -q '%1' "$WORK/.surf/resume-panes" 2>/dev/null; then pass "(h) resume-panes records teammate pane %1"; else fail "(h) resume-panes missing teammate pane id"; fi
-
-# (i) armed + floor crossed with a recorded teammate pane → exactly one nudge to THAT pane, disarm both
-multipane_reset
-printf '%%0\n%%1\n' >"$WORK/panes.txt"
-printf 'all good, working...\n' >"$WORK/pane-%0.txt"
-printf 'all good, working...\n' >"$WORK/pane-%1.txt"
-echo '%1' >"$WORK/.surf/resume-panes"
-echo '2020-01-01T00:00:00Z' >"$WORK/.surf/resume-after"
-run_watcher
-c="$(sendkeys_count)"
-if [ "$c" -eq 1 ]; then pass "(i) revive → exactly one send-keys"; else fail "(i) expected 1 send-keys, got $c"; fi
-if grep -q 'send-keys.*-t %1' "$SENDKEYS_REC" 2>/dev/null; then pass "(i) send-keys targets recorded teammate pane %1"; else fail "(i) send-keys not targeted at %1"; fi
-if [ ! -f "$WORK/.surf/resume-after" ]; then pass "(i) resume-after disarmed"; else fail "(i) resume-after not removed"; fi
-if [ ! -f "$WORK/.surf/resume-panes" ]; then pass "(i) resume-panes disarmed"; else fail "(i) resume-panes not removed"; fi
-
-# (j) REAL weekly-cap message (secondary #3) → detected as capped, arms a FUTURE floor, no nudge
-multipane_reset
-printf '%%0\n' >"$WORK/panes.txt"
-printf '%s\n' "You've hit your weekly limit · resets 8pm (America/New_York)" "/usage-credits to request more usage from your admin." >"$WORK/pane-%0.txt"
-run_watcher
-c="$(sendkeys_count)"
-if [ "$c" -eq 0 ]; then pass "(j) weekly cap → no send-keys (arming tick)"; else fail "(j) expected 0 send-keys, got $c"; fi
-if [ -s "$WORK/.surf/resume-after" ]; then pass "(j) weekly-cap message detected → resume-after armed"; else fail "(j) weekly cap not detected/armed"; fi
+# --- (b) capped on relaunch → resume-after armed to a FUTURE floor, no hot-loop -
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
+CLAUDE_OUT="You've hit your usage limit. Try again later." run_watcher
+if [ -s "$WORK/.surf/resume-after" ]; then pass "(b) cap on relaunch → resume-after armed"; else fail "(b) resume-after not armed after cap"; fi
 ra="$(cat "$WORK/.surf/resume-after" 2>/dev/null || true)"
 rae="$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$ra" "+%s" 2>/dev/null || date -u -d "$ra" "+%s" 2>/dev/null || echo 0)"
-if [ "${rae:-0}" -gt "$(date +%s)" ]; then pass "(j) weekly-cap floor is in the future"; else fail "(j) floor not in future ($ra)"; fi
+if [ "${rae:-0}" -gt "$(now_epoch)" ]; then pass "(b) armed floor is in the future (no hot-loop)"; else fail "(b) floor not in future ($ra)"; fi
 
-# (k) multiple recorded capped panes → one nudge each
-multipane_reset
-printf '%%0\n%%1\n%%2\n' >"$WORK/panes.txt"
-printf 'all good\n' >"$WORK/pane-%0.txt"; printf 'all good\n' >"$WORK/pane-%1.txt"; printf 'all good\n' >"$WORK/pane-%2.txt"
-printf '%%1\n%%2\n' >"$WORK/.surf/resume-panes"
-echo '2020-01-01T00:00:00Z' >"$WORK/.surf/resume-after"
+# --- (c) done-marker present → gate closed → NO relaunch ----------------------
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
+touch "$WORK/.surf/charter-20260101T000000.md-done"
 run_watcher
-c="$(sendkeys_count)"
-if [ "$c" -eq 2 ]; then pass "(k) two recorded panes → two send-keys"; else fail "(k) expected 2 send-keys, got $c"; fi
+c="$(invoke_count)"
+if [ "$c" -eq 0 ]; then pass "(c) done-marker → gate closed, no relaunch"; else fail "(c) expected 0 relaunches, got $c"; fi
+rm -f "$WORK/.surf/charter-20260101T000000.md-done"
 
-# (l) benign text containing 'resets'/'presets' must NOT be misread as a cap (precision; #119 review)
-# Guards against an over-broad hit_cap pattern matching the bare substring 'resets' (e.g. 'presets').
-multipane_reset
-printf '%%0\n' >"$WORK/panes.txt"
-printf '%s\n' "Applied 3 presets; the counter resets the value each run." >"$WORK/pane-%0.txt"
+# --- (d) live .surf/active PID → a /surf already running → NO relaunch --------
+seed_charter
+rm -f "$WORK/.surf/resume-after"
+echo "$$" >"$WORK/.surf/active"   # this test process is alive
 run_watcher
-c="$(sendkeys_count)"
-if [ "$c" -eq 0 ]; then pass "(l) benign 'presets/resets' text → no send-keys"; else fail "(l) expected 0 send-keys, got $c"; fi
-if [ ! -f "$WORK/.surf/resume-after" ]; then pass "(l) benign text → not misread as a cap (no arm)"; else fail "(l) benign text wrongly armed resume-after"; fi
+c="$(invoke_count)"
+if [ "$c" -eq 0 ]; then pass "(d) live .surf/active → already running, no relaunch"; else fail "(d) expected 0 relaunches, got $c"; fi
+rm -f "$WORK/.surf/active"
 
-# (m) LINGERING relative (am/pm) cap notice + armed-and-crossed floor → revive once, no re-arm livelock
-# Regression for the #119 round-2 red-team HIGH: parse_reset_time rolls 'resets 8pm' FORWARD to a
-# future epoch, so a lingering weekly-cap notice (still on the tail after the real reset) must NOT be
-# re-armed as a fresh cap — else state 2 never fires and the watcher never revives after a weekly cap.
-multipane_reset
-printf '%%0\n' >"$WORK/panes.txt"
-printf '%s\n' "You've hit your weekly limit · resets 8pm (America/New_York)" >"$WORK/pane-%0.txt"
-echo '%0' >"$WORK/.surf/resume-panes"                     # capped pane recorded at the arming tick
-echo '2020-01-01T00:00:00Z' >"$WORK/.surf/resume-after"   # armed, and crossed (past)
+# --- (e) armed resume-after still in the future → NO relaunch (waiting) -------
+seed_charter
+rm -f "$WORK/.surf/active"
+rfc3339_at 36000 >"$WORK/.surf/resume-after"   # 10h out
 run_watcher
-c="$(sendkeys_count)"
-if [ "$c" -eq 1 ]; then pass "(m) lingering am/pm cap + crossed floor → revive once (no livelock)"; else fail "(m) expected 1 send-keys, got $c"; fi
-if [ ! -f "$WORK/.surf/resume-after" ]; then pass "(m) floor disarmed after lingering am/pm revive"; else fail "(m) resume-after not disarmed"; fi
+c="$(invoke_count)"
+if [ "$c" -eq 0 ]; then pass "(e) future resume-after → waiting, no relaunch"; else fail "(e) expected 0 relaunches, got $c"; fi
+
+# --- (f) stale/dead .surf/active PID → self-heals → relaunch proceeds ---------
+seed_charter
+rm -f "$WORK/.surf/resume-after"
+echo '999999' >"$WORK/.surf/active"   # dead PID
+run_watcher
+c="$(invoke_count)"
+if [ "$c" -eq 1 ]; then pass "(f) stale .surf/active → self-heals, relaunch proceeds"; else fail "(f) expected 1 relaunch, got $c"; fi
+
+# --- (h) #124 R2-3: armed floor in the PAST → relaunch fires AND the floor is cleared afterwards.
+# (Restores the floor-cleared coverage the old send-keys tests (a)/(d) had.)
+seed_charter
+rm -f "$WORK/.surf/active"
+rfc3339_at -3600 >"$WORK/.surf/resume-after"   # armed, 1h in the PAST → crossed
+run_watcher
+c="$(invoke_count)"
+if [ "$c" -eq 1 ]; then pass "(h) past floor crossed → exactly one relaunch"; else fail "(h) expected 1 relaunch, got $c"; fi
+if [ ! -f "$WORK/.surf/resume-after" ]; then pass "(h) floor cleared after a clean relaunch (no cap on rerun)"; else fail "(h) resume-after not cleared after clean relaunch"; fi
+
+# --- (i) #124 R2-5: a WEEKLY-cap message with an am/pm + TZ reset time (the #119 parser) arms a
+# FUTURE floor from the parsed reset time, not just a fixed default backoff.
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
+CLAUDE_OUT="You've hit your weekly limit · resets 8pm (America/New_York)" run_watcher
+if [ -s "$WORK/.surf/resume-after" ]; then pass "(i) weekly am/pm cap → resume-after armed"; else fail "(i) weekly-cap floor not armed"; fi
+ra="$(cat "$WORK/.surf/resume-after" 2>/dev/null || true)"
+rae="$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$ra" "+%s" 2>/dev/null || date -u -d "$ra" "+%s" 2>/dev/null || echo 0)"
+if [ "${rae:-0}" -gt "$(now_epoch)" ]; then pass "(i) weekly-cap floor parsed into the future"; else fail "(i) weekly-cap floor not in future ($ra)"; fi
+# Deterministic "the am/pm parser fired" check: the floor must land on the parsed 8pm wall-clock in
+# America/New_York. The old check (floor < fixed-default magnitude) was CLOCK-DEPENDENT — after 8pm
+# local the next 8pm legitimately rolls to tomorrow and is farther out than the default backoff, so
+# it false-failed late in the day. Assert the WALL-CLOCK, not the gap: the default fallback
+# (now + N hours) never lands exactly on 20:00:00 ET, so 20:00 uniquely proves the parser fired.
+parsed_hhmm="$(TZ=America/New_York date -r "${rae:-0}" "+%H:%M" 2>/dev/null || TZ=America/New_York date -d "@${rae:-0}" "+%H:%M" 2>/dev/null || echo "")"
+if [ "$parsed_hhmm" = "20:00" ]; then pass "(i) floor came from the am/pm parser (lands on 20:00 ET)"; else fail "(i) floor not on parsed 20:00 ET wall-clock (got '$parsed_hhmm') — parser did not fire"; fi
+
+# --- (j) #124 R2-6: a relaunch whose BODY mentions cap phrases but whose TAIL is a normal
+# completion must NOT arm a backoff (cap detection is tail-anchored).
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
+CLAUDE_OUT="$(printf '%s\n' \
+  'Working issue #5: the code references a rate limit and resets at midnight.' \
+  'merged #5 abc1234' \
+  'merged #6 def5678' \
+  'Board exhausted — run complete.')" run_watcher
+if [ ! -f "$WORK/.surf/resume-after" ]; then pass "(j) body mentions cap, tail is normal → NO backoff armed (tail-anchored)"; else fail "(j) spurious backoff armed from body cap mention"; fi
+
+# --- (k) #124 R5-4: a lockdir whose recorded relaunch PID is ALIVE is NOT treated as stale, even
+# when its mtime is far older than MAX_RUN_AGE (a routine multi-hour board pass). No concurrent
+# relaunch must fire while a live relaunch holds the lock.
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
+mkdir -p "$WORK/.surf/resume.lock"
+echo "$$" >"$WORK/.surf/resume.lock/pid"            # live pid (this test process)
+touch -t 202001010000 "$WORK/.surf/resume.lock"     # mtime way older than MAX_RUN_AGE
+SURF_RESUME_MAX_RUN_AGE=1 run_watcher_keeplock       # tiny MAX_RUN_AGE: age alone would look stale
+c="$(invoke_count)"
+if [ "$c" -eq 0 ]; then pass "(k) live-pid lock (old mtime) → NOT stale, no concurrent relaunch"; else fail "(k) live lock wrongly reclaimed → concurrent relaunch ($c)"; fi
+if [ -d "$WORK/.surf/resume.lock" ]; then pass "(k) live lock left intact"; else fail "(k) live lock was reclaimed"; fi
+rm -rf "$WORK/.surf/resume.lock"
+
+# --- (k2) #124 R5-4: a lockdir whose recorded PID is DEAD and which has aged out IS reclaimed
+# (a SIGKILL that skipped the trap must not wedge the watcher forever).
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
+mkdir -p "$WORK/.surf/resume.lock"
+echo '999999' >"$WORK/.surf/resume.lock/pid"        # dead pid
+touch -t 202001010000 "$WORK/.surf/resume.lock"     # old mtime
+SURF_RESUME_MAX_RUN_AGE=1 run_watcher_keeplock
+c="$(invoke_count)"
+if [ "$c" -eq 1 ]; then pass "(k2) dead-pid aged-out lock → reclaimed, relaunch proceeds"; else fail "(k2) dead aged-out lock not reclaimed ($c)"; fi
+rm -rf "$WORK/.surf/resume.lock"
+
+# --- (l) #124 R5-5: a user-stop paused sentinel closes the gate (no relaunch); absent → normal.
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
+touch "$WORK/.surf/charter-20260101T000000.md-paused"
+run_watcher
+c="$(invoke_count)"
+if [ "$c" -eq 0 ]; then pass "(l) paused sentinel → gate closed, no relaunch (deliberate user-stop)"; else fail "(l) paused sentinel ignored → wrongly relaunched ($c)"; fi
+rm -f "$WORK/.surf/charter-20260101T000000.md-paused"
+# absent sentinel → normal relaunch (proves the sentinel, not some other gate, closed it above).
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
+run_watcher
+c="$(invoke_count)"
+if [ "$c" -eq 1 ]; then pass "(l) no paused sentinel → normal relaunch"; else fail "(l) expected 1 relaunch without sentinel, got $c"; fi
+
+# --- (g) surf.md resume reconciliation: an in-flight run-dir WITHOUT a completion sentinel is
+# ORPHANED and re-invoked against the SAME --run-dir, never treated as done (round-2 HIGH risk #1).
+SURF_MD="$SRC_DIR/commands/surf.md"
+if grep -qiE 'no (completion )?sentinel.*orphan|orphan.*(no|missing) (completion )?sentinel|in-flight.*orphan' "$SURF_MD" 2>/dev/null; then
+  pass "(g) surf.md: in-flight run-dir without a sentinel is treated as orphaned"
+else
+  fail "(g) surf.md orphaned-run-dir reconciliation rule missing"
+fi
+if grep -qiE 'same .*--run-dir|re-invoke.*--run-dir|--run-dir .surf/runs' "$SURF_MD" 2>/dev/null; then
+  pass "(g) surf.md: orphan re-invokes the SAME --run-dir"
+else
+  fail "(g) surf.md same-run-dir re-invocation missing"
+fi
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

@@ -285,14 +285,15 @@ The **primary** review lens (`SAIL_REVIEW_CMD`) is intentionally left unset so i
 
 The two subsections that follow detail the two most consequential of these knobs.
 
-### Cross-family dual-lens second backend (codex — required for `/surf` per-teammate review, #74)
+### Cross-family dual-lens second backend (codex — required for `/surf` per-worker review, #74)
 
-`/surf` delegates every issue build to a teammate that runs `/sail` with `--dual-lens` and a
-**second review lens** pointed at a codex CLI via `SAIL_REVIEW_CMD2` (a reasoning-tier model — e.g.
+`/surf` delegates every issue build to a **headless `claude -p` worker** that runs
+`/sail --unattended` with `--dual-lens` and a **second review lens** pointed at a codex CLI via
+`SAIL_REVIEW_CMD2` (a reasoning-tier model — e.g.
 `SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c model_reasoning_effort=high"`; see the model policy above). These are ordinary CLI-subprocess lenses — *not*
-the session-bound `advisor()` tool — so the second lens is reachable inside a nested teammate where
-`advisor()` is not. Install a codex CLI and ensure it is on `PATH`. Without a codex (or other
-`SAIL_REVIEW_CMD2`) backend reachable from **both** the teammate and the orchestrator, `/sail`'s
+the session-bound `advisor()` tool — so the second lens is reachable inside the headless worker
+where `advisor()` is not. Install a codex CLI and ensure it is on `PATH`. Without a codex (or other
+`SAIL_REVIEW_CMD2`) backend reachable from **both** the worker and the supervisor, `/sail`'s
 review degrades to single-lens and `/surf`'s pre-merge guard cannot compensate — so it **parks
 every issue rather than merging a single-lens build**. In other words, codex is effectively
 **required for `/surf` to land work**; it is optional only for one-off `/sail` runs you review
@@ -408,7 +409,7 @@ The three LaunchAgents:
 
 1. **CRG daemon** (`com.crg.daemon`) — auto-starts the code-review-graph daemon on login so your code maps stay up to date
 2. **Memory refresh reminder** (`com.crg.refresh-reminder`) — sends a macOS notification on the 1st of each month reminding you to run `/refresh`
-3. **`/surf` revive watcher** (`com.surf.resume`) — revives a `/surf` board run **in place** inside its persistent `tmux` session after a usage limit resets (full details in the dedicated subsection below)
+3. **`/surf` auto-resume watcher** (`com.surf.resume`) — headlessly relaunches `/surf resume` after a usage limit resets, rebuilding board position from the durable `.surf/` files (full details in the dedicated subsection below)
 
 ### Install the plist files
 
@@ -456,23 +457,29 @@ launchctl bootout "gui/$(id -u)/com.crg.daemon"
 launchctl bootout "gui/$(id -u)/com.crg.refresh-reminder"
 ```
 
-### `/surf` revive watcher LaunchAgent (optional, macOS only)
+### `/surf` auto-resume watcher LaunchAgent (optional, macOS only)
 
 `/surf` works the board unattended and can be cut off mid-run by the Max-subscription usage
-window. As of issue #73 `/surf` delegates **every** issue to an agent-team teammate, and agent
-teams cannot run in headless `claude -p` mode — so the old headless relaunch is **retired**.
-Instead `/surf` runs in a long-lived **named `surf` tmux session** that stays alive across the
-cap window, and this LaunchAgent fires `config/surf-resume.sh` on a 30-minute interval to
-**revive that still-alive session in place** with `tmux send-keys` once the usage-cap reset time
-has passed and real unfinished board work remains. The wrapper is pure bash and touches no Claude
-tokens to decide — so idle ticks cost zero Claude tokens, and it never spawns a headless run.
+window. As of issue #124 `/surf` delegates **every** issue to a **headless `claude -p` worker**
+that runs `/sail --unattended` — and a headless `claude -p` process *can* host `/sail`'s crew
+(depth-0 subagents), so the durable-file headless relaunch (the #53 model) is restored as the
+default cap-recovery. This LaunchAgent fires `config/surf-resume.sh` on a 30-minute interval to
+**relaunch `/surf resume` headlessly** (`claude --dangerously-bypass-permissions -p "/surf resume"`)
+once the usage-cap reset time has passed and real unfinished board work remains. The relaunched run
+rebuilds board position from the durable `.surf/` files + git (no session needs to stay alive). The
+wrapper is pure bash and touches **zero** Claude tokens on an idle tick — the "is it time yet?"
+decision is entirely in shell.
 
-> **Reboot trade-off:** this revives across a usage-cap window but **not** a machine reboot — a
-> reboot destroys the tmux session, so automatic recovery is lost. After a reboot, recover
-> manually with `tmux new -s surf` → `claude --dangerously-bypass-permissions` → `/surf resume`.
+> **Recovery is the same in every case.** A usage cap, a crash, a reboot, or a user-stop all
+> recover via `/surf resume` reading the durable `.surf/` files — there is no session to keep alive,
+> so a reboot is no longer a special "automatic recovery lost" case. You can also recover manually
+> any time: `claude --dangerously-bypass-permissions` → `/surf resume`.
 
-Only set this up if you run `/surf` for long unattended sessions, and start `/surf` inside the
-named session: `tmux new -s surf`, then `claude --dangerously-bypass-permissions`, then `/surf`.
+> **Optional supervised (panes) lens:** if you instead run `/surf` inside a long-lived
+> `tmux new -s surf` session for visibility (surf.md Step 3b), that lens may revive the session in
+> place rather than relaunch; the default watcher above is the headless relaunch.
+
+Only set this up if you run `/surf` for long unattended sessions.
 
 > **Post-merge only:** install this after the branch has merged to `main`, per the symlink rule
 > at the top of this guide.

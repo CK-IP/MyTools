@@ -1,0 +1,107 @@
+{
+  "gates": [
+    {
+      "artifact": null,
+      "finished_at": null,
+      "name": "ruff",
+      "rc": 0,
+      "reason": null,
+      "seq": null,
+      "started_at": null,
+      "status": "passed"
+    },
+    {
+      "artifact": null,
+      "finished_at": null,
+      "name": "mypy",
+      "rc": 0,
+      "reason": null,
+      "seq": null,
+      "started_at": null,
+      "status": "passed"
+    },
+    {
+      "artifact": null,
+      "finished_at": null,
+      "name": "pytest",
+      "rc": 1,
+      "reason": null,
+      "seq": null,
+      "started_at": null,
+      "status": "failed"
+    },
+    {
+      "artifact": null,
+      "finished_at": null,
+      "name": "bandit",
+      "rc": 0,
+      "reason": null,
+      "seq": null,
+      "started_at": null,
+      "status": "passed"
+    },
+    {
+      "artifact": null,
+      "finished_at": null,
+      "name": "semgrep",
+      "rc": 0,
+      "reason": null,
+      "seq": null,
+      "started_at": null,
+      "status": "passed"
+    },
+    {
+      "artifact": null,
+      "finished_at": null,
+      "name": "pip-audit",
+      "rc": 0,
+      "reason": null,
+      "seq": null,
+      "started_at": null,
+      "status": "passed"
+    },
+    {
+      "artifact": null,
+      "finished_at": null,
+      "name": "shellcheck",
+      "rc": 0,
+      "reason": null,
+      "seq": null,
+      "started_at": null,
+      "status": "passed"
+    },
+    {
+      "artifact": null,
+      "finished_at": null,
+      "name": "gitleaks",
+      "rc": 0,
+      "reason": null,
+      "seq": null,
+      "started_at": null,
+      "status": "passed"
+    },
+    {
+      "artifact": null,
+      "finished_at": null,
+      "name": "npm-audit",
+      "rc": 0,
+      "reason": null,
+      "seq": null,
+      "started_at": null,
+      "status": "passed"
+    },
+    {
+      "artifact": null,
+      "finished_at": null,
+      "name": "diff-coverage",
+      "rc": 0,
+      "reason": null,
+      "seq": null,
+      "started_at": null,
+      "status": "passed"
+    }
+  ],
+  "run_id": "b286384664194a228c941334afa3bb29",
+  "schema_version": "1",
+  "started_at": "2026-06-28T22:49:02Z"
+}
