@@ -51,6 +51,7 @@ rfc3339_at() {
 cat >"$WORK/bin/claude" <<STUB
 #!/usr/bin/env bash
 printf 'INVOKE %s\n' "\$*" >>"$CLAUDE_REC"
+printf 'CWD %s\n' "\$(pwd -P)" >>"$CLAUDE_REC"
 printf '%s\n' "\${CLAUDE_OUT:-run finished cleanly}"
 STUB
 chmod +x "$WORK/bin/claude"
@@ -84,7 +85,12 @@ run_watcher
 c="$(invoke_count)"
 if [ "$c" -eq 1 ]; then pass "(a) gate open → exactly one claude relaunch"; else fail "(a) expected 1 relaunch, got $c"; fi
 if grep -q -- '-p .*/surf resume' "$CLAUDE_REC" 2>/dev/null; then pass "(a) relaunch invokes \"/surf resume\""; else fail "(a) relaunch did not invoke /surf resume"; fi
-if grep -q -- '--dangerously-bypass-permissions' "$CLAUDE_REC" 2>/dev/null; then pass "(a) relaunch carries --dangerously-bypass-permissions"; else fail "(a) bypass flag not carried on relaunch"; fi
+if grep -q -- '--dangerously-skip-permissions' "$CLAUDE_REC" 2>/dev/null; then pass "(a) relaunch carries --dangerously-skip-permissions"; else fail "(a) skip-permissions flag not carried on relaunch"; fi
+# #136 review: the relaunch must `cd "$REPO_ROOT"` (launchd sets no WorkingDirectory). The script's
+# REPO_ROOT resolves to $WORK (it lives at $WORK/config/surf-resume.sh), so the stub must have run
+# from there. A mutation reverting the cd would record a different cwd and fail this.
+EXPECT_CWD="$(cd "$WORK" && pwd -P)"
+if grep -qF "CWD $EXPECT_CWD" "$CLAUDE_REC" 2>/dev/null; then pass "(a) relaunch runs from REPO_ROOT (cd \$REPO_ROOT honored)"; else fail "(a) relaunch did not cd to REPO_ROOT (recorded: $(grep '^CWD' "$CLAUDE_REC" | tail -1))"; fi
 
 # --- (b) capped on relaunch → resume-after armed to a FUTURE floor, no hot-loop -
 seed_charter
@@ -208,18 +214,26 @@ run_watcher
 c="$(invoke_count)"
 if [ "$c" -eq 1 ]; then pass "(l) no paused sentinel → normal relaunch"; else fail "(l) expected 1 relaunch without sentinel, got $c"; fi
 
-# --- (g) surf.md resume reconciliation: an in-flight run-dir WITHOUT a completion sentinel is
-# ORPHANED and re-invoked against the SAME --run-dir, never treated as done (round-2 HIGH risk #1).
+# --- (g) surf.md resume reconciliation (#136 AC4): an in-flight issue (an unmerged `sail/<issue>`
+# branch) WITHOUT a `.surf/runs/<issue>/.done` completion sentinel is ORPHANED and re-launched with a
+# FRESH /sail worker (a new .sail/runs/sail-<issue>-<ts>/), never treated as done. The pre-#136
+# "same --run-dir" re-invocation is gone — /sail names a fresh timestamped run-dir each launch.
 SURF_MD="$SRC_DIR/commands/surf.md"
-if grep -qiE 'no (completion )?sentinel.*orphan|orphan.*(no|missing) (completion )?sentinel|in-flight.*orphan' "$SURF_MD" 2>/dev/null; then
-  pass "(g) surf.md: in-flight run-dir without a sentinel is treated as orphaned"
+if grep -qiE 'no .*sentinel.*orphan|orphan.*(no|missing) .*sentinel|in-flight.*orphan|unmerged.*no .*\.done' "$SURF_MD" 2>/dev/null; then
+  pass "(g) surf.md: an in-flight issue without a .done sentinel is treated as orphaned"
 else
-  fail "(g) surf.md orphaned-run-dir reconciliation rule missing"
+  fail "(g) surf.md orphaned-issue reconciliation rule missing"
 fi
-if grep -qiE 'same .*--run-dir|re-invoke.*--run-dir|--run-dir .surf/runs' "$SURF_MD" 2>/dev/null; then
-  pass "(g) surf.md: orphan re-invokes the SAME --run-dir"
+if grep -qiE 'fresh .*/sail worker|re-launch.*fresh.*worker|fresh.*worker.*new .*\.sail/runs' "$SURF_MD" 2>/dev/null; then
+  pass "(g) surf.md: orphan re-launches a FRESH /sail worker (new run-dir)"
 else
-  fail "(g) surf.md same-run-dir re-invocation missing"
+  fail "(g) surf.md fresh-worker re-launch rule missing"
+fi
+# The old SAME-run-dir re-invocation must be gone (it described a model /sail no longer supports).
+if grep -qiE 'same .*--run-dir|--run-dir \.surf/runs' "$SURF_MD" 2>/dev/null; then
+  fail "(g) stale 'same --run-dir' resume language still present"
+else
+  pass "(g) stale 'same --run-dir' resume language removed"
 fi
 
 echo ""

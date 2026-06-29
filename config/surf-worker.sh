@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # surf-worker.sh — thin helpers for /surf's per-issue headless worker (issue #124).
 #
-# /surf delegates each issue to a FRESH headless `claude --dangerously-bypass-permissions -p`
+# /surf delegates each issue to a FRESH headless `claude --dangerously-skip-permissions -p`
 # process running `/sail <n> --unattended` against a stable per-issue run-dir. The worker is
 # BACKGROUNDED BY THE HARNESS, not by bash: the supervisor runs the emitted command via Claude
 # Code's own Bash tool with `run_in_background: true`, which keeps the worker alive across turns and
@@ -49,10 +49,124 @@ surf_worker_command() {
   fi
   local prompt="/sail ${issue} --unattended"
   if [ -n "$answer_file" ]; then
-    # Reference the answer FILE by path only — never inline the answer text.
+    # Reference the answer FILE by path only — never inline the answer text. The path rides inside a
+    # double-quoted `-p "..."` argument of a command the supervisor runs under
+    # --dangerously-skip-permissions, so REFUSE any path with characters outside a safe path charset
+    # (a `$(...)`/backtick/`;`/whitespace path would otherwise be a shell-injection surface). Surf
+    # only ever passes its own constructed paths (e.g. .surf/open-questions.md), so this never
+    # rejects a legitimate path; it just fails closed on a malformed one.
+    if ! [[ "$answer_file" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+      surf_worker_log "refusing answer-file path with unsafe characters: '${answer_file}'"
+      return 2
+    fi
     prompt="${prompt} (domain answers in ${answer_file})"
   fi
-  printf '%s\n' "claude --dangerously-bypass-permissions -p \"${prompt}\""
+  # #139 sub-gap B — headless-worker contract. A headless `claude -p` worker EXITS when its turn
+  # ends and is NOT re-invoked (no ScheduleWakeup, no harness re-entry), so any /sail stage it
+  # backgrounds is LOST: the worker dies mid-build with no run-state.json/review.json/commit. The
+  # PROVEN fix (validated on #114 during the 20260629T161030Z board run) is to forbid backgrounding
+  # and require the codex build+review stages to run SYNCHRONOUSLY in-turn through the Stage-4 commit
+  # terminus. The clause is a FIXED string with NO double-quotes / backticks / `$` so it stays
+  # literal — and injection-safe — inside the emitted `-p "..."` double-quoted argument (the numeric
+  # issue id is the only interpolated value, and it was validated above).
+  local contract='=== HEADLESS-WORKER CONTRACT (overrides any default async behavior) === You are a headless claude -p worker: your process EXITS when this turn ends and you are NOT re-invoked, so any work you background is LOST. Run EVERY /sail stage SYNCHRONOUSLY in this single turn: plan, build (codex), review (codex, all rounds), commit. Do NOT use run_in_background, do NOT background a command with an ampersand, do NOT use ScheduleWakeup, and do NOT background a stage and end your turn expecting to be re-invoked. Instead, BLOCK in-turn: invoke each codex build and review as a foreground call and WAIT for it to return (a blocking foreground wait is correct and required — it is NOT the prohibited behavior), then proceed straight to the next stage in this same turn. A -p worker is NOT bound by any 10-minute tool cap, so long blocking codex calls are expected and fine. Drive all the way to the Stage-4 commit terminus before ending the turn; only end once /sail has committed or genuinely parked with a wip-handoff.md.'
+  prompt="${prompt} ${contract}"
+  printf '%s\n' "claude --dangerously-skip-permissions -p \"${prompt}\""
+}
+
+# surf_worker_resolve_run_dir <issue> [repo_root] — print the NEWEST /sail SESSION run-dir for
+# <issue> that already holds terminus artifacts, else return non-zero. /sail's front door
+# (sail.md Stage 0) ALWAYS names its own run-dir `.sail/runs/sail-<issue>-<UTC-timestamp>/` and
+# ignores any external --run-dir, and its isolate path writes that dir INSIDE the per-issue worktree
+# `.claude/worktrees/sail-<issue>/`. So /surf cannot hard-code the path — it must DISCOVER /sail's
+# ACTUAL run-dir (#136 sub-gap C), searching BOTH the repo root and the worktree.
+#
+# This stays in /surf's surf-OWNED coordination namespace only as a READER: the durable sentinels
+# (`.done`, parked-issues) live under `.surf/runs/<issue>/`; the /sail build artifacts are resolved
+# FRESH here on each poll (never cached), so a resume re-run that regenerates a new timestamped dir
+# is picked up automatically.
+#
+# Filtering to dirs that ALREADY contain BOTH run-state.json AND review.json (not merely the newest
+# by name) is load-bearing: it prevents handing surf_worker_result an in-flight / half-written dir,
+# which would spuriously fail-closed-park a run that is actually still building. When none qualify,
+# returns non-zero with no output so the supervisor keeps POLLING rather than parking a live run.
+#
+# GENERATION GUARD (optional <min_ts>, #136 review HIGH). On a RELAUNCH (resume / domain-answer
+# re-launch), a PRIOR run's terminus dir (sail-<issue>-<older-ts>/) is still on disk while the fresh
+# worker is only just starting and has not written its own dir yet. Without a guard the resolver
+# would return that STALE dir and the supervisor would park/merge on a prior attempt's artifacts.
+# Pass <min_ts> = the just-spawned worker's spawn time (a `YYYYMMDDTHHMMSSZ` UTC string, the SAME
+# format /sail names its run-dir suffix); a dir whose `<UTC-ts>` suffix sorts BEFORE <min_ts> is
+# skipped, so only the current worker generation can resolve. Omit <min_ts> (or pass empty) for the
+# un-guarded "newest terminus dir" behavior (a single-shot run with no prior attempt).
+# Side-effect-free (read-only); deterministic. rc: 0 (path printed) | 1 (none) | 2 (bad issue id).
+surf_worker_resolve_run_dir() {
+  local issue="${1:-}" repo_root="${2:-}" min_ts="${3:-}"
+  if ! surf_worker_validate_id "$issue"; then
+    surf_worker_log "resolve-run-dir: refusing non-numeric issue id: '${issue}'"
+    return 2
+  fi
+  [ -n "$repo_root" ] || repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  # Defense-in-depth: min_ts must be a /sail UTC timestamp. A malformed/garbage value (e.g. a
+  # corrupt spawn-ts file) is dropped rather than used as a comparison bound — and the supervisor's
+  # read-site validation (surf.md) independently rejects a tampered spawn-ts before it can be spliced
+  # into a `bash -c` string. A malformed min_ts here simply disables the guard (logged), never errors.
+  if [ -n "$min_ts" ] && ! [[ "$min_ts" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
+    surf_worker_log "resolve-run-dir: ignoring malformed min_ts '${min_ts}' (not a UTC timestamp)"
+    min_ts=""
+  fi
+  local newest="" newest_ts="" d base ts _nullglob_was_set=0
+  # null-glob so a non-existent location expands to NOTHING — and be safe under BOTH shells: bash
+  # uses `shopt -s nullglob`, while under zsh (where the helper may be sourced — see the header)
+  # an unmatched glob otherwise ABORTS the function on `nomatch`. `setopt local_options null_glob`
+  # is function-scoped in zsh (auto-reverted on return). Under bash we record the caller's prior
+  # nullglob state (via the no-output query form `shopt -q`, so no `eval`) and restore it at the end,
+  # so we never clobber a caller that had it on/off.
+  if [ -n "${ZSH_VERSION:-}" ]; then
+    setopt local_options null_glob 2>/dev/null || true
+  else
+    shopt -q nullglob 2>/dev/null && _nullglob_was_set=1
+    shopt -s nullglob 2>/dev/null || true
+  fi
+  for d in "$repo_root"/.sail/runs/sail-"$issue"-*/ \
+           "$repo_root"/.claude/worktrees/sail-"$issue"/.sail/runs/sail-"$issue"-*/ ; do
+    [ -d "$d" ] || continue
+    # Terminus-bearing = either a PARK marker (wip-handoff.md) OR a completed review pair
+    # (run-state.json AND review.json). Including wip-handoff.md is load-bearing: an exited PARKED
+    # /sail run may have written ONLY wip-handoff.md (e.g. a plan-stage park, before any
+    # run-state.json/review.json), and surf_worker_result parks on wip-handoff.md FIRST — so without
+    # this a parked worker would be misread as 'still building' and polled until the wall-clock cap
+    # (#136 review). A still-building run (no marker, incomplete pair) is still correctly skipped.
+    if [ ! -f "${d}wip-handoff.md" ] && { [ ! -f "${d}run-state.json" ] || [ ! -f "${d}review.json" ]; }; then
+      continue
+    fi
+    base="$(basename "$d")"; ts="${base#sail-"$issue"-}"   # the sortable <UTC-ts> suffix
+    # Validate the suffix is a real /sail UTC timestamp (YYYYMMDDThhmmssZ). A corrupt or forged
+    # suffix (e.g. `sail-<issue>-z`) would otherwise sort lexically ABOVE every real timestamp AND
+    # slip past the min_ts generation guard, letting a bogus dir be chosen and fed to
+    # surf_worker_result (#136 review). A non-conforming suffix is skipped.
+    case "$ts" in
+      [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) : ;;
+      *) continue ;;
+    esac
+    # Generation guard + ranking use [[ < ]] / [[ > ]] for the string compare — this works in BOTH
+    # bash AND zsh, whereas the bare-`[` `\<`/`\>` operators are NOT portable to zsh's `test`
+    # (zsh emits "condition expected", silently failing to filter — #136 review). Skip a dir from a
+    # prior worker generation (ts strictly before min_ts).
+    if [ -n "$min_ts" ] && [[ "$ts" < "$min_ts" ]]; then
+      continue
+    fi
+    # Rank by the sortable suffix (lexical order == chronological), so the newest terminus-bearing
+    # dir wins regardless of which of the two locations it sits in.
+    if [ -z "$newest" ] || [[ "$ts" > "$newest_ts" ]]; then
+      newest="$d"; newest_ts="$ts"
+    fi
+  done
+  # Restore the caller's prior bash nullglob state (no-op under zsh, where setopt was function-scoped):
+  # only turn it back OFF if the caller did not have it on (never clobber a caller that had it set).
+  [ "$_nullglob_was_set" -eq 1 ] || shopt -u nullglob 2>/dev/null || true
+  [ -n "$newest" ] || { surf_worker_log "resolve-run-dir: no terminus-bearing .sail run-dir for issue ${issue}${min_ts:+ at/after ${min_ts}} (still building?)"; return 1; }
+  printf '%s\n' "${newest%/}"
 }
 
 # surf_worker_result <run-dir> [exit-code] — the worker→supervisor RESULT/merge contract.
@@ -233,6 +347,22 @@ try:
         park()                               # plan ACs changed since the review → stale → PARK
 except Exception:
     park()                                   # fingerprint compute failed → can't prove fresh → PARK
+
+# COMMIT-EXISTENCE backstop (#136 review HIGH): a green+current review.json is written during /sail
+# Stage 3, BEFORE the Stage 4 commit. A worker that EXITED after writing it but before committing
+# (crash/kill in the Stage3->4 window, or a #139-contract violation that backgrounds the commit)
+# would otherwise read GREEN here, and /surf would "merge" a sail/<issue> branch with ZERO commits —
+# closing the issue with no code landed (the work LOST). The review's currency check matches on the
+# still-uncommitted WORKTREE diff, so it cannot catch this. Add a DETERMINISTIC guard independent of
+# the prompt contract: the build branch (HEAD of the worktree) must have >=1 commit ahead of the
+# reviewed base (diff_ref). No commit ahead → PARK (fail-closed).
+try:
+    rv = subprocess.run(["git", "-C", target_abs, "rev-list", "--count", "%s..HEAD" % diff_ref],
+                        capture_output=True, text=True)
+    if rv.returncode != 0 or not rv.stdout.strip().isdigit() or int(rv.stdout.strip()) < 1:
+        park()                               # no commit ahead of base → exited-without-commit → PARK
+except Exception:
+    park()                                   # can't prove a commit exists → PARK
 
 print("GREEN")
 PY

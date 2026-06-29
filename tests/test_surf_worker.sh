@@ -72,11 +72,28 @@ trap 'rm -rf "$FIX"' EXIT   # the TEST may clean its own tmpdir; the helper unde
 # (1) surf_worker_command — numeric id emits the EXACT injection-safe worker command; a non-numeric
 # / injection id is REFUSED (the supervisor must not run anything), and nothing is forked.
 CMD="$(surf_worker_command 42 2>/dev/null || true)"
-if [ "$CMD" = 'claude --dangerously-bypass-permissions -p "/sail 42 --unattended"' ]; then
-  pass "(1) surf_worker_command 42 → exact /sail 42 --unattended command"
-else
-  fail "(1) surf_worker_command emitted unexpected text: '$CMD'"
-fi
+# #136 AC1+AC2: the emitted command carries the SUPPORTED launch flag (--dangerously-skip-permissions,
+# never the old --dangerously-bypass-permissions which the current CLI rejects) plus the /sail
+# invocation, then a headless-worker-contract clause. So this is a PREFIX + marker check, not an
+# exact-match against a fixed string.
+case "$CMD" in
+  'claude --dangerously-skip-permissions -p "/sail 42 --unattended '*)
+    pass "(1) surf_worker_command 42 → skip-permissions flag + /sail 42 --unattended prefix" ;;
+  *) fail "(1) surf_worker_command emitted unexpected prefix: '$CMD'" ;;
+esac
+case "$CMD" in
+  *'--dangerously-bypass-permissions'*) fail "(1) emitted command still carries the OLD bypass flag" ;;
+  *) pass "(1) old --dangerously-bypass-permissions flag is gone from the emitted command" ;;
+esac
+# #136 AC2: the emitted prompt carries the headless-worker contract — forbid run_in_background /
+# background ampersand / ScheduleWakeup, run codex build+review synchronously in-turn, drive to the
+# Stage-4 commit terminus before ending the turn.
+for marker in 'HEADLESS-WORKER CONTRACT' 'run_in_background' 'ampersand' 'ScheduleWakeup' 'SYNCHRONOUSLY' 'commit terminus'; do
+  case "$CMD" in
+    *"$marker"*) pass "(1d) contract clause present: $marker" ;;
+    *) fail "(1d) contract clause missing marker: $marker (CMD='$CMD')" ;;
+  esac
+done
 # (1b) injection guard: a non-numeric id is rejected (non-zero) and emits no command.
 OUT="$(surf_worker_command '5; rm -rf /tmp/should_not_happen' 2>/dev/null || true)"
 if [ -z "$OUT" ]; then pass "(1b) non-numeric/injection id → rejected, no command emitted"; else fail "(1b) injection id wrongly emitted: '$OUT'"; fi
@@ -166,6 +183,13 @@ if [ "$GREEN_OK" -eq 1 ]; then
   # (2d) result works with NO exit-code arg (poll model: artifacts are the sole input).
   RD0d="$FIX/runs/100d"; make_real_green "$RD0d"
   if surf_worker_result "$RD0d" "" "$GREEN_REPO"; then pass "(2d) result decides from artifacts with no exit-code arg"; else fail "(2d) result requires an exit-code arg (regression)"; fi
+  # (2e) #136 review: the PRODUCTION call site uses the 2-ARG form `surf_worker_result "$rd"` with NO
+  # explicit target — target is then DERIVED from review.json's (absolute) `target` field. Prove that
+  # production path green (the other green arms all pass an explicit 3rd arg, so this branch was
+  # otherwise uncovered). make_real_green records target=abspath(GREEN_REPO), so derivation resolves
+  # the real worktree and the currency + commit-existence checks pass.
+  RD0e="$FIX/runs/100e"; make_real_green "$RD0e"
+  if surf_worker_result "$RD0e"; then pass "(2e) 2-arg production call (target derived from review.json) → green"; else fail "(2e) 2-arg production call wrongly parked (derive-from-review.json path broken)"; fi
 else
   pass "(2) git unavailable — skipped green+current cases (2/2b/2d)"
 fi
@@ -458,8 +482,8 @@ GIT_CLEANUP_DIRTY_TEST
 if command -v zsh >/dev/null 2>&1; then
   # 7a. Sources cleanly under zsh AND surf_worker_command emits the exact command.
   zout="$(zsh -c ". '$WORKER_SRC' && surf_worker_command 42" 2>&1)" && zrc=0 || zrc=$?
-  { [ "${zrc:-1}" -eq 0 ] && [ "$zout" = 'claude --dangerously-bypass-permissions -p "/sail 42 --unattended"' ]; } \
-    && pass "(7a) helper sources + emits under the zsh runtime" \
+  { [ "${zrc:-1}" -eq 0 ] && case "$zout" in 'claude --dangerously-skip-permissions -p "/sail 42 --unattended '*) true ;; *) false ;; esac; } \
+    && pass "(7a) helper sources + emits the skip-permissions /sail command under the zsh runtime" \
     || fail "(7a) helper not source-safe under zsh (rc=${zrc:-?}, out='$zout')"
   # 7b. The bad id must be REJECTED (non-zero) AND that non-zero return must NOT abort the zsh caller
   # (i.e. sourcing did not leak set -e). Assert BOTH, so the test can't pass just because the command
@@ -468,9 +492,178 @@ if command -v zsh >/dev/null 2>&1; then
   [ "$zleak" = "$(printf 'REJECTED\nALIVE')" ] \
     && pass "(7b) bad id rejected (non-zero) AND set -e not leaked (caller survives)" \
     || fail "(7b) expected REJECTED+ALIVE, got '$zleak'"
+  # (7c) #136 review LOW: surf_worker_resolve_run_dir must be glob-safe under zsh — an unmatched glob
+  # (no .sail/runs for the issue) must NOT abort on `nomatch`; it returns rc=1 with no output, and
+  # the caller SURVIVES (set -e not leaked). Run from an empty dir so both globs are unmatched.
+  zres="$(zsh -c "cd '$FIX'; mkdir -p zsh-empty; cd zsh-empty; . '$WORKER_SRC'; if surf_worker_resolve_run_dir 9 . >/dev/null 2>&1; then echo RESOLVED; else echo NONE; fi; echo ALIVE" 2>&1)"
+  [ "$zres" = "$(printf 'NONE\nALIVE')" ] \
+    && pass "(7c) surf_worker_resolve_run_dir is glob-safe under zsh (no nomatch abort; rc=1; caller survives)" \
+    || fail "(7c) resolve not zsh-glob-safe, got '$zres'"
+  # (7d) #136 review MEDIUM: the min_ts GENERATION GUARD must work under zsh too — the bare-`[`
+  # `\<` operator zsh rejects ("condition expected"), so a stale dir would slip past. Build one
+  # terminus dir at 0101Z and pass a NEWER min_ts; under zsh the guard must filter it → NONE.
+  zg="$(zsh -c "cd '$FIX'; r=zsh-guard; mkdir -p \$r/.sail/runs/sail-9-20260101T000000Z; printf '{}' >\$r/.sail/runs/sail-9-20260101T000000Z/run-state.json; printf '{}' >\$r/.sail/runs/sail-9-20260101T000000Z/review.json; . '$WORKER_SRC'; if surf_worker_resolve_run_dir 9 \$r 20260601T000000Z >/dev/null 2>&1; then echo RESOLVED; else echo NONE; fi; echo ALIVE" 2>&1)"
+  [ "$zg" = "$(printf 'NONE\nALIVE')" ] \
+    && pass "(7d) min_ts generation guard filters a stale dir under zsh (portable [[ < ]])" \
+    || fail "(7d) min_ts guard not zsh-portable, got '$zg'"
 else
   fail "(7) zsh not available — cannot verify the zsh runtime contract (#128)"
 fi
+
+# --- (8) #136 AC3: surf_worker_resolve_run_dir discovers /sail's ACTUAL run-dir. ---------------
+# /sail's front door always names its OWN run-dir `.sail/runs/sail-<n>-<UTC-ts>/` (ignoring any
+# external --run-dir) and the isolate path writes it INSIDE the worktree `.claude/worktrees/sail-<n>/`.
+# So /surf must DISCOVER the newest terminus-bearing dir across BOTH the repo root and the worktree.
+RR="$FIX/resolve-repo"
+mkdir -p \
+  "$RR/.sail/runs/sail-9-20260101T000000Z" \
+  "$RR/.sail/runs/sail-9-20260201T000000Z" \
+  "$RR/.sail/runs/sail-9-20260401T000000Z" \
+  "$RR/.claude/worktrees/sail-9/.sail/runs/sail-9-20260301T000000Z"
+# Only the first three repo-root dirs + the worktree dir; give artifacts to all BUT sail-9-20260401Z
+# (that newest-by-name dir is an in-flight/half-written run with NO artifacts and must be SKIPPED).
+for d in "$RR/.sail/runs/sail-9-20260101T000000Z" "$RR/.sail/runs/sail-9-20260201T000000Z" "$RR/.claude/worktrees/sail-9/.sail/runs/sail-9-20260301T000000Z"; do
+  printf '{}' >"$d/run-state.json"; printf '{}' >"$d/review.json"
+done
+RESOLVED="$(surf_worker_resolve_run_dir 9 "$RR" 2>/dev/null || true)"
+case "$RESOLVED" in
+  */.claude/worktrees/sail-9/.sail/runs/sail-9-20260301T000000Z)
+    pass "(8) resolve picks the NEWEST terminus-bearing dir across repo+worktree (worktree 0301Z)" ;;
+  *) fail "(8) resolve returned the wrong dir: '$RESOLVED'" ;;
+esac
+# (8b) the artifact-less newest-by-name dir (0401Z) must NOT be chosen (no in-flight half-written dir).
+case "$RESOLVED" in
+  *sail-9-20260401T000000Z) fail "(8b) resolve chose an artifact-less in-flight dir" ;;
+  *) pass "(8b) resolve skips the artifact-less in-flight dir (filters on run-state.json + review.json)" ;;
+esac
+# (8c) no qualifying dir → non-zero return + no path (supervisor keeps polling, never parks a live run).
+EMPTY="$FIX/resolve-empty"; mkdir -p "$EMPTY/.sail/runs/sail-9-20260101T000000Z"  # exists but no artifacts
+if surf_worker_resolve_run_dir 9 "$EMPTY" >/dev/null 2>&1; then fail "(8c) resolve returned 0 with no terminus-bearing dir"; else pass "(8c) no terminus-bearing dir → non-zero (poll, don't park)"; fi
+# (8d) injection guard on the issue id (no path, non-zero).
+if surf_worker_resolve_run_dir '9; rm -rf x' "$RR" >/dev/null 2>&1; then fail "(8d) resolve accepted a non-numeric id"; else pass "(8d) resolve rejects a non-numeric id"; fi
+# (8e) BOTH run-state.json AND review.json are required: a dir with ONLY run-state.json (a
+# still-building run) must be SKIPPED, not resolved (proves the && is not an ||).
+ONEFILE="$FIX/resolve-onefile"; mkdir -p "$ONEFILE/.sail/runs/sail-9-20260101T000000Z"
+printf '{}' >"$ONEFILE/.sail/runs/sail-9-20260101T000000Z/run-state.json"   # review.json deliberately absent
+if surf_worker_resolve_run_dir 9 "$ONEFILE" >/dev/null 2>&1; then fail "(8e) resolved a dir with only run-state.json (review.json missing)"; else pass "(8e) run-state.json without review.json is NOT resolved (both required)"; fi
+# (8f) a PARKED run that wrote ONLY wip-handoff.md (no run-state/review pair — e.g. a plan-stage
+# park) MUST be discovered, so surf_worker_result can park it (not poll forever). #136 review HIGH.
+PARKED="$FIX/resolve-parked"; PD="$PARKED/.sail/runs/sail-9-20260101T000000Z"; mkdir -p "$PD"
+printf '# /sail WIP handoff\n- stop reason: parked\n' >"$PD/wip-handoff.md"
+RPARK="$(surf_worker_resolve_run_dir 9 "$PARKED" 2>/dev/null || true)"
+case "$RPARK" in
+  *sail-9-20260101T000000Z) pass "(8f) a wip-handoff-only parked run-dir IS discovered (parked, not polled forever)" ;;
+  *) fail "(8f) parked run-dir (wip-handoff.md only) not discovered: '$RPARK'" ;;
+esac
+# (8f2) and surf_worker_result on that discovered parked dir → park (wip-handoff.md gates first).
+if surf_worker_result "$RPARK" 0 2>/dev/null; then fail "(8f2) parked (wip-handoff) run-dir wrongly merged"; else pass "(8f2) discovered parked run-dir → park"; fi
+# (8g) #136 review HIGH: surf_worker_command refuses an answer_file path with shell-active chars
+# (it rides a -p \"...\" command run under --dangerously-skip-permissions). The single quotes are
+# INTENTIONAL — the test passes the LITERAL `$(touch pwned)` to prove the guard rejects it, so the
+# non-expansion SC2016 flags is exactly what we want here.
+# shellcheck disable=SC2016
+if surf_worker_command 7 '/tmp/$(touch pwned).md' >/dev/null 2>&1; then fail "(8g) command emitter accepted a shell-active answer_file path"; else pass "(8g) shell-active answer_file path refused"; fi
+[ ! -e pwned ] && [ ! -e /tmp/pwned ] && pass "(8g) no answer_file-injection side effect" || fail "(8g) answer_file injection side effect fired"
+# (8h) #136 review HIGH — GENERATION GUARD: on a relaunch, a PRIOR run's terminus dir must NOT be
+# resolved while the fresh worker is still starting. $RR holds sail-9 dirs at 0101/0201/(worktree)0301.
+# A min_ts NEWER than all of them → non-zero (keep polling, never park on the stale prior run).
+if surf_worker_resolve_run_dir 9 "$RR" 20260501T000000Z >/dev/null 2>&1; then fail "(8h) resolved a stale prior-generation dir despite a newer min_ts"; else pass "(8h) min_ts newer than all dirs → non-zero (poll the fresh worker, don't park on a stale run)"; fi
+# (8h2) a min_ts that admits the worktree 0301 dir (and the 0201) resolves the NEWEST admitted one (0301).
+R8H="$(surf_worker_resolve_run_dir 9 "$RR" 20260201T000000Z 2>/dev/null || true)"
+case "$R8H" in
+  *sail-9-20260301T000000Z) pass "(8h2) min_ts generation guard keeps dirs >= min_ts and picks the newest" ;;
+  *) fail "(8h2) generation-guarded resolve returned the wrong dir: '$R8H'" ;;
+esac
+# (8h3) min_ts is OPTIONAL — omitted (empty) keeps the un-guarded newest-terminus behavior (8 above).
+R8H3="$(surf_worker_resolve_run_dir 9 "$RR" "" 2>/dev/null || true)"
+case "$R8H3" in
+  */.claude/worktrees/sail-9/.sail/runs/sail-9-20260301T000000Z) pass "(8h3) empty min_ts → un-guarded newest behavior preserved" ;;
+  *) fail "(8h3) empty min_ts changed behavior: '$R8H3'" ;;
+esac
+# (8i) #136 review HIGH — a FORGED/corrupt suffix that is NOT a real UTC timestamp (e.g. sail-9-z,
+# which sorts lexically ABOVE every real timestamp) must NOT be selected and must NOT bypass min_ts.
+FORGE="$FIX/resolve-forge"
+mkdir -p "$FORGE/.sail/runs/sail-9-20260101T000000Z" "$FORGE/.sail/runs/sail-9-z" "$FORGE/.sail/runs/sail-9-20260101T000000Z9"
+for d in "$FORGE/.sail/runs/sail-9-20260101T000000Z" "$FORGE/.sail/runs/sail-9-z" "$FORGE/.sail/runs/sail-9-20260101T000000Z9"; do
+  printf '{}' >"$d/run-state.json"; printf '{}' >"$d/review.json"
+done
+R8I="$(surf_worker_resolve_run_dir 9 "$FORGE" 2>/dev/null || true)"
+case "$R8I" in
+  *sail-9-20260101T000000Z) pass "(8i) forged non-timestamp suffix skipped; the real UTC-ts dir is chosen" ;;
+  *) fail "(8i) resolver selected a forged/malformed suffix: '$R8I'" ;;
+esac
+# (8i2) and with a min_ts NEWER than the only REAL dir, the forged sail-9-z must NOT slip past → NONE.
+if surf_worker_resolve_run_dir 9 "$FORGE" 20260601T000000Z >/dev/null 2>&1; then fail "(8i2) forged suffix bypassed the min_ts generation guard"; else pass "(8i2) forged suffix does not bypass min_ts (no spurious resolve)"; fi
+# (8j) #136 review HIGH — a MALFORMED min_ts (e.g. a corrupt/tampered spawn-ts value) is IGNORED
+# (guard dropped, logged), never used as a comparison bound: the real dir still resolves. Defense in
+# depth behind the supervisor's read-site shape validation (which blocks the bash -c injection).
+R8J="$(surf_worker_resolve_run_dir 9 "$RR" 'garbage; rm -rf x' 2>/dev/null || true)"
+case "$R8J" in
+  */.claude/worktrees/sail-9/.sail/runs/sail-9-20260301T000000Z) pass "(8j) malformed min_ts ignored (guard dropped); real newest dir still resolves" ;;
+  *) fail "(8j) malformed min_ts not handled safely: '$R8J'" ;;
+esac
+
+# --- (9) #136 AC6: surf_worker_result is GREEN on a real `.sail/runs/sail-<n>-<ts>/`-shaped run-dir
+# (passing run-state + clean CURRENT review) and PARKs on a stale one. ---------------------------
+if [ "$GREEN_OK" -eq 1 ]; then
+  RDS="$RR/.sail/runs/sail-555-20260601T120000Z"   # sail-shaped path (not .surf/runs/<n>)
+  make_real_green "$RDS"
+  if surf_worker_result "$RDS" 0 "$GREEN_REPO"; then pass "(9) GREEN on a sail-<n>-<ts>-shaped current run-dir"; else fail "(9) sail-shaped green+current run wrongly parked"; fi
+  # (9b) STALE: corrupt the recorded diff_hash so it no longer matches the live diff → PARK.
+  RDST="$RR/.sail/runs/sail-555-20260601T130000Z"; make_real_green "$RDST"
+  python3 - "$RDST/review.json" <<'PY'
+import json,sys
+p=json.load(open(sys.argv[1])); p["diff_hash"]="stale-does-not-match"; json.dump(p,open(sys.argv[1],"w"))
+PY
+  if surf_worker_result "$RDST" 0 "$GREEN_REPO"; then fail "(9b) stale review (diff_hash mismatch) wrongly merged"; else pass "(9b) stale sail-shaped review (diff_hash mismatch) → park"; fi
+else
+  pass "(9) git unavailable — skipped sail-shaped GREEN/stale cases"
+fi
+# (9c) MISSING run-dir → fail-closed park (AC6 'missing').
+if surf_worker_result "$RR/.sail/runs/sail-555-does-not-exist" 0 "$GREEN_REPO" 2>/dev/null; then fail "(9c) missing sail run-dir wrongly merged"; else pass "(9c) missing sail run-dir → fail-closed park"; fi
+
+# (9d) #136 review HIGH — COMMIT-EXISTENCE backstop: a green+CURRENT review whose build was NEVER
+# committed (HEAD has 0 commits ahead of the reviewed base — an exited-before-commit/crashed worker)
+# must PARK, never "merge" an empty branch (silent board gap + lost work). Build a repo with an
+# UNCOMMITTED change reviewed against HEAD, so the currency check passes but HEAD..HEAD == 0 commits.
+if [ "$GREEN_OK" -eq 1 ]; then
+  NCREPO="$FIX/nocommit-repo"; mkdir -p "$NCREPO"
+  git -C "$NCREPO" init -q
+  printf 'def f():\n    return 1\n' >"$NCREPO/m.py"
+  git -C "$NCREPO" add -A; git -C "$NCREPO" -c user.email=t@t -c user.name=t commit -qm base
+  printf 'def f():\n    return 2\n' >"$NCREPO/m.py"   # UNCOMMITTED (worker built but never committed)
+  RDNC="$FIX/runs/nocommit"; mkdir -p "$RDNC"
+  printf '%s\n' "$GREEN_RUNSTATE" >"$RDNC/run-state.json"
+  printf '%s\n' '{"status":"completed","acceptance_criteria":["the function returns 2"]}' >"$RDNC/plan.json"
+  ncmock="$RDNC/mock.sh"
+  cat >"$ncmock" <<'MK'
+#!/usr/bin/env bash
+cat >/dev/null
+cat <<'JSON'
+{"findings": [], "ac_results": [{"criterion": "the function returns 2", "status": "met", "evidence": "return 2"}], "summary": "clean"}
+JSON
+MK
+  chmod +x "$ncmock"
+  SAIL_REVIEW_CMD="$ncmock" python3 - "$NCREPO" "$RDNC" "$SRC_DIR" <<'PY' >/dev/null 2>&1
+import sys; sys.path.insert(0, sys.argv[3])
+from sail.review import run_review
+run_review(sys.argv[1], "HEAD", run_dir=sys.argv[2], dual_lens=False)   # review the uncommitted diff vs HEAD
+PY
+  if surf_worker_result "$RDNC" 0 "$NCREPO"; then fail "(9d) exited-without-commit (0 commits ahead) wrongly merged"; else pass "(9d) green+current but NO commit ahead of base → park (commit-existence backstop)"; fi
+else
+  pass "(9d) git unavailable — skipped commit-existence backstop case"
+fi
+
+# --- (10) #136 AC1: NO --dangerously-bypass-permissions survives anywhere in the shipped surf
+# surface (surf-worker.sh, surf-resume.sh, surf.md); the supported flag is present. ---------------
+BYPASS_HITS=0
+for f in "$SRC_DIR/config/surf-worker.sh" "$SRC_DIR/config/surf-resume.sh" "$SRC_DIR/commands/surf.md"; do
+  if grep -q -- '--dangerously-bypass-permissions' "$f" 2>/dev/null; then
+    fail "(10) old bypass flag still present in $(basename "$f")"; BYPASS_HITS=$((BYPASS_HITS+1))
+  fi
+done
+[ "$BYPASS_HITS" -eq 0 ] && pass "(10) no --dangerously-bypass-permissions in the surf surface"
+grep -q -- '--dangerously-skip-permissions' "$SRC_DIR/config/surf-worker.sh" && pass "(10b) surf-worker.sh carries the supported --dangerously-skip-permissions flag" || fail "(10b) surf-worker.sh missing --dangerously-skip-permissions"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

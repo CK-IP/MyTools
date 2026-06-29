@@ -131,7 +131,7 @@ if [ -f "$SETTINGS" ] && grep -q "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" "$SETTIN
 else
   yellow "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS not in settings.json — /surf supervised teammates disabled"
 fi
-info "autonomous /surf needs 'claude --dangerously-bypass-permissions' (a launch flag — can't be auto-detected)"
+info "autonomous /surf needs 'claude --dangerously-skip-permissions' (a launch flag — can't be auto-detected)"
 
 echo ""
 if [ "$bad" -gt 0 ]; then

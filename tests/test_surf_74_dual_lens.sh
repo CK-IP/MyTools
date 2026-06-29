@@ -17,15 +17,32 @@ fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 [ -s "$SURF" ] && pass "surf.md exists and not empty" || fail "surf.md missing/empty"
 
-# AC#1 — teammate engine invocation enables dual-lens + a second backend.
-# Must co-occur with the teammate `sail run` command (not the unrelated human-input
-# `--dual-lens` mention elsewhere in surf.md), so the assertion is meaningful.
-grep -qE 'sail run.*--dual-lens|--dual-lens.*sail run' "$SURF" \
-  && pass "AC1: surf.md teammate sail-run invocation enables --dual-lens" \
-  || fail "AC1: --dual-lens not on the teammate sail-run invocation"
-grep -qF 'SAIL_REVIEW_CMD2' "$SURF" \
-  && pass "AC1: surf.md sets SAIL_REVIEW_CMD2 (second lens backend)" \
-  || fail "AC1: SAIL_REVIEW_CMD2 missing from surf.md"
+# AC#1 (reconciled by #136 AC5) — the worker no longer builds with `--dual-lens`. The live shipped
+# default (#83) is single-lens-by-design (codex builds, one cross-family claude review,
+# SAIL_REVIEW_CMD2 unset); `--dual-lens` + SAIL_REVIEW_CMD2 now appear ONLY in the degraded-path
+# compensation re-review (`sail review --dual-lens`), never on the worker's primary build.
+grep -qiE 'single-lens-by-design|single-lens by design' "$SURF" \
+  && pass "AC1: surf.md documents the worker is single-lens-by-design (#83/#136 AC5)" \
+  || fail "AC1: single-lens-by-design contract missing from surf.md"
+# The guard's branch table must use the EXACT verdict string dual_lens_status() returns
+# ('single-by-design'), not a paraphrase like 'single' — else a supervisor matching the literal
+# verdict would not recognize the default mode and could park a green default build (#136 review).
+EXPECTED_VERDICT="$(python3 -c 'import sys; sys.path.insert(0,"'"$REPO_ROOT"'"); from sail.review import dual_lens_status; print(dual_lens_status({"dual_lens_requested": False}))')"
+grep -qF "$EXPECTED_VERDICT" "$SURF" \
+  && pass "AC1: surf.md guard uses the exact dual_lens_status verdict token ('$EXPECTED_VERDICT')" \
+  || fail "AC1: surf.md guard does not use the exact verdict token '$EXPECTED_VERDICT'"
+grep -qE 'sail review.*--dual-lens|--dual-lens.*sail review' "$SURF" \
+  && pass "AC1: surf.md keeps --dual-lens on the degraded-path compensation re-review" \
+  || fail "AC1: degraded-path --dual-lens compensation missing"
+# The compensation snippet must ACTUALLY set SAIL_REVIEW_CMD2 on (or adjacent to) the
+# `sail review --dual-lens` command — not merely mention the token in prose. Assert the assignment
+# `SAIL_REVIEW_CMD2=...` co-occurs with `sail review` within a 3-line window (mutation-resistant).
+if grep -Pzoq 'SAIL_REVIEW_CMD2=[^\n]*(\n[^\n]*){0,2}sail review' "$SURF" 2>/dev/null \
+   || awk 'BEGIN{w=0} /SAIL_REVIEW_CMD2=/{w=3} w>0 && /sail review/{print "HIT"; exit} {if(w>0)w--}' "$SURF" | grep -q HIT; then
+  pass "AC1: surf.md SETS SAIL_REVIEW_CMD2 on the compensation sail-review command (not just prose)"
+else
+  fail "AC1: SAIL_REVIEW_CMD2 not set on the compensation sail-review command"
+fi
 
 # AC#2 — documents the CLI-lens rationale, explicitly contrasted with advisor().
 grep -qi 'advisor' "$SURF" \

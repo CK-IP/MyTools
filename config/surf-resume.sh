@@ -7,7 +7,7 @@
 # `claude -p` process CAN host /sail's crew (depth-0 subagents) — so there is no session that must
 # stay alive across the cap, and no need for an in-place tmux send-keys revive. Nothing needs to
 # persist: the durable `.surf/` files + git are the entire state, and the relaunched headless run
-# (`claude --dangerously-bypass-permissions -p "/surf resume"`) rebuilds board position from them.
+# (`claude --dangerously-skip-permissions -p "/surf resume"`) rebuilds board position from them.
 #
 # This SUPERSEDES the #73 persistent-tmux send-keys revive, which existed only because the old
 # teammate-pane build body could not run headless — a premise now verified FALSE. The optional
@@ -284,8 +284,11 @@ main() {
   # NOTE (deferred → §5c): no crash-loop escalating backoff here — bounded retry-on-transient is the
   # §5c backlog item, out of scope for this swap-only land. A persistent cap is bounded by the
   # resume-after floor below; a persistent non-cap failure simply re-relaunches each tick.
-  log "relaunching: claude --dangerously-bypass-permissions -p \"/surf resume\""
-  claude --dangerously-bypass-permissions -p "/surf resume" >"$out" 2>&1 || true
+  log "relaunching: (cd $REPO_ROOT) claude --dangerously-skip-permissions -p \"/surf resume\""
+  # launchd sets no WorkingDirectory, so this script can run from `/` or `$HOME`. cd to the repo
+  # root before relaunch so /surf resume — and /sail's cwd-relative run-dir discovery — resolve
+  # against the right repo, not launchd's inherited cwd (#136 review).
+  ( cd "$REPO_ROOT" && claude --dangerously-skip-permissions -p "/surf resume" ) >"$out" 2>&1 || true
   cat "$out" >>"$LOG" 2>/dev/null || true
 
   # If the relaunched run hit the cap again, arm a conservative resume-after floor so the next tick
