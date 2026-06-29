@@ -107,6 +107,16 @@ else
   fail "must contain code-review-graph or code map reference (CRG integration in Step 4)"
 fi
 
+# --- Assertion 13: /sail is named as the default build pipeline (S/M/L) ---
+# Direction-anchored: require /sail to be the token marked "(default" (a routing-table cell
+# reads "`/sail` (default; alternative: ...)"). A bidirectional co-occurrence grep would
+# false-positive if /sail were ever demoted to an alternative ("`/skiff` (default; ... `/sail`)").
+if grep -qE '/sail[^|]*\(default' "$TARGET" 2>/dev/null; then
+  pass "/sail is named as the default build pipeline"
+else
+  fail "must name /sail as the default build pipeline (a cell where '/sail' is marked '(default')"
+fi
+
 # --- Summary ---
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
