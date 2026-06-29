@@ -119,6 +119,13 @@ ln -s "$(pwd)/commands/culture.md" ~/.claude/commands/culture.md
 rm -f ~/.claude/commands/surf.md
 ln -s "$(pwd)/commands/surf.md" ~/.claude/commands/surf.md
 
+# /surf worker helper — surf.md sources this from the STABLE ~/.claude/lib path (#127) so it
+# resolves no matter which repo's board /surf is run against (the file lives in config/, but is
+# sourced via ~/.claude/lib like sail-git-lifecycle.sh — not cwd-relative).
+mkdir -p ~/.claude/lib
+rm -f ~/.claude/lib/surf-worker.sh
+ln -s "$(pwd)/config/surf-worker.sh" ~/.claude/lib/surf-worker.sh
+
 # --- Agents ---
 
 # explore-first — read-only research investigator (no edit tools)
@@ -158,6 +165,7 @@ ls -la ~/.claude/commands/refresh.md
 ls -la ~/.claude/commands/space.md
 ls -la ~/.claude/commands/culture.md
 ls -la ~/.claude/commands/surf.md
+ls -la ~/.claude/lib/surf-worker.sh   # /surf sources its worker helper from this stable path (#127)
 
 # Agents
 ls -la ~/.claude/agents/explore-first.md
