@@ -32,8 +32,10 @@ fail() {
 head -1 "$TARGET" 2>/dev/null | grep -q '/surf' && pass "line 1 references /surf" || fail "line 1 missing /surf"
 head -1 "$TARGET" 2>/dev/null | grep -q 'Usage:' && pass "line 1 has Usage:" || fail "line 1 missing Usage:"
 
-# 3. Start gate: bypass-permissions
-grep -qF -- '--dangerously-bypass-permissions' "$TARGET" && pass "bypass-permissions gate present" || fail "bypass-permissions gate missing"
+# 3. Start gate: skip-permissions (CLI 2.1.181+ supports --dangerously-skip-permissions; the old
+# --dangerously-bypass-permissions is rejected with `unknown option` — #135).
+grep -qF -- '--dangerously-skip-permissions' "$TARGET" && pass "skip-permissions gate present" || fail "skip-permissions gate missing"
+grep -qF -- '--dangerously-bypass-permissions' "$TARGET" && fail "old --dangerously-bypass-permissions flag still present" || pass "old bypass flag gone"
 
 # 4. Supervised env check: agent-teams setting
 grep -qF 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS' "$TARGET" && pass "agent-teams setting present" || fail "agent-teams setting missing"
@@ -92,7 +94,7 @@ grep -qF 'commands/surf.md' "$INSTALL" && pass "INSTALL.md /surf symlink present
 # GREEN — those assertions are untouched. ---
 
 # A1. The DEFAULT delegation is a headless `claude -p` worker (the #124 body swap).
-grep -qF -- 'claude --dangerously-bypass-permissions -p "/sail' "$TARGET" && pass "headless claude -p /sail worker invocation pinned" || fail "headless claude -p worker invocation missing"
+grep -qF -- 'claude --dangerously-skip-permissions -p "/sail' "$TARGET" && pass "headless claude -p /sail worker invocation pinned" || fail "headless claude -p worker invocation missing"
 grep -qiE 'claude.*-p.*/sail.*--unattended|/sail <[ni]>? *--unattended|/sail <issue> --unattended' "$TARGET" && pass "worker runs /sail in --unattended mode" || fail "worker --unattended mode missing"
 
 # A1b. The supervisor is a thin LLM loop driving bash helpers; the operator talks only to the
@@ -131,8 +133,10 @@ grep -qi 'fail-closed' "$TARGET" && pass "fail-closed pinned" || fail "fail-clos
 grep -qiE 'exit[ -]?0' "$TARGET" && pass "exit-0 semantics pinned" || fail "exit-0 semantics missing"
 grep -qiE 'exit[ -]?1' "$TARGET" && pass "exit-1 semantics pinned" || fail "exit-1 semantics missing"
 
-# A5. Canonical branch naming pinned
-grep -qF 'surf/<issue>' "$TARGET" && pass "canonical branch naming pinned" || fail "canonical branch naming missing"
+# A5. Canonical branch naming pinned — /surf adopts /sail's `sail/<issue>` branch (#136 AC4); the
+# old surf-owned `surf/<issue>` naming is gone.
+grep -qF 'sail/<issue>' "$TARGET" && pass "canonical branch naming pinned (sail/<issue>)" || fail "canonical branch naming missing"
+grep -qF 'surf/<issue>' "$TARGET" && fail "old surf/<issue> branch naming still present" || pass "old surf/<issue> branch naming gone"
 
 # A6. Stronger charter / journal assertions (mechanism-specific)
 grep -qF '.surf/charter-' "$TARGET" && pass "charter file path pinned" || fail "charter file path missing"
@@ -167,8 +171,8 @@ grep -qF -- '--run-dir' "$TARGET" && pass "--run-dir present" || fail "--run-dir
 # R4. Resume invocation
 grep -qF '/surf resume' "$TARGET" && pass "/surf resume invocation present" || fail "/surf resume invocation missing"
 
-# R5. Bypass flag carried at relaunch (resume context)
-grep -qiE 'resume.*--dangerously-bypass-permissions|--dangerously-bypass-permissions.*resume' "$TARGET" && pass "bypass flag in resume/relaunch context present" || fail "bypass flag in resume/relaunch context missing"
+# R5. Skip-permissions flag carried at relaunch (resume context)
+grep -qiE 'resume.*--dangerously-skip-permissions|--dangerously-skip-permissions.*resume' "$TARGET" && pass "skip-permissions flag in resume/relaunch context present" || fail "skip-permissions flag in resume/relaunch context missing"
 
 # R6. resume-after timestamp file referenced
 grep -qF '.surf/resume-after' "$TARGET" && pass ".surf/resume-after referenced" || fail ".surf/resume-after missing"

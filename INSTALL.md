@@ -472,7 +472,7 @@ window. As of issue #124 `/surf` delegates **every** issue to a **headless `clau
 that runs `/sail --unattended` — and a headless `claude -p` process *can* host `/sail`'s crew
 (depth-0 subagents), so the durable-file headless relaunch (the #53 model) is restored as the
 default cap-recovery. This LaunchAgent fires `config/surf-resume.sh` on a 30-minute interval to
-**relaunch `/surf resume` headlessly** (`claude --dangerously-bypass-permissions -p "/surf resume"`)
+**relaunch `/surf resume` headlessly** (`claude --dangerously-skip-permissions -p "/surf resume"`)
 once the usage-cap reset time has passed and real unfinished board work remains. The relaunched run
 rebuilds board position from the durable `.surf/` files + git (no session needs to stay alive). The
 wrapper is pure bash and touches **zero** Claude tokens on an idle tick — the "is it time yet?"
@@ -481,7 +481,7 @@ decision is entirely in shell.
 > **Recovery is the same in every case.** A usage cap, a crash, a reboot, or a user-stop all
 > recover via `/surf resume` reading the durable `.surf/` files — there is no session to keep alive,
 > so a reboot is no longer a special "automatic recovery lost" case. You can also recover manually
-> any time: `claude --dangerously-bypass-permissions` → `/surf resume`.
+> any time: `claude --dangerously-skip-permissions` → `/surf resume`.
 
 > **Optional supervised (panes) lens:** if you instead run `/surf` inside a long-lived
 > `tmux new -s surf` session for visibility (surf.md Step 3b), that lens may revive the session in

@@ -155,11 +155,11 @@ confirm it is the intended one:
 If the user says no, stop. `/surf` makes real commits and merges — it must never run against
 the wrong repo.
 
-### Step 2: Confirm `--dangerously-bypass-permissions`
+### Step 2: Confirm `--dangerously-skip-permissions`
 
 The autonomous loop runs unattended: it edits files, commits, and merges without pausing for
 per-action permission prompts. That requires the session to have been launched with
-`--dangerously-bypass-permissions`.
+`--dangerously-skip-permissions`.
 
 **`/surf` cannot enable this itself.** It is a launch-time CLI flag, not a runtime setting and
 not something in `settings.json`, so there is no way to switch it on mid-session.
@@ -167,7 +167,7 @@ not something in `settings.json`, so there is no way to switch it on mid-session
 - **Detect first.** If the launch environment exposes the bypass state (e.g. a permission-mode
   indicator in the environment), read it and confirm.
 - **Otherwise ask.** If it cannot be detected, ask the user directly:
-  > "Did you launch this session with `--dangerously-bypass-permissions`? `/surf` needs it to
+  > "Did you launch this session with `--dangerously-skip-permissions`? `/surf` needs it to
   > commit and merge without stopping for permission prompts. (yes / no — if no, please exit
   > and relaunch with the flag, then re-run `/surf`.)"
 
@@ -184,10 +184,10 @@ autopilot and produces a half-supervised run nobody asked for.
 
 `/surf` delegates **every** issue to a headless `claude -p` worker that runs `/sail`
 (Step 8). The deterministic prerequisite is therefore that **`claude` is on `PATH`** and this
-session was launched with `--dangerously-bypass-permissions` (Step 2) so the headless worker can
+session was launched with `--dangerously-skip-permissions` (Step 2) so the headless worker can
 inherit a non-interactive permission posture.
 
-- Confirm `claude` is on `PATH` (the worker is `claude --dangerously-bypass-permissions -p "/sail
+- Confirm `claude` is on `PATH` (the worker is `claude --dangerously-skip-permissions -p "/sail
   <n> --unattended"`). If it is missing, stop and say so in plain language.
 - The **agent-teams** feature (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: 1`) is **no longer required**
   for the default headless path — a `-p` worker is a depth-0 process that hosts `/sail`'s crew
@@ -211,7 +211,7 @@ and launch inside the canonical **`surf`** session:
 ```bash
 # OPTIONAL supervised lens — only if you want to watch the run in panes.
 tmux new -s surf
-claude --dangerously-bypass-permissions
+claude --dangerously-skip-permissions
 #   …then at the Claude prompt:
 /surf
 ```
@@ -387,9 +387,24 @@ surviving — those are unreliable over a long board run. Instead:
 
 Repeat this loop for every issue in the work list:
 
-**Canonical branch naming.** Every issue is built on a branch named **`surf/<issue>`** (where
-`<issue>` is the GitHub issue number) — this one convention is used everywhere: build, merge,
-dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is used.
+**Canonical branch naming.** Each issue is built by `/sail`, whose isolate path (the opening
+bookend, #65) creates the branch **`sail/<issue>`** on a worktree **`.claude/worktrees/sail-<issue>`**
+off **current `main`**. `/surf` **adopts** that branch + worktree rather than imposing its own
+naming — so `sail/<issue>` is the one convention used everywhere downstream: merge, dependent
+stacking (§10), and wrap-up (§14). (`/surf` keeps a small **coordination** namespace of its own at
+`.surf/runs/<issue>/` for durable sentinels — the `.done` completion marker and the parked-issues
+record — but it does **not** own the build branch or the build run-dir; the latter is `/sail`'s
+discovered `.sail/runs/sail-<issue>-<timestamp>/`, see Step 2.) No other branch-naming scheme is used.
+
+**Launch precondition — the supervisor must be on the default branch (`main`) when it launches each
+worker (load-bearing).** The worker is a fresh headless `claude -p` process that **inherits the
+supervisor's current branch**, and `/sail`'s isolate decision is branch-sensitive: from **`main`** it
+creates `sail/<issue>` (the case `/surf` relies on), but **on a feature branch it stays in place and
+commits on that branch** — so launching a worker while the supervisor sits on some other branch would
+make `/sail` commit in-place there, and `/surf` would later merge/park a `sail/<issue>` branch that
+was never created. `/surf` therefore **returns to `main` between issues** (and after the per-issue
+land/park below) and re-confirms it is on `main` before each launch; if it is not, that is a setup
+error to surface, not to build through.
 
 1. **Re-anchor.** Re-read the charter and the journal. **Re-print the mode banner** (Step 0b)
    so the active mode + decide-vs-ask behavior stays visible at every issue boundary. Confirm
@@ -403,29 +418,77 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
    daemonization fights macOS — no `setsid`, no cross-tick survival, unsafe process-group kill; see
    Step 8b). The worker runs `/sail` in `--unattended` mode (the #108 front-door terminus), which
    itself creates the issue branch off **current `main`** (so a parent merged earlier in this run is
-   already in the baseline) and runs the engine in a stable per-issue run-dir:
+   already in the baseline) and runs the engine in its OWN fresh per-run run-dir
+   (`.sail/runs/sail-<issue>-<ts>/`, discovered by `/surf`, see below):
    ```bash
+   # 0. Record SPAWN_TS *BEFORE* launching the worker, and persist it durably. ORDER IS LOAD-BEARING:
+   # /sail creates its run-dir `.sail/runs/sail-<issue>-<ts>` at the very START of the worker, so
+   # SPAWN_TS must be <= that ts or the generation guard would filter out THIS worker's own run-dir
+   # (skip ts < min_ts) and poll it forever as 'still building' (#136 review). Recording it first
+   # guarantees SPAWN_TS <= the worker's run-dir ts.
+   # Runs on EVERY (re)launch and OVERWRITES spawn-ts — a relaunch (resume / domain-answer) MUST
+   # record a fresh SPAWN_TS so the guard admits only the new generation, not a prior attempt's dir.
+   mkdir -p .surf/runs/<issue>
+   SPAWN_TS="$(date -u +%Y%m%dT%H%M%SZ)"; printf '%s\n' "$SPAWN_TS" > .surf/runs/<issue>/spawn-ts
    # 1. The SUPERVISOR derives the injection-safe command (no forking happens here). The helper is a
    # bash library, but /surf's runtime shell is zsh — so invoke it through a bash SUBSHELL and
    # capture stdout; NEVER source a bash `set -e` library straight into the zsh runtime (it aborts on
    # the unbound BASH_SOURCE guard and leaks set -e — #128). Stable ~/.claude/lib path (symlinked at
    # install, INSTALL.md), not cwd-relative (#127).
    worker_cmd="$(bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_command <issue>')"
-   #   worker_cmd is exactly: claude --dangerously-bypass-permissions -p "/sail <issue> --unattended"
+   #   worker_cmd is: claude --dangerously-skip-permissions -p "/sail <issue> --unattended <HEADLESS-WORKER CONTRACT …>"
+   #   The emitted prompt carries a headless-worker-contract clause (#139): a headless `claude -p`
+   #   worker EXITS at turn-end and is never re-invoked, so the clause FORBIDS run_in_background /
+   #   background `&` / ScheduleWakeup and REQUIRES the codex build+review stages to run synchronously
+   #   in-turn through the Stage-4 commit terminus. Without it the worker backgrounds the long codex
+   #   stages, ends its turn expecting a wakeup that never fires in a headless process, and dies
+   #   mid-build with no run-state.json/review.json/commit.
    ```
    ```
    # 2. The SUPERVISOR runs THAT command with the Bash tool, run_in_background: true.
-   #    The harness returns a background-task id and keeps the worker alive across turns.
-   #    Record the spawn TIME (for the wall-clock cap) alongside the task id.
+   #    The harness returns a background-task id and keeps the worker alive across turns. Record the
+   #    task id + the already-captured SPAWN_TS (step 0) together.
+   #    SPAWN_TS (UTC, the SAME format /sail names its run-dir suffix) is now DURABLE in
+   #    .surf/runs/<issue>/spawn-ts and is re-read on every poll/resume — NOT only from live context,
+   #    which a session compaction between launch and the next poll would lose, silently dropping the
+   #    guard to an empty min_ts (#136 review). SPAWN_TS serves BOTH the wall-clock cap AND the
+   #    run-dir GENERATION GUARD: it is passed as the 3rd arg to surf_worker_resolve_run_dir so a
+   #    relaunch never resolves a PRIOR attempt's stale run-dir while this fresh worker is starting.
+   #    (On resume, if the spawn-ts file is
+   #    absent for an in-flight issue, treat it as a fresh launch and record one before polling.)
    ```
    `/sail <issue> --unattended` is the worker's default engine (`/ship` is the optional heavier
-   engine — see Step 8). Internally it drives `python3 -m sail run --diff main --dual-lens
-   --run-dir .surf/runs/<issue>` with `SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c
-   model_reasoning_effort=high"`: it runs the deterministic gates **and** the blocking LLM review
-   against the diff vs. `main`. The `--dual-lens` flag plus `SAIL_REVIEW_CMD2` give the delegated
-   build a genuine **cross-family** review (codex + the default `claude` lens) — Step 8 explains why
-   these **CLI-subprocess lenses** (not `advisor()`) work inside a headless `-p` worker, and the
-   pre-merge guard below handles the rare degraded case, never silently (#74).
+   engine — see Step 8). It runs `/sail`'s **own front door** with whatever review allocation the
+   environment carries; the **live shipped default** (`home/settings.reference.json`, per #83) is
+   **codex builds** (`SAIL_BUILD_CMD="codex exec …"`) and a **single-lens `claude` review**
+   (`SAIL_REVIEW_CMD` sonnet→opus). That is **cross-family by construction** — the codex
+   implementer is reviewed by a different-family `claude` lens — so `SAIL_REVIEW_CMD2` is
+   **intentionally unset** and `/sail` runs **single-lens-by-design**, *not* `--dual-lens` (re-adding
+   a codex review lens over codex-built code would be same-family self-review — the #83 rubber-stamp
+   risk). `/surf` does **not** pass `--dual-lens` or a `--run-dir` to the worker: `/sail` risk-gates
+   its own lenses and names its own run-dir. Step 8 explains why these **CLI-subprocess lenses** (not
+   `advisor()`) work inside a headless `-p` worker; the pre-merge guard below uses
+   `sail.review.dual_lens_status()` to compensate **only** a genuinely `degraded` review, never a
+   correct `single`-by-design one (#74, AC5).
+
+   **`/sail` owns the run-dir; `/surf` discovers it.** `/sail`'s front door (sail.md Stage 0) always
+   creates its **own** session run-dir `.sail/runs/sail-<issue>-<UTC-timestamp>/` and ignores any
+   external `--run-dir`; the isolate path (Stage 0.5) writes it **inside** the worktree
+   `.claude/worktrees/sail-<issue>/`. So `/surf` cannot hard-code the path — it **resolves** the
+   ACTUAL run-dir with `surf_worker_resolve_run_dir <issue>` (the newest dir containing BOTH
+   `run-state.json` and `review.json`, searched across the repo root **and** the worktree) and feeds
+   that to `surf_worker_result` (next):
+   ```bash
+   # The generation guard is read from the DURABLE spawn-ts file (survives a session compaction),
+   # not just live context — resolve only THIS worker's run-dir, never a prior attempt's stale one.
+   # VALIDATE the file value to a UTC-timestamp shape BEFORE splicing it into the inner `bash -c`
+   # string: a corrupt/tampered spawn-ts could otherwise inject shell run under
+   # --dangerously-skip-permissions (#136 review HIGH). A non-conforming value → empty (un-guarded).
+   SPAWN_TS="$(cat .surf/runs/<issue>/spawn-ts 2>/dev/null || true)"
+   [[ "$SPAWN_TS" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || SPAWN_TS=""
+   run_dir="$(bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_resolve_run_dir <issue> "" "'"$SPAWN_TS"'"')" \
+     || { echo "no terminus-bearing /sail run-dir yet — still building; re-check next tick"; }
+   ```
 
    **Poll, don't block-wait.** A worker runs to a multi-hour wall-clock cap, but the Bash tool caps
    a single call at ~10 minutes — so the supervisor must **never** block-wait the worker. Instead it
@@ -433,16 +496,22 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
    **background-task status** (running vs exited) — **not** the `.done` sentinel, which the
    supervisor only writes *after* a green terminus is read and merged (it is a Step 15 resume
    marker, never a live-poll terminus signal). On each tick:
-   - **task still running, under the cap** → still building → move on; re-check next tick.
+   - **task still running** (under the cap) → still building → move on; re-check next tick. This holds
+     **even if a green-looking `review.json` is already on disk**: `/sail` writes `run-state.json` +
+     `review.json` during Stage 3 review, *before* its Stage 4 commit, so a present-but-pre-commit
+     review is **not** a terminus — the synchronous worker contract (#139) guarantees `/sail` commits
+     (or parks) **before** the task exits, so **task-exit is the authoritative terminus signal**, not
+     "artifacts present." Evaluating a still-running worker as green could merge a `sail/<issue>`
+     branch that has no commit yet (#136 review).
    - **task still running, OVER the wall-clock cap** → the supervisor stops the worker via the
      **harness's background-task kill** (e.g. the task-stop / KillShell facility), **not** a bash
      `kill -pgid` → treat as a timed-out park. The cap is enforced by the supervisor comparing
      *elapsed-since-spawn* against the cap; there is no bash timeout helper.
-   - **task exited (or terminus artifacts present)** → evaluate the run-dir with `surf_worker_result`
-     (next): it positively confirms green from `run-state.json` + `review.json` (and parks on a
-     `wip-handoff.md`), **fail-closed** on any missing/incomplete artifact. (A genuinely crashed
-     worker that wrote no `run-state.json` parks fail-closed here, and Step 15 resume re-runs it
-     against the same `--run-dir`.)
+   - **task EXITED** → only now evaluate the run-dir with `surf_worker_result` (next): it positively
+     confirms green from `run-state.json` + `review.json` (and parks on a `wip-handoff.md`),
+     **fail-closed** on any missing/incomplete artifact. (A genuinely crashed worker that wrote no
+     `run-state.json` parks fail-closed here, and Step 15 resume re-launches a fresh `/sail` worker
+     for the issue.)
    The **`.done`-absent ⇒ orphaned** rule belongs ONLY to Step 15 *resume* reconciliation — a fresh
    supervisor with no live harness-task context, discriminating a completed-but-unjournaled run from
    a true orphan.
@@ -451,7 +520,8 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
    code.** The `claude -p` process exit code reflects the *claude process*, not `/sail`'s
    commit-vs-park terminus (decided inside the agent turn), so it is **informational only — never a
    decision input**. `surf_worker_result` reads the terminus SOLELY from the artifacts `/sail`
-   writes: **`.surf/runs/<issue>/wip-handoff.md`** (present ⇒ the run PARKED), **`run-state.json`**
+   writes into its **discovered** run-dir (`surf_worker_resolve_run_dir`, above):
+   **`wip-handoff.md`** (present ⇒ the run PARKED), **`run-state.json`**
    (every gate `status` in `{passed, skipped}`), and **`review.json`** (status `completed`; no
    CRITICAL/HIGH finding; every plan-verification AC `met`; no blocking tidiness; **and review
    currency** — `diff_hash`/`plan_hash`/`target` match the live diff, so a stale review never merges).
@@ -466,18 +536,36 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
    healthy run). Two jobs, two opposite safe directions: the merge contract fails toward **park**,
    the watchdog fails toward **proceed**.
 
-   The run-dir is **stable per issue** (`.surf/runs/<issue>/`, under the gitignored `.surf/`) so
-   that if the run is killed mid-issue, Resume (Step 15) can re-invoke the *same* `--run-dir` and
-   `/sail` skips the gates it already finished. The per-issue **journal entry** written in step 4
-   below is the resume checkpoint: a hard stop loses at most the single in-flight issue.
+   **Resume model.** `/sail` names a **fresh** timestamped run-dir on each launch, so `/surf` does
+   **not** rely on a stable build run-dir; it resolves `/sail`'s actual run-dir **fresh on every
+   poll** via `surf_worker_resolve_run_dir`. The durable resume state is `/surf`'s own: the per-issue
+   **journal entry** (step 4) plus the coordination sentinels under `.surf/runs/<issue>/`. If a run
+   is killed mid-issue, Resume (Step 15) re-launches a fresh `/sail` worker for the issue (which
+   creates a new `.sail/runs/sail-<issue>-<ts>/`, discovered anew); a hard stop loses at most the
+   single in-flight issue.
 3. **Evaluate the result (`surf_worker_result`, NOT the claude exit code).** Invoke it the same way —
    a bash SUBSHELL — but `surf_worker_result`/`surf_worker_cleanup` are **DECISION** functions that
-   signal via **exit status** (not stdout), so branch on the subshell's exit code (#128):
+   signal via **exit status** (not stdout), so branch on the subshell's exit code (#128).
+   **Gate on harness TASK-EXIT FIRST** — this is the authoritative terminus signal (the #139
+   synchronous contract guarantees `/sail` commits *or* parks before the task exits). A
+   still-running worker is NEVER evaluated, **even if a green-looking `run-state.json`+`review.json`
+   already exists** — `/sail` writes those during Stage 3 review, *before* its Stage 4 commit, so
+   resolving + merging on them mid-run could merge a `sail/<issue>` branch with no commit yet (#136
+   review HIGH). Only once the task has EXITED do we resolve `/sail`'s run-dir and read the verdict:
    ```bash
-   if bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_result "<run-dir>"'; then
-     :   # green → auto-merge (subject to the stacked-parent guard below)
+   if <harness task still running>; then
+     :   # still building → re-check next tick. Do NOT resolve/evaluate yet (a pre-commit review.json
+         # present while the worker runs is NOT a terminus — only task-exit is).
    else
-     :   # non-green → park (fail-closed)
+     # task EXITED → /sail has committed or parked. Now it is safe to resolve + evaluate.
+     SPAWN_TS="$(cat .surf/runs/<issue>/spawn-ts 2>/dev/null || true)"   # durable generation guard
+     [[ "$SPAWN_TS" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || SPAWN_TS=""            # reject a corrupt/tampered ts (no bash -c injection)
+     if rd="$(bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_resolve_run_dir <issue> "" "'"$SPAWN_TS"'"')" \
+        && bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_result "'"$rd"'"'; then
+       :   # green → auto-merge (subject to the stacked-parent + degradation guards below)
+     else
+       :   # exited but NOT green, or no resolvable terminus dir (a crashed worker) → fail-closed park
+     fi
    fi
    ```
    A `green` verdict requires the positive run-dir confirmation above (no `wip-handoff.md`; all
@@ -489,17 +577,24 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
      carries the parent's commits in the diff, can look green, and would smuggle the parent's unmerged
      work into `main` past its parked status.
 
-     *Second pre-merge guard — the dual-lens degradation check (#74, REQUIRED).* The worker
-     builds with `--dual-lens`, but if its second lens could not run the delegated review degraded
-     to single-lens (cross-family review is the quality mechanism; Step 8 explains why these CLI
-     lenses, not `advisor()`, are used). Before merging, the supervisor MUST read the worker's
-     `.surf/runs/<issue>/review.json` and classify it with `sail.review.dual_lens_status()` — the
-     single tested source of truth. A `degraded` verdict means the predicate
-     **`dual_lens_requested == true AND lens2_ran == false`** held; it keys off the explicit
-     `lens2_ran` boolean, NOT `len(lenses)` (a high-stakes diff can add a `redteam` lens, so
-     `lens1`+`redteam` with no `lens2` is length 2 yet still degraded). If the verdict is
-     `degraded`, the in-worker review was single-lens — do not merge yet.
-     **Run the missing second lens** yourself, soundly (three sub-steps, none skippable):
+     *Second pre-merge guard — the review-degradation check (#74, AC5).* Classify the worker's
+     review with `sail.review.dual_lens_status()` — the single tested source of truth — and branch
+     on the verdict. **Do NOT assume the worker built with `--dual-lens`:** the live shipped default
+     (#83) is **single-lens-by-design** (codex builds, one cross-family `claude` review,
+     `SAIL_REVIEW_CMD2` unset), so the *expected* verdict is the literal string **`single-by-design`**
+     (exactly what `dual_lens_status()` returns when `dual_lens_requested` is false), not `ok`.
+     - **`single-by-design`** → **NOT a degradation.** `--dual-lens` was never requested
+       (`dual_lens_requested == false`); the single cross-family review is the intended quality
+       mechanism. **Proceed to merge** — do **not** compensate, do **not** park. (False-parking a
+       correct single-lens build was the #136 sub-gap C bug this guard now avoids.)
+     - **`ok`** → a requested second lens genuinely ran → **proceed to merge**.
+     - **`degraded`** → and **only** then — the predicate
+       **`dual_lens_requested == true AND lens2_ran == false`** held (it keys off the explicit
+       `lens2_ran` boolean, NOT `len(lenses)`: a high-stakes diff can add a `redteam` lens, so
+       `lens1`+`redteam` with no `lens2` is length 2 yet still degraded). The requested second lens
+       could not run, so the review degraded to single-lens — **do not merge yet.**
+     Only on a `degraded` verdict, **run the missing second lens** yourself, soundly (three
+     sub-steps, none skippable):
      1. **Re-review the issue's content, not nothing.** Check out the issue branch (or a worktree
         holding it) so the diff is real, then assert it is **non-empty** — a re-review from bare
         `main` produces an empty diff that comes back trivially clean and would silently wave the
@@ -514,13 +609,17 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
         `dual_lens_status(review.json) == "ok"` (the tested classifier in `sail.review`, which is
         `ok` only when the second lens actually ran). Only then is it safe to merge:
         ```bash
-        RD=.surf/runs/<issue>
-        git checkout surf/<issue>
-        [ -n "$(git diff main --name-only)" ] || { echo "empty diff — park, do NOT merge"; exit 1; }
-        SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c model_reasoning_effort=high" \
-          python3 -m sail review --target . --diff main --run-dir "$RD" --dual-lens
-        rc=$?
-        { [ "$rc" -eq 0 ] && python3 -c 'import json,sys; from sail.review import dual_lens_status; sys.exit(0 if dual_lens_status(json.load(open(sys.argv[1])))=="ok" else 1)' "$RD/review.json"; } \
+        RD="$(bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_resolve_run_dir <issue> "" "'"$SPAWN_TS"'"')"  # /sail's actual run-dir (this worker generation)
+        # Run the re-review INSIDE a subshell so the `cd` into the worktree NEVER leaks into the
+        # supervisor's cwd — the land block below must keep running from the primary worktree root
+        # (where `main` is checked out), or sail_merge_to_default's `git checkout main` would fail.
+        (
+          cd .claude/worktrees/sail-<issue> 2>/dev/null || git checkout sail/<issue>  # operate where /sail isolated the build (branch sail/<issue>)
+          [ -n "$(git diff main --name-only)" ] || { echo "empty diff — park, do NOT merge"; exit 1; }
+          SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c model_reasoning_effort=high" \
+            python3 -m sail review --target . --diff main --run-dir "$RD" --dual-lens
+        ) \
+          && python3 -c 'import json,sys; from sail.review import dual_lens_status; sys.exit(0 if dual_lens_status(json.load(open(sys.argv[1])))=="ok" else 1)' "$RD/review.json" \
           || { echo "compensation blocked, or second lens did not run — park, do NOT merge"; exit 1; }
         ```
      3. Merge only if step 2's verification passes. If the second lens still cannot run anywhere
@@ -528,9 +627,12 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
         **never silently merge** the single-lens build — park it loudly with the dual-lens
         degradation as the blocking reason, exactly like any other exit-1 outcome.
 
-     *Guard mechanics.* The supervisor checks out `surf/<issue>` in the **shared repo** here — the
-     same basis the Step-7 merge below already relies on (the worker has exited and released the
-     branch by this point). The compensation re-review overwrites the worker's
+     *Guard mechanics.* This compensation path fires **only** on a `degraded` verdict — under the
+     live single-lens-by-design default (#83) it never does (the verdict is `single-by-design`). When it does,
+     the supervisor operates in the worker's worktree `.claude/worktrees/sail-<issue>` (branch
+     `sail/<issue>`) **inside a subshell** so the cwd change is confined and the land block keeps its
+     primary-worktree-root basis. The build already lives there — the worker has exited and released its lock by
+     this point. The compensation re-review overwrites the worker's
      degraded `review.json` in place; that is intentional (the upgraded dual-lens review supersedes
      the single-lens one), and the degradation *event* is preserved in the run journal (step 4) —
      the audit trail lives there, not in `review.json`.
@@ -550,11 +652,11 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
      unattended — it runs this **without pausing** (unlike `/sail`'s human-gated terminus). Then
      return to `main` for the next issue:
      ```bash
-     RD=.surf/runs/<issue>
+     RD="$(bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_resolve_run_dir <issue> "" "'"$SPAWN_TS"'"')"  # /sail's actual run-dir (.sail/runs/sail-<issue>-<ts>/, this worker generation)
      [ -f "$HOME/.claude/lib/sail-git-lifecycle.sh" ] && . "$HOME/.claude/lib/sail-git-lifecycle.sh"  # shared LOCAL land mechanics (#82)
-     python3 -m sail land --run-dir "$RD" --issue <issue> --title "<title>" --prefix surf
+     python3 -m sail land --run-dir "$RD" --issue <issue> --title "<title>" --prefix sail
      # LOCAL mechanics are single-sourced tested code (#82): --no-ff merge onto default + safe prune.
-     sail_merge_to_default . surf/<issue> main "$RD/land-commit-msg.txt"   # checkout main + --no-ff merge; `Closes #<issue>` rides the msg file; prints the merge SHA
+     sail_merge_to_default . sail/<issue> main "$RD/land-commit-msg.txt"   # checkout main + --no-ff merge; `Closes #<issue>` rides the msg file; prints the merge SHA
      git push origin main                                         # REQUIRED: only a merge on origin's DEFAULT branch fires GitHub auto-close + the board's Item-closed→Done automation; a local-only merge does neither
      git rev-parse HEAD                                            # capture this SHA into the journal/decision-log
      # #116 degraded-merge visibility: the dual-lens guard above compensates ONLY lens2; a RED-TEAM
@@ -566,14 +668,15 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
      [ -n "$DEGRADED" ] && echo "surf: [${DEGRADED%% *}] merged #<issue> under a DEGRADED review (${DEGRADED#* }) — a cross-family lens did not run; tracked in the land-comment, work accepted" >&2
      gh issue comment <issue> -F "$RD/land-comment.md"            # publish review evidence (reused, not re-derived)
      # Prune ONLY after the merge is on origin/main (`git push origin --delete` ignores merge state):
-     sail_prune_merged_branch . surf/<issue>                      # `git branch -d` (never -D): refuses an unmerged branch
-     git ls-remote --exit-code --heads origin surf/<issue> >/dev/null 2>&1 && git push origin --delete surf/<issue> || true
+     sail_prune_merged_branch . sail/<issue>                      # `git branch -d` (never -D): refuses an unmerged branch; removes the branch's linked worktree (.claude/worktrees/sail-<issue>) first
+     git ls-remote --exit-code --heads origin sail/<issue> >/dev/null 2>&1 && git push origin --delete sail/<issue> || true
      ```
    - **Not green (park) → park.** Any non-green verdict (a `wip-handoff.md`, a failed/pending gate,
      a CRITICAL/HIGH finding, a timed-out worker, an abnormal process exit, or any ambiguity) parks.
      Do **not** merge. **Parking** = leave the branch
-     (`surf/<issue>`) intact, do not merge, and write a **parking note** recording the issue
-     number, the branch name (`surf/<issue>`), the blocking reason (the sail summary), and a
+     (`sail/<issue>`) and its worktree (`.claude/worktrees/sail-<issue>`) intact, do not merge, and
+     write a **parking note** recording the issue
+     number, the branch name (`sail/<issue>`), the blocking reason (the sail summary), and a
      recommendation. Write the parking note to the journal **and** to a parked-issues record at
      `.surf/parked-issues.md` under the gitignored `.surf/` — this is the defined source §14's
      wrap-up reads parked issues from. Leave the branch intact, then move on to the next
@@ -581,13 +684,16 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
 4. **Journal the decision, then write the completion sentinel.** Append an entry recording the
    outcome (merged + SHA, or parked + reason), the alternatives weighed, and whether the result is
    reversible (see Recovery). **Then write the per-issue completion sentinel
-   `.surf/runs/<issue>/.done`** — the durable signal that this issue reached a clean terminus
-   (built + reviewed + journaled). The sentinel is what lets Resume (Step 15) distinguish a
-   completed-but-just-unmerged issue from an **orphaned** in-flight run-dir: an in-flight run-dir
-   **without** `.done` is re-run against the same `--run-dir`, never skipped as done.
+   `.surf/runs/<issue>/.done`** (in `/surf`'s own coordination namespace — *not* `/sail`'s build
+   run-dir) — the durable signal that this issue reached a clean terminus (built + reviewed +
+   journaled). The sentinel is what lets Resume (Step 15) distinguish a completed-but-just-unmerged
+   issue from an **orphaned** in-flight issue: an issue whose `sail/<issue>` branch exists, is
+   unmerged, and has **no** `.surf/runs/<issue>/.done` is re-launched with a **fresh** `/sail` worker
+   (which creates a new `.sail/runs/sail-<issue>-<ts>/`), never skipped as done.
 5. **Resolve and clean up when the worker's task ends.** The harness owns the worker process, so
    there is no bash reaping or pane teardown here — the supervisor observes terminus via the **poll**
-   in step 2 (harness task exited, or terminus artifacts present). Cleanup is then a thin,
+   in step 2 (harness task **EXITED** — the authoritative terminus signal; *not* "artifacts present",
+   which can predate the Stage-4 commit, see step 2). Cleanup is then a thin,
    deterministic boundary:
    1. **The worker is bounded by a wall-clock cap, enforced by the supervisor + harness.** When the
       poll (step 2) sees the task still running **past** the cap (elapsed-since-spawn ≥ cap), the
@@ -595,13 +701,17 @@ dependent stacking (§10), and wrap-up (§14). No other branch-naming scheme is 
       bash `kill`. That outcome is classified **timed-out** and **parks** the issue, never merges it.
    2. **Cleanup is safe.** Invoke it the same bash-subshell way (#128) — it signals via exit status:
       ```bash
-      bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_cleanup "<run-dir>" "surf/<issue>"'
+      # Pass the resolved run-dir when one exists, else an empty run-dir — cleanup's worktree/branch
+      # handling does not depend on it (a resolver miss must not abort cleanup).
+      bash -c '. ~/.claude/lib/surf-worker.sh && rd="$(surf_worker_resolve_run_dir <issue> "" "'"$SPAWN_TS"'" || true)"; surf_worker_cleanup "${rd:-}" "sail/<issue>"'
       ```
       `surf_worker_cleanup` removes only what this worker created — `git worktree remove` runs
       **without `--force`** (so it refuses to drop uncommitted work — the safety net now that the
-      harness, not a bash pid file, owns liveness), and the stable run-dir is **left in place** as the
-      resume checkpoint. It never force-deletes a directory tree. Only call cleanup once the poll
-      confirms the task has exited.
+      harness, not a bash pid file, owns liveness), and `/sail`'s run-dir is **left in place**. It
+      never force-deletes a directory tree. On a **merged** issue the build worktree
+      (`.claude/worktrees/sail-<issue>`) was already removed by `sail_prune_merged_branch`; on a
+      **parked** issue the worktree is deliberately left intact for resume. Only call cleanup once
+      the poll confirms the task has exited.
 
    A fresh worker is spawned per issue (see Worker delegation); never carry one across issues.
    Full hang-detection of a *wedged-but-not-capped* worker (heartbeat/adaptive timeout) is a
@@ -720,7 +830,11 @@ partner. One worker per issue:
 # and capture stdout (never source a bash `set -e` lib into the zsh runtime — #128). Stable
 # ~/.claude/lib path (symlinked at install, INSTALL.md), not cwd-relative (#127):
 worker_cmd="$(bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_command <issue>')"
-#   worker_cmd PRINTS (no fork) exactly: claude --dangerously-bypass-permissions -p "/sail <issue> --unattended"
+#   worker_cmd PRINTS (no fork): claude --dangerously-skip-permissions -p "/sail <issue> --unattended <HEADLESS-WORKER CONTRACT …>"
+#   The emitted prompt carries a headless-worker contract (#139) forbidding run_in_background /
+#   background `&` / ScheduleWakeup and requiring synchronous codex build+review to the Stage-4
+#   commit terminus — a headless `-p` worker exits at turn-end and never gets a wakeup, so a
+#   backgrounded stage would die mid-build (no run-state.json / review.json / commit).
 # The supervisor then runs THAT command with the Bash tool, run_in_background: true (harness-owned
 # lifecycle). It records the harness task id + the spawn time for the wall-clock cap.
 ```
@@ -736,16 +850,22 @@ decision record below and docs §4.) There is no need for the agent-teams featur
 path, and no tmux pane.
 
 **Engine: `/sail` by default, `/ship` optional.** The worker runs **`/sail`** in `--unattended`
-mode (the #108 front-door terminus). `/sail --unattended` internally drives
-`SAIL_REVIEW_CMD2="codex exec -m gpt-5.5 -c model_reasoning_effort=high" python3 -m sail run
---diff main --dual-lens --run-dir .surf/runs/<n>` — `--dual-lens` + `SAIL_REVIEW_CMD2` give the
-delegated build a real cross-family review via **CLI-subprocess lenses** (codex + `claude`), with
-no `advisor()` dependency, so the second lens is reachable inside the headless worker exactly as it
-is inside the supervisor (#74; see Step 7's degradation guard). **`/ship`** is the optional heavier
-engine for an unusually demanding issue. Both write the durable run-dir artifacts `/surf` reads.
+mode (the #108 front-door terminus), with its **own** front-door run-dir and review allocation —
+`/surf` passes neither `--run-dir` nor `--dual-lens`. The **live shipped default** (#83) is **codex
+builds** with a **single-lens `claude` review** (`SAIL_REVIEW_CMD2` intentionally unset); the codex
+implementer reviewed by a different-family `claude` lens is **cross-family by construction**, so the
+review is genuine **single-lens-by-design**, not `--dual-lens` (re-adding a codex review lens over
+codex-built code would be same-family self-review — the #83 rubber-stamp risk). These lenses are
+**CLI subprocesses** (`claude -p` / `codex exec`), with no `advisor()` dependency, so they are
+reachable inside the headless worker exactly as inside the supervisor (#74; see Step 7's degradation
+guard, which compensates only a genuinely `degraded` review — never a correct `single`-by-design
+one). **`/ship`** is the optional heavier engine for an unusually demanding issue. Both write the
+durable run-dir artifacts `/surf` discovers and reads.
 
-**Worker→supervisor result contract (durable artifacts, fail-CLOSED).** The supervisor reads the
-outcome with `surf_worker_result <run-dir>`. The **claude `-p` exit code is IGNORED for the
+**Worker→supervisor result contract (durable artifacts, fail-CLOSED).** The supervisor resolves
+`/sail`'s actual run-dir (`surf_worker_resolve_run_dir <issue>` — `/sail` names its own
+`.sail/runs/sail-<issue>-<ts>/`, not a surf path) and reads the outcome with
+`surf_worker_result <run-dir>`. The **claude `-p` exit code is IGNORED for the
 decision** — it reflects the claude process, not `/sail`'s commit-vs-park terminus (decided inside
 the agent turn), and the harness, not the exit code, tells the supervisor whether the task is still
 running. The verdict is read SOLELY from `/sail`'s durable artifacts: **`wip-handoff.md`** (present
@@ -846,8 +966,8 @@ guidance, and recorded in the charter — drives ordering. For a dependent issue
   green and merged.
 - **Parent blocked / parked → stack via plain git (branch-from-parent).** When a parent is not
   green and can't merge, but the dependent work is still worth doing, use **stacked branches**:
-  **branch-from-parent** — create the dependent branch (`surf/<issue>`) off the parent's
-  (unmerged) branch (`surf/<parent-issue>`) using plain git, so the dependent work builds on the
+  **branch-from-parent** — create the dependent branch (`sail/<issue>`) off the parent's
+  (unmerged) branch (`sail/<parent-issue>`) using plain git, so the dependent work builds on the
   parent's commits rather than on `main`. Record the stacking in the journal; when the parent
   eventually merges, rebase or re-evaluate the stack.
 
@@ -948,11 +1068,11 @@ Step 13), never best-bet-guessed.
 worker cannot prompt the operator mid-build, so an **unresolved domain assumption parks the
 worker**: the worker writes the question to `.surf/open-questions.md` (a file, never an interactive
 prompt) and exits blocking. The supervisor surfaces it per the mode above; on an answer, the
-supervisor **re-launches that issue against the SAME `--run-dir`** — the answer reaches the
+supervisor **re-launches that issue with a fresh `/sail` worker** — the answer reaches the
 worker only **via a file** (the open-questions file the worker re-reads, mirroring `/sail`'s
-`--body-file` convention), **never** interpolated onto the worker's command line. Because resume
-re-uses the already-green gates in that run-dir (#105), the re-launch is a cheap continuation, not
-a full rebuild. **Note:** `/sail` does **not** re-read `.ship/domain.md` per stage today, so this
+`--body-file` convention), **never** interpolated onto the worker's command line. The fresh `/sail`
+run creates a new `.sail/runs/sail-<issue>-<ts>/` (its per-run gate state, #105, is internal to that
+run-dir). **Note:** `/sail` does **not** re-read `.ship/domain.md` per stage today, so this
 is **boundary-level** park-then-relaunch, not mid-build pickup; in-build domain pickup is a
 deferred follow-up (#125).
 
@@ -1045,7 +1165,7 @@ user — who is a non-programmer, so keep it plain and concrete. Include:
   user (or a future session) can undo any one of them with `git revert <sha>`. This issue→SHA
   revert map is the single most important deliverable of the summary.
 - **What was parked and why.** Read from `.surf/parked-issues.md`: each parked issue, the reason it
-  didn't go green, and the branch it lives on (`surf/<issue>`) so it can be picked up later.
+  didn't go green, and the branch it lives on (`sail/<issue>`) so it can be picked up later.
 - **Active scope + what was deferred to the backlog.** State which **scope mode** was active
   (`selected-set` or `whole-board`, Step 4 #2) and the **termination cause** (board-empty vs a
   cost/time cap). In whole-board mode, list the explicit **issue numbers deferred to the backlog**
@@ -1126,12 +1246,12 @@ plus git itself. Resume reads those, **not** chat history. The default cap-recov
 keep alive, so there is nothing special about a cap versus any other stop.
 
 - **Invocation:** `/surf resume` — relaunched **headlessly** by the Step 16 watcher
-  (`claude --dangerously-bypass-permissions -p "/surf resume"`) after a usage cap, and runnable
-  **manually** the same way (e.g. after a reboot: `claude --dangerously-bypass-permissions` →
+  (`claude --dangerously-skip-permissions -p "/surf resume"`) after a usage cap, and runnable
+  **manually** the same way (e.g. after a reboot: `claude --dangerously-skip-permissions` →
   `/surf resume`).
 - **Short-circuit the start gate, but verify bypass.** The original run already confirmed the repo
-  and `--dangerously-bypass-permissions` and recorded the run mode in the charter, so resume does
-  **not** re-prompt Step 1–2. It **does** verify that `--dangerously-bypass-permissions` is
+  and `--dangerously-skip-permissions` and recorded the run mode in the charter, so resume does
+  **not** re-prompt Step 1–2. It **does** verify that `--dangerously-skip-permissions` is
   actually active for this process. If bypass is **not** active, resume must **park and exit** with
   a note rather than prompting — a permission prompt would hang an unattended resume forever. (The
   documented manual restart launches with the flag — see Step 16.)
@@ -1140,8 +1260,8 @@ keep alive, so there is nothing special about a cap versus any other stop.
   `.surf/created-issues-<charter-timestamp>.md`** (its path is recorded in the charter; load it
   **before** any Step 7c re-scan so the run does not re-admit its own refinements). Then
   **cross-check against git**: for each issue the journal says was
-  merged, confirm `surf/<issue>` is actually merged into `main` (capture the SHA); for each in-flight
-  issue, check whether the `surf/<issue>` branch exists. From that, rebuild the merged-issue→SHA map,
+  merged, confirm `sail/<issue>` is actually merged into `main` (capture the SHA); for each in-flight
+  issue, check whether the `sail/<issue>` branch exists. From that, rebuild the merged-issue→SHA map,
   the parked set, the **generation-set + deferred-backlog set** (whole-board mode), and the **next
   unfinished issue**. **Re-rank any Step 7c auto-pickup issue into dependency order before launch**
   (re-run the Step 10 dependent-issue guard) so a parent discovered mid-run never sequences after a
@@ -1152,10 +1272,11 @@ keep alive, so there is nothing special about a cap versus any other stop.
   marker the cap-recovery watcher checks; see Step 16). **Clear the user-stop sentinel:** delete
   `.surf/<charter>-paused` if present (a manual `/surf resume` re-arms auto-recovery — #124 R5-5).
 - **Completion sentinel — orphan vs done (load-bearing, round-2 risk #1).** A worker writes a
-  per-issue **completion sentinel** (`.surf/runs/<issue>/.done`) **only on a clean terminus** (the
-  supervisor writes it the moment it records the issue's outcome in the journal at Step 7 step 4).
-  On resume, an in-flight `.surf/runs/<issue>` **without** that sentinel is treated as **ORPHANED**
-  — re-checked and re-run against the **same `--run-dir`**, **never** silently treated as done.
+  per-issue **completion sentinel** (`.surf/runs/<issue>/.done`, in `/surf`'s coordination
+  namespace) **only on a clean terminus** (the supervisor writes it the moment it records the issue's
+  outcome in the journal at Step 7 step 4). On resume, an issue whose `sail/<issue>` branch exists,
+  is unmerged, and has **no** `.done` sentinel is treated as **ORPHANED** — re-launched with a fresh
+  `/sail` worker (a new `.sail/runs/sail-<issue>-<ts>/`), **never** silently treated as done.
   Without this rule, a worker that died after building but before journaling would look "finished"
   and surf would skip an unbuilt issue (a silent board gap). The sentinel is the durable
   orphan-vs-done discriminator; git cross-check (above) confirms whether the branch actually
@@ -1177,15 +1298,14 @@ keep alive, so there is nothing special about a cap versus any other stop.
   2. **Branch merged AND it was a stacked parent** → re-run the Step 10 dependent-issue guard for
      its dependents (a parent merging may now unblock or re-order them) before advancing — don't
      blindly skip.
-  3. **Branch exists, unmerged, and a valid `.surf/runs/<issue>/` run-dir exists but has no
-     completion sentinel (`.done`)** → the run-dir is **orphaned** (in-flight, no clean terminus) →
-     re-launch against the **same `--run-dir`** via a fresh headless worker (Step 7: `surf_worker_command
-     <issue>` → harness `run_in_background`), which runs `/sail <issue> --unattended` over
-     `python3 -m sail run --diff main --run-dir .surf/runs/<issue>`. `/sail` skips the gates it
-     already finished (per-gate reuse, #105), and `--diff main` re-derives the baseline against
-     **current** `main` — so a parent that merged since is included. An in-flight run-dir is never
-     treated as done just because it exists.
-  4. **Run-dir missing, or corrupt/partial** (a crash mid-write) → discard it and build the issue
+  3. **`sail/<issue>` branch exists, unmerged, and there is no `.surf/runs/<issue>/.done`
+     completion sentinel** → the issue is **orphaned** (in-flight, no clean terminus) →
+     re-launch via a fresh headless worker (Step 7: `surf_worker_command <issue>` → harness
+     `run_in_background`), which runs `/sail <issue> --unattended`. The fresh `/sail` run creates a
+     **new** `.sail/runs/sail-<issue>-<ts>/` (resolved via `surf_worker_resolve_run_dir`) and
+     re-derives `--diff main` against **current** `main` — so a parent that merged since is included.
+     An orphaned issue is never treated as done just because its branch exists.
+  4. **Branch absent, or its build corrupt/partial** (a crash mid-write) → discard and build the issue
      **fresh**.
   5. **No branch at all** → build the issue **fresh**.
 - **The per-issue journal entry is the checkpoint.** Because each issue's outcome is journaled as
@@ -1200,7 +1320,7 @@ time the cap reports and resume after it — not a proactive remaining-quota mon
 **The model: durable-file headless relaunch (the #53 model, restored).** Because a headless
 `claude -p` process **can** host `/sail`'s crew (Step 8 — depth-0 subagents, verified), the default
 cap-recovery is simply to **relaunch `/surf resume` headlessly** once the cap resets:
-`claude --dangerously-bypass-permissions -p "/surf resume"`. Nothing needs to stay alive across the
+`claude --dangerously-skip-permissions -p "/surf resume"`. Nothing needs to stay alive across the
 cap — the durable `.surf/` files + git are the entire state, and the relaunched headless run
 rebuilds board position from them (Step 15) and spawns fresh per-issue workers. This **supersedes**
 the #73 persistent-tmux send-keys revive (which existed only because the old teammate body could
@@ -1208,7 +1328,7 @@ not run headless — a premise now verified false).
 
 - **The watcher.** `config/surf-resume.sh`, fired on an interval by the LaunchAgent
   (`config/com.surf.resume.plist`), is a **pure-bash gate** that decides whether to relaunch and,
-  when it does, runs `claude --dangerously-bypass-permissions -p "/surf resume"`. It touches **zero
+  when it does, runs `claude --dangerously-skip-permissions -p "/surf resume"`. It touches **zero
   Claude tokens on an idle tick** — the "is it time yet?" decision is entirely in shell, never in a
   Claude call.
 - **The gate (cheap-shell, no Claude call).** The watcher relaunches only when **all** hold: no
@@ -1245,7 +1365,7 @@ session to keep alive, so a reboot is no longer a special "automatic recovery lo
 hard stop, the watcher relaunches automatically once its gate opens, or you can run it manually:
 
 ```bash
-claude --dangerously-bypass-permissions
+claude --dangerously-skip-permissions
 #   …then at the Claude prompt:
 /surf resume
 ```
@@ -1257,7 +1377,7 @@ claude --dangerously-bypass-permissions
 ## Rules
 
 - The start gate is non-negotiable: confirm the repo and confirm
-  `--dangerously-bypass-permissions`; refuse the loop until both hold. `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: 1`
+  `--dangerously-skip-permissions`; refuse the loop until both hold. `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: 1`
   is **not** required on the default headless path (Steps 2–3) — only if you opt into the optional
   supervised (panes) lens (Step 3b).
 - Every user choice is an **interactive selection prompt — never a `--flag`**.
@@ -1287,7 +1407,7 @@ claude --dangerously-bypass-permissions
 - One `--no-ff` merge commit per green issue; log every merge SHA so each is `git revert`-able.
 - **Sandbox repo only. No force-push or destructive git.** Park anything irreversible.
 - **Every issue is built by a fresh per-issue headless `claude -p` worker — in both modes**, never
-  inline. The worker runs `claude --dangerously-bypass-permissions -p "/sail <n> --unattended"`
+  inline. The worker runs `claude --dangerously-skip-permissions -p "/sail <n> --unattended"`
   (a depth-0 process that hosts `/sail`'s crew — `/ship` optional), **backgrounded by the harness**
   (`run_in_background`), which owns its lifecycle and kill. The mode changes only decision behavior,
   never the delegation mechanism. The default path needs **no tmux and no agent-teams feature**; the
@@ -1306,10 +1426,10 @@ claude --dangerously-bypass-permissions
   delete), leaving the run-dir as the resume checkpoint. No tmux teardown on the default path.
 - **Auto-resume is the durable-file `/surf resume` headless relaunch (the #53 model).** A usage cap,
   crash, reboot, or user-stop all recover the same way: the Step 16 watcher relaunches
-  `claude --dangerously-bypass-permissions -p "/surf resume"` once its pure-shell gate opens, which
-  rebuilds board position from the durable `.surf/` files + git. An in-flight run-dir without a
-  completion sentinel is treated as **orphaned** (re-run against the same `--run-dir`), never as
-  done.
+  `claude --dangerously-skip-permissions -p "/surf resume"` once its pure-shell gate opens, which
+  rebuilds board position from the durable `.surf/` files + git. An in-flight issue (an unmerged
+  `sail/<issue>` branch) without a `.surf/runs/<issue>/.done` completion sentinel is treated as
+  **orphaned** (re-launched with a fresh `/sail` worker), never as done.
 - The charter + journal are the source of truth; re-anchor from them at the top of every issue.
   Do not rely on `/compact` or chat history.
 
