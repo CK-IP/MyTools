@@ -34,12 +34,12 @@ def _backend_family(cmd_str):
         return ""
     if not argv:
         return ""
-    if argv[0] == "env":
+    prog = os.path.basename(argv[0])
+    if prog == "env":
         i = 1
         while i < len(argv) and (argv[i].startswith("-") or ("=" in argv[i] and not argv[i].startswith("-"))):
             i += 1
         return _backend_family(" ".join(argv[i:])) if i < len(argv) else ""
-    prog = os.path.basename(argv[0])
     if prog in ("bash", "sh") and len(argv) >= 3 and argv[1] in ("-lc", "-c"):
         try:
             inner = shlex.split(argv[2])
