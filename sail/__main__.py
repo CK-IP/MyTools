@@ -282,8 +282,9 @@ def main() -> int:
         except (OSError, ValueError):
             return 0
         # Freshness: when the committing round/target are given, refuse to credit a review.json that
-        # is not current for THIS exact target/round AND whose stored diff_hash+plan_hash still match
-        # the reviewed content (catches reviewed-content drift, not just a round mismatch). This is
+        # is not current for THIS exact target/round AND whose stored diff_hash+plan_hash+domain_hash
+        # still match the reviewed content (catches reviewed-content drift, not just a round
+        # mismatch). This is
         # correct AFTER the commit because the runner pins diff_ref to a base SHA (#87): `git diff
         # <SHA>` is identical before and after the commit lands (verified), so the re-diff does NOT
         # go empty post-commit the way a moving `HEAD` ref would. /sail Stage 3 always diffs against

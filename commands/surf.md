@@ -1072,9 +1072,9 @@ supervisor **re-launches that issue with a fresh `/sail` worker** — the answer
 worker only **via a file** (the open-questions file the worker re-reads, mirroring `/sail`'s
 `--body-file` convention), **never** interpolated onto the worker's command line. The fresh `/sail`
 run creates a new `.sail/runs/sail-<issue>-<ts>/` (its per-run gate state, #105, is internal to that
-run-dir). **Note:** `/sail` does **not** re-read `.ship/domain.md` per stage today, so this
-is **boundary-level** park-then-relaunch, not mid-build pickup; in-build domain pickup is a
-deferred follow-up (#125).
+run-dir). `/sail` now re-reads `.ship/domain.md` on each plan/review invocation, so a domain
+answer written between checkpoints is picked up at the next checkpoint with no separate
+re-launch; the park-then-relaunch path remains for the unresolved headless-worker question itself.
 
 **`.ship/domain.md` is the memory that stops re-asking — but only *confirmed* answers persist.**
 A **user-confirmed** domain answer is written back to `.ship/domain.md` so the same question is
