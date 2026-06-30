@@ -19,6 +19,7 @@ This encodes the discipline:
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import shlex
@@ -631,6 +632,13 @@ def review_current_and_clean(run_dir, target, round):
         if data.get("diff_hash") != review_mod.diff_fingerprint(os.path.abspath(target), diff_ref):
             return False
         if data.get("plan_hash") != review_mod.plan_fingerprint(run_dir):
+            return False
+        current_domain_hash = review_mod.domain_fingerprint(os.path.abspath(target))
+        stored_domain_hash = data.get("domain_hash")
+        if stored_domain_hash is None:
+            if current_domain_hash != hashlib.sha256(b"").hexdigest():
+                return False
+        elif stored_domain_hash != current_domain_hash:
             return False
         return True
     except Exception:

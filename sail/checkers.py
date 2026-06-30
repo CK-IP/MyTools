@@ -178,6 +178,21 @@ def diff_coverage_threshold(target: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
+def read_domain_memory(target: str) -> Optional[str]:
+    # Read <target>/.ship/domain.md as durable domain memory. Returns the file text, or None
+    # when the file is absent or unreadable. Mirrors diff_coverage_threshold's path-build +
+    # try/except OSError + advisory None-on-absent idiom so callers can treat missing memory as
+    # a clean no-op.
+    path = os.path.join(target, ".ship", "domain.md")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
 @dataclass(frozen=True)
 class CheckerContext:
     # Runtime context threaded into build_command / is_blocking so a checker can scope to the
