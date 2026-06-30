@@ -236,6 +236,34 @@ else
   pass "(g) stale 'same --run-dir' resume language removed"
 fi
 
+# --- (m) #126 §121: a BENIGN non-cap line that merely contains "limit reached" (e.g. a CLI's
+# "max retries limit reached" / "concurrency limit reached") must NOT be detected as a usage cap, so
+# no spurious multi-hour resume-after backoff is armed on a non-cap stop. The GENUINE Anthropic
+# notice "Claude usage limit reached" must STILL be detected (coverage preserved via the surviving
+# `usage limit` token). This pins the removal of the over-broad bare `limit reached` token from
+# CAP_NOTICE_RE.
+# shellcheck source=/dev/null
+if ( source "$SCRIPT_SRC" >/dev/null 2>&1; printf '%s\n' "max retries limit reached" | grep -qiE "$CAP_NOTICE_RE" ); then
+  fail "(m) CAP_NOTICE_RE still matches benign 'max retries limit reached'"
+else
+  pass "(m) CAP_NOTICE_RE no longer matches benign 'max retries limit reached'"
+fi
+# shellcheck source=/dev/null
+if ( source "$SCRIPT_SRC" >/dev/null 2>&1; printf '%s\n' "Claude usage limit reached" | grep -qiE "$CAP_NOTICE_RE" ); then
+  pass "(m) CAP_NOTICE_RE still matches genuine 'Claude usage limit reached'"
+else
+  fail "(m) CAP_NOTICE_RE lost genuine 'Claude usage limit reached' coverage"
+fi
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
+CLAUDE_OUT="max retries limit reached" run_watcher
+if [ ! -f "$WORK/.surf/resume-after" ]; then pass "(m) benign 'max retries limit reached' → NOT a cap, no backoff armed"; else fail "(m) benign 'limit reached' wrongly detected as a cap (spurious backoff armed)"; fi
+
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
+CLAUDE_OUT="Claude usage limit reached" run_watcher
+if [ -s "$WORK/.surf/resume-after" ]; then pass "(m) genuine 'Claude usage limit reached' → still detected as a cap (coverage preserved)"; else fail "(m) genuine usage-limit notice NOT detected — cap coverage lost"; fi
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -gt 0 ] && exit 1 || exit 0

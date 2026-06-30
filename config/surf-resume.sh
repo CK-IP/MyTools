@@ -27,7 +27,7 @@ MIN_BACKOFF="${SURF_RESUME_MIN_BACKOFF:-300}"        # never relaunch sooner tha
 DEFAULT_BACKOFF="${SURF_RESUME_DEFAULT_BACKOFF:-18000}"  # parse-miss → 5h long default
 MAX_RUN_AGE="${SURF_RESUME_MAX_RUN_AGE:-7200}"       # a lockdir older than 2h is stale → reclaim
 LOG="${SURF_RESUME_LOG:-/tmp/surf-resume.log}"
-CAP_NOTICE_RE='weekly limit|hit your .*limit|usage limit|usage cap|rate limit|try again later|limit will reset|limit reached|resets at|/usage-credits'
+CAP_NOTICE_RE='weekly limit|hit your .*limit|usage limit|usage cap|rate limit|try again later|limit will reset|resets at|/usage-credits'
 
 SURF_DIR="${SURF_RESUME_DIR:-$REPO_ROOT/.surf}"   # overridable so the functional test can point at a fixture dir
 RESUME_AFTER="$SURF_DIR/resume-after"
