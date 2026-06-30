@@ -23,6 +23,7 @@ import math
 import os
 import shlex
 import subprocess
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
@@ -75,11 +76,35 @@ def max_blocking_severity_rank(findings: object) -> int:
     return 1 if saw_high else 0
 
 
-def read_trend(run_dir: str | None) -> list[dict[str, int]]:
+def dominant_area_for_findings(findings: object) -> str | None:
+    if not isinstance(findings, list) or not findings:
+        return None
+    counts: Counter[str] = Counter()
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        severity = str(finding.get("severity", "")).strip().upper()
+        if severity not in _BLOCKING:
+            continue
+        area = finding.get("file")
+        if not isinstance(area, str):
+            continue
+        area = area.strip()
+        if not area:
+            continue
+        counts[area] += 1
+    if not counts:
+        return None
+    top_count = max(counts.values())
+    top_areas = [area for area, count in counts.items() if count == top_count]
+    return top_areas[0] if len(top_areas) == 1 else None
+
+
+def read_trend(run_dir: str | None) -> list[dict[str, Any]]:
     if not run_dir:
         return []
     path = os.path.join(run_dir, _TREND_LEDGER)
-    rows: dict[int, dict[str, int]] = {}
+    rows: dict[int, dict[str, Any]] = {}
     try:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
@@ -107,13 +132,20 @@ def read_trend(run_dir: str | None) -> list[dict[str, int]]:
                     "round": round_num,
                     "max_blocking_severity_rank": max_rank,
                     "addressed_count": addressed_count,
+                    "area": item.get("area"),
                 }
     except OSError:
         return []
     return [rows[key] for key in sorted(rows)]
 
 
-def record_trend_row(run_dir: str | None, round_num: int, max_rank: int, addressed_count: int) -> bool:
+def record_trend_row(
+    run_dir: str | None,
+    round_num: int,
+    max_rank: int,
+    addressed_count: int,
+    area: str | None = None,
+) -> bool:
     if not run_dir:
         return False
     os.makedirs(run_dir, exist_ok=True)
@@ -130,6 +162,7 @@ def record_trend_row(run_dir: str | None, round_num: int, max_rank: int, address
         "round": round_num,
         "max_blocking_severity_rank": max_rank,
         "addressed_count": addressed_count,
+        "area": area,
     }
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(payload) + "\n")
@@ -186,11 +219,69 @@ def trend_window() -> int:
     return window if window > 0 else 3
 
 
+def saturation_window() -> int:
+    raw = os.environ.get("SAIL_SATURATION_WINDOW", "3")
+    try:
+        window = int(raw)
+    except (TypeError, ValueError):
+        return 3
+    return window if window > 0 else 3
+
+
 def trend_stalled(rows: object, window: int | None = None) -> bool:
     try:
         if window is None:
             window = trend_window()
         return trend_no_progress_streak(rows) >= int(window)
+    except (TypeError, ValueError):
+        return False
+
+
+def same_area_saturation_streak(rows: Any) -> int:
+    try:
+        if isinstance(rows, (str, bytes)):
+            return 0
+        iterable = list(rows)
+    except TypeError:
+        return 0
+    normalized: dict[int, dict[str, Any]] = {}
+    for row in iterable:
+        if not isinstance(row, dict):
+            continue
+        raw_round = row.get("round")
+        if raw_round is None:
+            continue
+        try:
+            round_num = int(raw_round)
+        except (TypeError, ValueError):
+            continue
+        normalized[round_num] = {
+            "round": round_num,
+            "area": row.get("area"),
+        }
+    ordered = [normalized[key] for key in sorted(normalized)]
+    if not ordered:
+        return 0
+    latest_area = ordered[-1].get("area")
+    if latest_area is None:
+        return 0
+    streak = 1
+    for row in reversed(ordered[:-1]):
+        area = row.get("area")
+        if area is None or area != latest_area:
+            break
+        streak += 1
+    return streak
+
+
+def area_saturated(rows: Any, window: int | None = None) -> bool:
+    try:
+        if window is None:
+            window = saturation_window()
+        window = int(window)
+        if window <= 0:
+            return False
+        return same_area_saturation_streak(rows) >= window
     except (TypeError, ValueError):
         return False
 
@@ -360,8 +451,9 @@ def hydrate_trend_row(run_dir: str | None, target: str, round_num: int) -> int |
         if not isinstance(findings, list):
             return None
         rank = max_blocking_severity_rank(findings)
+        area = dominant_area_for_findings(findings)
         addressed = addressed_count_for_round(run_dir, round_num)
-        record_trend_row(run_dir, round_num, rank, addressed)
+        record_trend_row(run_dir, round_num, rank, addressed, area=area)
         return rank
     except Exception:
         return None

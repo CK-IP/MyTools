@@ -410,6 +410,11 @@ mechanically-sound run still gets to `proceed-hardening`/`proceed-dissent` rathe
   finding is **not** parked. The streak is reconstructed from a durable per-round ledger
   (`trend-ledger.jsonl`, hydrated from each round's `review.json` + decision-log under the
   **strong** `review_current_and_clean` freshness check), so a resumed process never resets it.
+- **same-area saturation (advisory, never a park).** When the same trend ledger shows
+  `SAIL_SATURATION_WINDOW` consecutive rounds concentrated on one dominant file area, `sail
+  converge` prints a `same-area-saturation:` stderr callout naming the area and streak. This is a
+  steer to widen the budget / rethink the design; it never changes the stdout decision or exit
+  code and is distinct from the by-id `genuine-oscillation` PARK.
 - **hard ceiling (the ULTIMATE backstop).** `round_num >= --max-rounds` (default raised **above 3**,
   overridable via the `SAIL_HARD_ROUND_CEILING` env var when `--max-rounds` is not passed)
   → `park`. Round count is no longer the convergence judgment — only the final, always-available
