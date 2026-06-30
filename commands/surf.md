@@ -272,6 +272,30 @@ it from the charter. Selected-set scope needs neither field.
 
 ---
 
+## Minor-finding disposition — split by blast radius (#113)
+
+`/surf` drives `/sail` per issue and **inherits `/sail`'s minor-finding disposition policy verbatim**
+(the source of truth is the "Minor-finding disposition" section of `commands/sail.md`). When a worker
+**catches** a minor issue mid-build that the issue did not call for, split by **blast radius**, never
+by self-assessed "cheapness":
+
+- **Trivial AND inside code already being touched AND zero behavior change → fix inline, logged
+  visibly** ("also corrected X while editing Y", recorded via `DecisionLog.inline_fix_marker`). The
+  hard ceiling is testable (`sail/disposition.py::inline_fix_eligible`): **single file, a few lines,
+  no public-interface change, no new dependency, no new behavior.** A fix touching a **second file**
+  or a **public interface** is **not** inline-eligible.
+- **Genuinely out-of-scope → never expand the diff.** Capture it as a **deferred finding** (the
+  guaranteed floor — the existing #103/#100 `DecisionLog`) plus an **optional** auto-filed one-line
+  follow-up issue (reuse the #108 safe `--body-file`/fixed-title/fingerprint-dedup pattern). This
+  composes with `/surf`'s own run-filed-issue handling: an auto-filed follow-up carries the charter's
+  refinement label (default `surf-pilot`) so the whole-board anti-regress guard defers it, exactly
+  like any other run-filed issue.
+
+Both dispositions are reported **INFO-tier** per #112 ("also corrected X …" / "out-of-scope Y noted →
+filed #N"), never silent — this is a scoped, guarded exception to Surgical-Changes §3, not a repeal.
+
+---
+
 ## Issue selection
 
 ### Step 5: Pick the issues

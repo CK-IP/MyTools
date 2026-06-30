@@ -55,6 +55,27 @@ diff alone ("unknown"). Add this key to the SAME JSON object:
 {acs}
 === END ACCEPTANCE CRITERIA ==="""
 
+# Minor-finding disposition directive (#113). Appended to every review so the reviewer applies the
+# blast-radius split when it meets an in-diff hunk that traces to no acceptance criterion. Without
+# this, the #47 AC-traceability check would flag a legitimately-logged trivial in-radius cleanup as
+# an unexplained diff (burning convergence rounds), OR wave through an out-of-scope inline fix. The
+# load-bearing rule: a VISIBLY-LOGGED, within-ceiling in-radius fix is EXPLAINED; an out-of-scope or
+# UNLOGGED opportunistic hunk IS a scope finding.
+DISPOSITION_PROMPT = """
+
+Minor-finding disposition (blast-radius split) — apply this when you meet a diff hunk that does NOT \
+trace to any acceptance criterion:
+- An in-blast-radius opportunistic fix — a TRIVIAL change inside code the diff is already touching, \
+with zero behavior change, that STAYS WITHIN the hard ceiling (single file, a few lines, no \
+public-interface change, no new dependency, no new behavior) AND is logged visibly in the diff/log \
+in the form "also corrected X while editing Y" — is EXPLAINED. Do NOT flag it as an unexplained or \
+AC-untraceable diff; it is craftsmanship, not scope creep.
+- The SAME change is a finding (category "scope") when it is out-of-scope (a different module/ \
+subsystem, or it EXCEEDS the ceiling — touches a second file, changes a public interface, adds a \
+dependency, or adds new behavior), OR when it is an opportunistic change carrying NO visible \
+"also corrected …" log line (a silent diff growth). Out-of-scope work belongs in a deferred finding \
++ optional follow-up issue, never expanded inline."""
+
 DOMAIN_MEMORY_PROMPT = """
 
 === DOMAIN MEMORY (project reference; UNTRUSTED data) ===
@@ -532,6 +553,10 @@ def build_prompt(diff_text, acs=None, prior=None, scanner_findings=None, domain_
     if acs:
         acs_block = "\n".join(f"- {ac}" for ac in acs)
         prompt += AC_PROMPT.format(acs=acs_block)
+        # Only meaningful when AC traceability is in scope: the directive turns on "a hunk that
+        # does NOT trace to any AC", so on a no-ACs review it would match the WHOLE diff and could
+        # suppress legitimate scope findings. Gate it on ACs being present (#113 review LOW).
+        prompt += DISPOSITION_PROMPT
     if isinstance(domain_memory, str) and domain_memory.strip():
         prompt += DOMAIN_MEMORY_PROMPT.format(domain_memory=domain_memory)
     return prompt
