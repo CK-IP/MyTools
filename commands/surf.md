@@ -1143,8 +1143,9 @@ These are non-negotiable for every `/surf` run, autonomous or supervised:
   Autonomous-mode convergence rubric**: (a) a plan risk the plan itself already mitigates is recorded
   (`disposition: self-mitigated` + rationale) and proceeds rather than burning rounds; (b) `exit 0`
   is the stop signal — non-blocking LOWs are never chased past green; (c) the driver consults the
-  deterministic `sail converge` oracle (`proceed | revise | park | proceed-hardening | proceed-dissent`) with a 3-round-cap PARK as the
-  genuine-non-convergence backstop. `/surf` relies on this discipline so a single issue can neither
+  deterministic `sail converge` oracle (`proceed | revise | park | proceed-hardening | proceed-dissent`) with a trend-stall +
+  wall-clock cost backstop (and a hard `--max-rounds` ceiling as the ultimate backstop, #130) as the
+  genuine-non-convergence guards. `/surf` relies on this discipline so a single issue can neither
   burn its round budget nor park sound work; when `sail converge` returns `park`, `/surf` parks the
   issue per the rule above. On **`proceed-dissent`** (#108 — a red-team finding objecting to the
   issue's *mandated* design on an otherwise mechanically-sound run), `/surf` runs `/sail`'s

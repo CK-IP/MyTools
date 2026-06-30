@@ -4,8 +4,10 @@
 #   Gap 1: a plan risk the driver marks "self-mitigated" (with a rationale) must not block the
 #          plan gate; without a rationale it MUST still block (no laundering).
 #   Gap 2: a deterministic convergence oracle (`sail converge`) the autonomous driver consults —
-#          rc 0 => proceed (stop at green; LOWs never chased), rc!=0 under cap => revise,
-#          rc!=0 at the 3-round cap => park.
+#          rc 0 => proceed (stop at green; LOWs never chased), rc!=0 under the hard ceiling =>
+#          revise, rc!=0 at the hard ceiling => park. (#130 raised the hard-ceiling default above 3
+#          and made the trend-stall + cost backstop the primary convergence guards; the round count
+#          is now only the ultimate backstop. #130 has its own dedicated test.)
 # Hermetic: no live backend; pure-function imports + a mock plan backend.
 
 set -euo pipefail
@@ -41,14 +43,16 @@ out=$(converge --rc 0 --round 1) || fail "converge --rc 0 --round 1 exited non-z
 out=$(converge --rc 1 --round 1) || fail "converge --rc 1 --round 1 exited non-zero"
 [ "$out" = "revise" ] || fail "rc 1 round 1 should be 'revise', got '$out'"
 
+# #130: round 3 NO LONGER parks at the default — the hard ceiling was raised above 3 so a
+# genuinely-converging run is not parked at round 3 (the trend-stall / cost backstop are primary).
 out=$(converge --rc 1 --round 3) || fail "converge --rc 1 --round 3 exited non-zero"
-[ "$out" = "park" ] || fail "rc 1 round 3 (default cap 3) should be 'park', got '$out'"
+[ "$out" = "revise" ] || fail "rc 1 round 3 must now 'revise' (hard ceiling raised >3 by #130), got '$out'"
 
 # LOW-only review keeps the gate green (rc 0) -> the oracle never asks for another round.
 out=$(converge --rc 0 --round 2) || fail "converge rc 0 round 2 exited non-zero"
 [ "$out" = "proceed" ] || fail "green light at round 2 must still 'proceed' (LOWs not chased), got '$out'"
 
-# --max-rounds override: a higher cap keeps revising past round 3.
+# --max-rounds override: an explicit hard ceiling still parks at the cap.
 out=$(converge --rc 1 --round 4 --max-rounds 5) || fail "converge --max-rounds 5 exited non-zero"
 [ "$out" = "revise" ] || fail "rc 1 round 4 with cap 5 should be 'revise', got '$out'"
 out=$(converge --rc 1 --round 5 --max-rounds 5) || fail "converge --max-rounds 5 at cap exited non-zero"
@@ -156,7 +160,7 @@ assert_md 'autonomous.{0,40}convergence|convergence.{0,40}rubric' "$SAIL_MD" "sa
 assert_md 'self-mitigat' "$SAIL_MD" "sail.md rubric missing the self-mitigated-risk rule"
 assert_md 'exit 0|exit code 0|green' "$SAIL_MD" "sail.md rubric missing the exit-0/green stop signal"
 assert_md 'sail converge' "$SAIL_MD" "sail.md rubric must reference the sail converge oracle"
-assert_md '3[ -]round|three[ -]round|round cap' "$SAIL_MD" "sail.md rubric missing the 3-round cap"
+assert_md 'hard ceiling|ultimate backstop|round cap' "$SAIL_MD" "sail.md rubric missing the hard-ceiling/round-cap backstop"
 assert_md 'park' "$SAIL_MD" "sail.md rubric missing the PARK backstop"
 
 # ---------------------------------------------------------------------------

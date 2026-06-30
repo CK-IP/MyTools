@@ -6,7 +6,7 @@ instead of eyeballing a "continue / abort / proceed" judgment a human used to ma
 Contract: `rc` is the exit code of the gate that just ran (`sail run` / `sail review` /
 `sail plan`), whose contract is `0 = green, non-zero = not green`. Any non-zero rc
 (1, 127, ...) is treated uniformly as "not green". `round_num` is the 1-based count of
-review rounds run so far; `max_rounds` is the genuine-non-convergence backstop (default 3).
+review rounds run so far; `max_rounds` is the genuine-non-convergence backstop (default 10).
 
 This encodes the discipline:
   - exit 0 is the stop signal — LOW/MEDIUM findings never flip the exit code, so a green
@@ -19,9 +19,12 @@ This encodes the discipline:
 from __future__ import annotations
 
 import json
+import math
 import os
 import shlex
 import subprocess
+from datetime import datetime, timezone
+from typing import Any
 
 from sail.decisionlog import DecisionLog
 from sail import review as review_mod
@@ -30,6 +33,7 @@ from sail import codexlatch
 
 _DISPOSITIONED = {"rejected", "deferred"}
 _BLOCKING = {"CRITICAL", "HIGH"}
+_TREND_LEDGER = "trend-ledger.jsonl"
 
 
 def _read_review_json(run_dir):
@@ -42,6 +46,325 @@ def _read_run_state_json(run_dir):
     with open(os.path.join(run_dir, "run-state.json"), encoding="utf-8") as fh:
         data = json.load(fh)
     return data if isinstance(data, dict) else None
+
+
+def _parse_iso_utc(value: object) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def max_blocking_severity_rank(findings: object) -> int:
+    if not isinstance(findings, list):
+        return 0
+    saw_high = False
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        severity = str(finding.get("severity", "")).strip().upper()
+        if severity == "CRITICAL":
+            return 2
+        if severity == "HIGH":
+            saw_high = True
+    return 1 if saw_high else 0
+
+
+def read_trend(run_dir: str | None) -> list[dict[str, int]]:
+    if not run_dir:
+        return []
+    path = os.path.join(run_dir, _TREND_LEDGER)
+    rows: dict[int, dict[str, int]] = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                raw_round = item.get("round")
+                raw_rank = item.get("max_blocking_severity_rank")
+                raw_addressed = item.get("addressed_count")
+                if raw_round is None or raw_rank is None or raw_addressed is None:
+                    continue
+                try:
+                    round_num = int(raw_round)
+                    max_rank = int(raw_rank)
+                    addressed_count = int(raw_addressed)
+                except (TypeError, ValueError):
+                    continue
+                rows[round_num] = {
+                    "round": round_num,
+                    "max_blocking_severity_rank": max_rank,
+                    "addressed_count": addressed_count,
+                }
+    except OSError:
+        return []
+    return [rows[key] for key in sorted(rows)]
+
+
+def record_trend_row(run_dir: str | None, round_num: int, max_rank: int, addressed_count: int) -> bool:
+    if not run_dir:
+        return False
+    os.makedirs(run_dir, exist_ok=True)
+    try:
+        round_num = int(round_num)
+        max_rank = int(max_rank)
+        addressed_count = int(addressed_count)
+    except (TypeError, ValueError):
+        return False
+    if any(row.get("round") == round_num for row in read_trend(run_dir)):
+        return False
+    path = os.path.join(run_dir, _TREND_LEDGER)
+    payload = {
+        "round": round_num,
+        "max_blocking_severity_rank": max_rank,
+        "addressed_count": addressed_count,
+    }
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload) + "\n")
+    return True
+
+
+def trend_no_progress_streak(rows: Any) -> int:
+    try:
+        if isinstance(rows, (str, bytes)):
+            return 0
+        iterable = list(rows)
+    except TypeError:
+        return 0
+    normalized = {}
+    for row in iterable:
+        if not isinstance(row, dict):
+            continue
+        raw_round = row.get("round")
+        if raw_round is None:
+            continue
+        try:
+            round_num = int(raw_round)
+            max_rank = int(row.get("max_blocking_severity_rank", 0))
+            addressed_count = int(row.get("addressed_count", 0))
+        except (TypeError, ValueError):
+            continue
+        normalized[round_num] = {
+            "round": round_num,
+            "max_blocking_severity_rank": max_rank,
+            "addressed_count": addressed_count,
+        }
+    ordered = [normalized[key] for key in sorted(normalized)]
+    if not ordered:
+        return 0
+    streak = 0
+    prev_rank = ordered[0]["max_blocking_severity_rank"]
+    for row in ordered[1:]:
+        rank = row["max_blocking_severity_rank"]
+        addressed_count = row["addressed_count"]
+        if rank < prev_rank or addressed_count > 0:
+            streak = 0
+        else:
+            streak += 1
+        prev_rank = rank
+    return streak
+
+
+def trend_window() -> int:
+    raw = os.environ.get("SAIL_TREND_WINDOW", "3")
+    try:
+        window = int(raw)
+    except (TypeError, ValueError):
+        return 3
+    return window if window > 0 else 3
+
+
+def trend_stalled(rows: object, window: int | None = None) -> bool:
+    try:
+        if window is None:
+            window = trend_window()
+        return trend_no_progress_streak(rows) >= int(window)
+    except (TypeError, ValueError):
+        return False
+
+
+def last_resume_at(run_dir: str | None) -> str | None:
+    if not run_dir:
+        return None
+    try:
+        lines = DecisionLog(run_dir)._read_lines()
+    except Exception:
+        return None
+    prefix = "- ↺ resume "
+    latest: str | None = None
+    for line in lines:
+        if not isinstance(line, str):
+            continue
+        if not line.startswith(prefix):
+            continue
+        candidate = line[len(prefix):].strip()
+        if not candidate:
+            continue
+        if latest is None or candidate > latest:
+            latest = candidate
+    return latest
+
+
+_UNKNOWN_SESSION = "_nosession"  # mirrors codexlatch.session_token()'s no-session sentinel
+
+
+def is_cross_session_resume(
+    resumed: bool, prior_session: str | None, current_session: str | None
+) -> bool:
+    """Should this `sail run` invocation write a cost-clock-resetting resume marker?
+
+    A resume marker resets the cost-backstop's wall-clock window (so a parked-then-resumed
+    run gets a fresh budget). It must fire ONLY on a genuine cross-session re-entry — the run
+    was parked and a NEW session picked it up — NOT on a same-session convergence-round re-run
+    into the same run-dir, which would otherwise collapse the cumulative cost window to the
+    current round and defeat the PRIMARY runaway guard (#130 review r3 HIGH).
+
+    Conservative: a reset fires only when BOTH sessions are KNOWN and differ. When either side
+    is unknown (the `_nosession` sentinel, or unrecorded), re-entry cannot be reliably detected,
+    so we do NOT reset — the clock keeps measuring cumulatively from started_at, the safe
+    direction for a runaway guard.
+    """
+    if not resumed:
+        return False
+    if not prior_session or prior_session == _UNKNOWN_SESSION:
+        return False
+    if not current_session or current_session == _UNKNOWN_SESSION:
+        return False
+    return prior_session != current_session
+
+
+def effective_started_at(run_dir: str | None) -> str | None:
+    # The cost clock measures from a durable run-state anchor that resets ONLY on a genuine
+    # cross-session resume (set by the runner via is_cross_session_resume) — NOT on same-session
+    # convergence-round re-runs, which each append an audit resume marker but must not collapse
+    # the cumulative cost window to one round (#130 review r3 HIGH). A hand-seeded run-state with
+    # no anchor falls back to the legacy later-of(started_at, most-recent resume marker) behavior.
+    anchor = cost_anchor_at(run_dir)
+    if anchor is not None:
+        return anchor
+    started_at = run_started_at(run_dir)
+    resume_at = last_resume_at(run_dir)
+    if started_at is None:
+        return resume_at
+    if resume_at is None:
+        return started_at
+
+    started = _parse_iso_utc(started_at)
+    resumed = _parse_iso_utc(resume_at)
+    if started is not None and resumed is not None:
+        return resume_at if resumed >= started else started_at
+    if resumed is not None:
+        return resume_at
+    if started is not None:
+        return started_at
+    return started_at
+
+
+def elapsed_seconds(run_dir: str | None) -> float | None:
+    started_at = effective_started_at(run_dir)
+    started = _parse_iso_utc(started_at)
+    if started is None:
+        return None
+    return (datetime.now(timezone.utc) - started).total_seconds()
+
+
+def cost_surface_line(elapsed: float) -> str:
+    return f"sail converge: elapsed {elapsed:.3f}s wall-time (tokens unavailable to sail/)"
+
+
+def cost_ceiling_seconds() -> float | None:
+    raw = os.environ.get("SAIL_COST_CEILING_SECONDS")
+    if raw is None:
+        return None
+    try:
+        ceiling = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(ceiling) or ceiling <= 0:
+        return None
+    return ceiling
+
+
+def cost_exceeded(elapsed: float | None, ceiling: float | None) -> bool:
+    try:
+        if elapsed is None or ceiling is None or ceiling <= 0:
+            return False
+        return elapsed > ceiling
+    except (TypeError, ValueError):
+        return False
+
+
+def run_started_at(run_dir: str | None) -> str | None:
+    try:
+        if not run_dir:
+            return None
+        data = _read_run_state_json(run_dir)
+        if not isinstance(data, dict):
+            return None
+        started_at = data.get("started_at")
+        return started_at if isinstance(started_at, str) and started_at else None
+    except Exception:
+        return None
+
+
+def cost_anchor_at(run_dir: str | None) -> str | None:
+    """The cost clock's start anchor: run-state `cost_anchor_at`, reset only on a genuine
+    cross-session resume. None when absent (legacy/seeded run-state) so the caller falls back."""
+    try:
+        if not run_dir:
+            return None
+        data = _read_run_state_json(run_dir)
+        if not isinstance(data, dict):
+            return None
+        anchor = data.get("cost_anchor_at")
+        return anchor if isinstance(anchor, str) and anchor else None
+    except Exception:
+        return None
+
+
+def addressed_count_for_round(run_dir: str | None, round_num: int) -> int:
+    try:
+        resolutions = DecisionLog(run_dir).read_resolutions(round=round_num)
+        count = 0
+        for resolution in resolutions.values():
+            if not isinstance(resolution, dict):
+                continue
+            if str(resolution.get("disposition", "")).strip().lower() == "addressed":
+                count += 1
+        return count
+    except Exception:
+        return 0
+
+
+def hydrate_trend_row(run_dir: str | None, target: str, round_num: int) -> int | None:
+    try:
+        target_root = os.path.abspath(target)
+        if not review_current_and_clean(run_dir, target_root, round_num):
+            return None
+        data = _read_review_json(run_dir)
+        if not isinstance(data, dict):
+            return None
+        findings = data.get("findings")
+        if not isinstance(findings, list):
+            return None
+        rank = max_blocking_severity_rank(findings)
+        addressed = addressed_count_for_round(run_dir, round_num)
+        record_trend_row(run_dir, round_num, rank, addressed)
+        return rank
+    except Exception:
+        return None
 
 
 def materiality_backend_argv():
@@ -432,7 +755,7 @@ def write_handoff(run_dir, reason, resume_cmd, issue=None, finding_ids=None):
     return path
 
 
-def loop_decision(rc: int, round_num: int, max_rounds: int = 3) -> str:
+def loop_decision(rc: int, round_num: int, max_rounds: int = 10) -> str:
     """Return the loop decision: 'proceed' | 'revise' | 'park'.
 
     rc == 0            -> 'proceed' (green; stop — do not chase non-blocking LOWs)

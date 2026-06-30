@@ -117,7 +117,7 @@ python3 -m sail plan --target . --run-dir "$SESSION_DIR" <<< "$SPEC"
 - **exit 0** — no blocking (CRITICAL/HIGH) risks → the plan is clean, proceed.
 - **exit 1** — blocking risks present (or an unusable backend on a non-empty spec, or an empty spec) → revise and re-run.
 
-**Bounded convergence loop (single lens, max 3 rounds):** while `sail plan` exits 1, present the plan + its blocking risks to the user, revise the spec/approach, and re-run — up to **3 rounds**. If still blocking after 3 rounds, resolve the terminus via the **terminus guard** (see § Unattended mode): compute `ACTION=$(python3 -m sail terminus --unattended "$UNATTENDED" --interactive "$INTERACTIVE")` and branch **before any prompt** — `ask` → present `plan.json` + its risks and ask the user (continue / abort / proceed-advisory `--advisory`); `auto` → consult `python3 -m sail converge` (no prompt); `park-loud` → `sail handoff` and stop. Do not loop unbounded, and never auto-select a recommended option on a denied/unrenderable prompt.
+**Bounded convergence loop (single lens):** while `sail plan` exits 1, present the plan + its blocking risks to the user, revise the spec/approach, and re-run — bounded by the `sail converge` guardrails (the hard `--max-rounds` ceiling backstops the cheap plan passes; the trend-stall/cost guards primarily bound the expensive review loop — see § Convergence guardrails). If still blocking at the ceiling, resolve the terminus via the **terminus guard** (see § Unattended mode): compute `ACTION=$(python3 -m sail terminus --unattended "$UNATTENDED" --interactive "$INTERACTIVE")` and branch **before any prompt** — `ask` → present `plan.json` + its risks and ask the user (continue / abort / proceed-advisory `--advisory`); `auto` → consult `python3 -m sail converge` (no prompt); `park-loud` → `sail handoff` and stop. Do not loop unbounded, and never auto-select a recommended option on a denied/unrenderable prompt.
 
 **`--plan-adversary` risk-gated escalation (#58).** Default plan is **single-pass** (the self-check above is free; most plans stay 1-pass — no uniform weight). When the change is **plan-risky** — it touches user-facing instructions/remediation, or reconciles multiple files/lists — `/sail` escalates to a **one-shot adversarial plan pass**: an independent second pass over the same spec with adversarial framing (it re-derives the gaps a careless author would miss; like `--dual-lens`'s second lens, it reviews independently rather than grading the first pass's output). The auto-trigger fires only on the strong #55 failure shape — a remediation/instruction signal **and** a file/list-reconciliation signal co-occurring, or an unambiguous failure phrase — so ordinary specs ("run the tests", "improve the error message") stay single-pass. Escalation fires when `--plan-adversary` is passed **or** the auto-trigger heuristic (`is_plan_risky`) detects a plan-risky spec, mirroring the review stage's `--dual-lens` escalation:
 
@@ -178,7 +178,7 @@ This runs the deterministic gates (ruff, mypy, pytest, bandit, semgrep, pip-audi
 
 **Plan↔review traceability spine (#47).** Because Stage 0 put `plan.json` in this same run-dir, the review stage reads its `acceptance_criteria` and records per-criterion `met / unmet / unknown` in `review.json`'s `plan_verification` block (the define-at-plan → verify-at-review spine). An **unmet** AC blocks (the spine has teeth); an absent plan is non-blocking (`no-plan`); a malformed `plan.json` **fails closed** (`status: error`, blocks) — it is never silently treated as no-plan.
 
-**Bounded convergence loop (review stage; max 3 rounds — driver-owned).** A non-zero exit means a gate failed, the review found CRITICAL/HIGH findings, or an AC is unmet. Mirror the plan stage's loop: fix the surfaced findings, **record a per-finding disposition each round** (`addressed` / `deferred` / `rejected` + a one-line rationale, keyed by the finding's stable `id` from `review.json`), and re-run `sail run --diff` — up to **3 rounds**. If still blocking after 3 rounds, resolve the terminus via the **terminus guard** (see § Unattended mode): compute `ACTION=$(python3 -m sail terminus --unattended "$UNATTENDED" --interactive "$INTERACTIVE")` and branch **before any prompt** — `ask` → present `review.json`'s findings + `plan_verification` and ask the user (continue / abort / proceed-advisory); `auto` → consult `python3 -m sail converge` (no prompt; honor `proceed`/`revise`/`park`/`proceed-hardening`/`proceed-dissent`); `park-loud` → `sail handoff` and stop. The single-invocation exit code is unchanged; the driver owns the re-run-after-fix loop, and never auto-selects a recommended option on a denied/unrenderable prompt.
+**Bounded convergence loop (review stage — driver-owned).** A non-zero exit means a gate failed, the review found CRITICAL/HIGH findings, or an AC is unmet. Mirror the plan stage's loop: fix the surfaced findings, **record a per-finding disposition each round** (`addressed` / `deferred` / `rejected` + a one-line rationale, keyed by the finding's stable `id` from `review.json`), and re-run `sail run --diff`. The loop is bounded by the `sail converge` guardrails (trend-stall + cost backstop, with the hard `--max-rounds` ceiling as the ultimate backstop — see § Convergence guardrails), **not** a fixed round count: a genuinely-converging run keeps going while a churning or runaway one is parked. If still blocking when a guard fires, resolve the terminus via the **terminus guard** (see § Unattended mode): compute `ACTION=$(python3 -m sail terminus --unattended "$UNATTENDED" --interactive "$INTERACTIVE")` and branch **before any prompt** — `ask` → present `review.json`'s findings + `plan_verification` and ask the user (continue / abort / proceed-advisory); `auto` → consult `python3 -m sail converge` (no prompt; honor `proceed`/`revise`/`park`/`proceed-hardening`/`proceed-dissent`); `park-loud` → `sail handoff` and stop. The single-invocation exit code is unchanged; the driver owns the re-run-after-fix loop, and never auto-selects a recommended option on a denied/unrenderable prompt.
 
 **Per-round fix delegation (`SAIL_BUILD_CMD`, #95).** When `SAIL_BUILD_CMD` is set, route each convergence round's fixes through the same build backend instead of re-implementing inline-on-Opus every round (the dominant per-round wall-clock cost the ab-86b A/B measured):
 
@@ -382,9 +382,38 @@ infinite tail otherwise). Green is done.
 (plan or review), after a round's `sail …` exits, the driver asks the oracle what to do:
 
 ```bash
-python3 -m sail converge --rc "$RC" --round "$ROUND" --run-dir "$SESSION_DIR"   # default --max-rounds 3
+python3 -m sail converge --rc "$RC" --round "$ROUND" --run-dir "$SESSION_DIR" --target .
 # prints exactly one of: proceed | revise | park | proceed-hardening | proceed-dissent
+# and surfaces per-run cost (wall-time elapsed) to stderr each call.
 ```
+
+**Convergence guardrails — trend-stall + cost backstop + hard ceiling (#130).** The old fixed
+3-round cap conflated true non-convergence (stop) with a deep-but-converging run (continue) and a
+just-introduced regression (continue). It is replaced by a layered guard, evaluated **on a non-green
+round only, AFTER the commit-eligible floors** (reappearance / spec-conflict / materiality) so a
+mechanically-sound run still gets to `proceed-hardening`/`proceed-dissent` rather than being parked:
+
+- **cost-backstop (the PRIMARY runaway guard).** Wall-clock elapsed since the run started —
+  `elapsed_seconds(run_dir)` measures from the **later** of `run-state.json` `started_at` and the
+  most-recent decision-log resume marker, so a parked-then-resumed run gets a fresh budget instead
+  of tripping instantly on a stale start — past `SAIL_COST_CEILING_SECONDS` → `park`. The elapsed
+  value is **surfaced to stderr** on every `sail converge` call (the per-run cost line). It
+  **fails OPEN**: an unset/invalid ceiling is inert, and a missing/unparseable start time never
+  parks (a PARK guard must never park on bad data — the hard ceiling below is the guaranteed catch).
+  `/sail` cannot observe subagent **token** counts from `sail/` Python (only the harness can), so the
+  deterministic backstop and the surfaced per-run cost are **wall-time**; tokens are shown only if
+  the driver supplies them.
+- **trend-stall (the convergence judgment).** `park` when, for `SAIL_TREND_WINDOW` (default **3**)
+  consecutive rounds, the max blocking severity (CRITICAL>HIGH) did **not** drop **AND** no finding
+  was `addressed` — i.e. true churn. A round that drops severity **or** addresses a finding resets
+  the streak (stays "converging"), so a run that fixes a HIGH and surfaces a smaller/distinct
+  finding is **not** parked. The streak is reconstructed from a durable per-round ledger
+  (`trend-ledger.jsonl`, hydrated from each round's `review.json` + decision-log under the
+  **strong** `review_current_and_clean` freshness check), so a resumed process never resets it.
+- **hard ceiling (the ULTIMATE backstop).** `round_num >= --max-rounds` (default raised **above 3**,
+  overridable via the `SAIL_HARD_ROUND_CEILING` env var when `--max-rounds` is not passed)
+  → `park`. Round count is no longer the convergence judgment — only the final, always-available
+  backstop for any path the trend/cost guards miss.
 
 - `converged-green` → `proceed` — `rc == 0`; green, stop (rule **b**: never chase non-blocking
   LOWs past green).
@@ -412,7 +441,8 @@ python3 -m sail converge --rc "$RC" --round "$ROUND" --run-dir "$SESSION_DIR"   
   branch; fall back to park-with-handoff if the issue cannot be opened). Any other unresolved
   blocking finding keeps the run on `revise`.
 - `revise` — `rc != 0` and none of the named stop reasons above apply; fix the surfaced blocking
-  findings and re-run. The 3-round cap remains the backstop for true non-convergence.
+  findings and re-run. The trend-stall + cost backstop are the primary guards, with the hard
+  ceiling (`--max-rounds`) as the ultimate backstop for true non-convergence.
 
 - **Disposition-before-converge ordering is load-bearing.** The driver records current-round
   dispositions before it asks the oracle. The oracle then reads the shared `decision-log.md`/
@@ -450,13 +480,15 @@ python3 -m sail converge --rc "$RC" --round "$ROUND" --run-dir "$SESSION_DIR"   
 
 Together: `converged-green` and `genuine-oscillation` are the two park/stop reasons for ordinary
 convergence, while `never-dry-hardening` is the red-but-eligible commit exception. `sail converge`
-still fails closed on malformed or mismatched audit state; the 3-round PARK cap remains the backstop
-for true non-convergence on any path not covered by those named reasons.
+still fails closed on malformed or mismatched audit state; the trend-stall + cost backstop (with the
+hard `--max-rounds` ceiling as the ultimate backstop) park true non-convergence on any path not
+covered by those named reasons.
 
 Together: **(a)** stops the driver burning rounds on a risk the plan already resolves, **(b)** stops
-it chasing LOWs past green, and **(c)** the `sail converge` oracle + 3-round-cap PARK is the
-deterministic backstop for true non-convergence — keeping the autonomous path `/surf` depends on
-from wasting rounds or parking sound work.
+it chasing LOWs past green, and **(c)** the `sail converge` oracle's trend-stall + cost backstop +
+hard-ceiling PARK is the deterministic backstop for true non-convergence — keeping the autonomous
+path `/surf` depends on from wasting rounds (or, since #130, from parking a genuinely-converging run
+at a fixed round count) while still never letting a churning or runaway run loop forever.
 
 ## Unattended mode (standalone `/sail --unattended <issue>`, #108)
 
@@ -500,7 +532,7 @@ ever issued and comes back **denied/unavailable**, the driver must `sail handoff
 
 **Convergence termini (unattended).** Record current-round dispositions, then consult the oracle (no
 prompt). On `proceed` / `proceed-hardening` → commit (Stage 4). On `proceed-dissent` → the
-tracked-dissent terminus below. On `park` (oscillation / 3-round cap) → write the WIP handoff and
+tracked-dissent terminus below. On `park` (oscillation / trend-stall / cost-backstop / hard ceiling) → write the WIP handoff and
 stop.
 
 **Spec-premise-conflict → proceed-with-tracked-dissent (the #108 design decision).** When a red-team

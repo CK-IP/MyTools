@@ -33,7 +33,7 @@ fi
 # --- Contract checks ---
 assert_grep 'sail plan' "references the auto-firing plan stage"
 assert_grep 'converg|loop' "mentions a bounded convergence loop"
-assert_grep '3 rounds|max[^[:alnum:]]*3|3[^[:alnum:]]*max' "caps convergence at 3 rounds"
+assert_grep 'trend.stall|cost.backstop|hard ceiling|max[_-]?rounds' "bounds convergence (trend-stall / cost backstop / hard ceiling — #130)"
 if grep -qi 'skipped' "$SKILL" 2>/dev/null && grep -qiE 'fail|halt|stop' "$SKILL" 2>/dev/null; then
   :
 else

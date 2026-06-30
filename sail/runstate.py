@@ -24,9 +24,13 @@ class RunState:
     @classmethod
     def init(cls, run_dir, gate_names):
         os.makedirs(run_dir, exist_ok=True)
+        started_at = _utc_now_iso()
         data = {
             "run_id": uuid.uuid4().hex,
-            "started_at": _utc_now_iso(),
+            "started_at": started_at,
+            # The cost-backstop clock anchor; reset only on a genuine cross-session resume
+            # (#130 review r3). Same-session convergence rounds keep measuring cumulatively.
+            "cost_anchor_at": started_at,
             "schema_version": SCHEMA_VERSION,
             "gates": [
                 {
