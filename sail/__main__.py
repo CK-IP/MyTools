@@ -7,6 +7,17 @@ import sys
 from sail.runner import run, run_tests
 
 
+def _hard_round_ceiling_default() -> int:
+    raw = os.environ.get("SAIL_HARD_ROUND_CEILING")
+    if raw is None:
+        return 10
+    try:
+        ceiling = int(raw)
+    except (TypeError, ValueError):
+        return 10
+    return ceiling if ceiling > 0 else 10
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="sail")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -76,7 +87,7 @@ def main() -> int:
     converge_parser = subparsers.add_parser("converge")
     converge_parser.add_argument("--rc", type=int, required=True)
     converge_parser.add_argument("--round", type=int, required=True)
-    converge_parser.add_argument("--max-rounds", type=int, default=3)
+    converge_parser.add_argument("--max-rounds", type=int, default=_hard_round_ceiling_default())
     converge_parser.add_argument("--run-dir")
     converge_parser.add_argument("--target")
 
@@ -139,12 +150,27 @@ def main() -> int:
         return run_land(args.run_dir, args.issue, args.title, args.pr, args.prefix)
     if args.command == "converge":
         from sail.convergence import (
+            cost_ceiling_seconds,
+            cost_exceeded,
+            cost_surface_line,
+            elapsed_seconds,
+            hydrate_trend_row,
             PARK,
+            read_trend,
             loop_decision,
             materiality_floor,
             reappeared_dispositioned,
+            trend_no_progress_streak,
+            trend_window,
             spec_conflict_floor,
         )
+
+        target_root = args.target or os.getcwd()
+        elapsed = elapsed_seconds(args.run_dir) if args.run_dir else None
+        if args.run_dir:
+            hydrate_trend_row(args.run_dir, target_root, args.round)
+            if elapsed is not None:
+                print(cost_surface_line(elapsed), file=sys.stderr)
 
         if args.rc == 0:
             print("proceed")
@@ -185,6 +211,31 @@ def main() -> int:
                 )
                 print("proceed-hardening")
                 return 0
+        trend_rows = read_trend(args.run_dir)
+        ceiling = cost_ceiling_seconds()
+        if cost_exceeded(elapsed, ceiling):
+            print(
+                f"cost-backstop: elapsed {elapsed:.3f}s exceeded ceiling {ceiling:.3f}s",
+                file=sys.stderr,
+            )
+            print(PARK)
+            return 0
+        window = trend_window()
+        streak = trend_no_progress_streak(trend_rows)
+        if streak >= window:
+            print(
+                f"trend-stall: no-progress streak {streak} >= window {window}",
+                file=sys.stderr,
+            )
+            print(PARK)
+            return 0
+        if decision == PARK:
+            # The hard round ceiling is the ultimate backstop; give it a distinct stderr
+            # stop-reason so all three PARK guards are symmetrically observable (AC#5).
+            print(
+                f"hard-ceiling: round {args.round} reached --max-rounds {args.max_rounds}",
+                file=sys.stderr,
+            )
         print(decision)
         return 0
 

@@ -14,6 +14,8 @@ from sail import checkers as checkers_mod
 from sail.checkers import build_registry, CheckerContext
 from sail.decisionlog import DecisionLog
 from sail.runstate import RunState, _utc_now_iso
+from sail.convergence import is_cross_session_resume
+from sail.codexlatch import session_token
 
 
 def _default_run_id() -> str:
@@ -302,6 +304,9 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
     # resumed run that changed --target/--diff does NOT reuse a stale review (see review block).
     prior_target = state.data.get("target")
     prior_diff_ref = state.data.get("diff_ref")
+    # Session identity gates the cost-clock resume marker (see is_cross_session_resume).
+    prior_session = state.data.get("last_session")
+    current_session = session_token()
 
     if target is None:
         target = "."
@@ -320,10 +325,16 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
     mode = "diff" if diff_ref else "baseline" if baseline_dir else "whole-repo"
     state.data["mode"] = mode
     state.data["diff_ref"] = diff_ref
+    state.data["last_session"] = current_session
+    if is_cross_session_resume(resumed, prior_session, current_session):
+        # A genuine cross-session re-entry (the run was parked and a NEW session picked it up)
+        # gets a fresh cost budget; a same-session round re-run does not (#130 review r3).
+        state.data["cost_anchor_at"] = _utc_now_iso()
     state.save()
 
     decision_log = DecisionLog(run_dir)
     if resumed:
+        # Audit signal: every re-entry of an existing run-dir records a resume marker.
         decision_log.resume_marker()
 
     baseline_root = None

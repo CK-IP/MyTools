@@ -363,7 +363,11 @@ proc = converge("--rc", "0", "--round", "1")
 assert proc.stdout.strip() == "proceed", proc.stdout
 proc = converge("--rc", "1", "--round", "1")
 assert proc.stdout.strip() == "revise", proc.stdout
+# #130: round 3 NO LONGER parks at the default — the hard ceiling was raised above 3. Park now
+# requires reaching the hard ceiling (or a trend-stall / cost backstop, covered by test_sail_130).
 proc = converge("--rc", "1", "--round", "3")
+assert proc.stdout.strip() == "revise", proc.stdout
+proc = converge("--rc", "1", "--round", "10", "--max-rounds", "10")
 assert proc.stdout.strip() == "park", proc.stdout
 
 print("PASS: Python contract checks for issue #103")
