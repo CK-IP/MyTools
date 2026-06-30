@@ -280,9 +280,10 @@ guards are evaluated in this order:
 3. **materiality → proceed-hardening** — the deterministic audit is clean and every blocking finding is `deferred` + judged immaterial (#103).
 4. **cost-backstop → park (#130)** — wall-clock elapsed > `SAIL_COST_CEILING_SECONDS` (the PRIMARY runaway guard). Elapsed is measured by `elapsed_seconds(run_dir)` from the **later** of `run-state.json` `started_at` and the most-recent decision-log resume marker, so a parked-then-resumed run gets a fresh budget. **Fails open**: unset/invalid ceiling is inert, unparseable start never parks.
 5. **trend-stall → park (#130)** — `SAIL_TREND_WINDOW` (default 3) consecutive churn rounds (`max_blocking_severity_rank` did not drop AND nothing `addressed`). Streak reconstructed from the durable `trend-ledger.jsonl` ledger (resume-safe), hydrated only under the strong `review_current_and_clean` freshness check.
-6. **hard ceiling → park (#130)** — `round_num >= --max-rounds` (default raised above 3, overridable via `SAIL_HARD_ROUND_CEILING`), the ultimate always-available backstop.
+6. **same-area saturation → advisory only** — `SAIL_SATURATION_WINDOW` (default 3) consecutive rounds concentrated on one dominant file area cause a `same-area-saturation:` stderr callout naming the area and streak. It is a steer to widen the budget / rethink the design, never a park, never an exit-code change, and is distinct from the by-id `genuine-oscillation` PARK.
+7. **hard ceiling → park (#130)** — `round_num >= --max-rounds` (default raised above 3, overridable via `SAIL_HARD_ROUND_CEILING`), the ultimate always-available backstop.
 
-The commit-eligible floors (2–3) are checked **before** the PARK backstops (4–6) so a
+The commit-eligible floors (2–3) are checked **before** the PARK backstops (4, 5, 7) so a
 mechanically-sound run still commits rather than being parked. `/sail` cannot observe subagent token
 counts from `sail/` Python, so cost is measured/surfaced as wall-time (tokens only if the driver
 supplies them).

@@ -150,6 +150,7 @@ def main() -> int:
         return run_land(args.run_dir, args.issue, args.title, args.pr, args.prefix)
     if args.command == "converge":
         from sail.convergence import (
+            area_saturated,
             cost_ceiling_seconds,
             cost_exceeded,
             cost_surface_line,
@@ -160,6 +161,8 @@ def main() -> int:
             loop_decision,
             materiality_floor,
             reappeared_dispositioned,
+            saturation_window,
+            same_area_saturation_streak,
             trend_no_progress_streak,
             trend_window,
             spec_conflict_floor,
@@ -177,7 +180,16 @@ def main() -> int:
             return 0
 
         decision = loop_decision(args.rc, args.round, args.max_rounds)
+        trend_rows = read_trend(args.run_dir)
         if args.run_dir:
+            window = saturation_window()
+            if area_saturated(trend_rows, window):
+                streak = same_area_saturation_streak(trend_rows)
+                area = trend_rows[-1].get("area")
+                print(
+                    f"same-area-saturation: area={area} streak={streak} window={window}",
+                    file=sys.stderr,
+                )
             reappeared = reappeared_dispositioned(args.run_dir, args.round)
             if reappeared:
                 print(
@@ -211,7 +223,6 @@ def main() -> int:
                 )
                 print("proceed-hardening")
                 return 0
-        trend_rows = read_trend(args.run_dir)
         ceiling = cost_ceiling_seconds()
         if cost_exceeded(elapsed, ceiling):
             print(
