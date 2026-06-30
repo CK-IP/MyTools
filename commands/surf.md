@@ -138,6 +138,24 @@ mode it started in — so mode stays a charter-anchored fact, not a volatile cha
 still **no `--flag`**: flipping mode is an interactive keystroke, in keeping with the no-flags
 principle.
 
+### Step 0a: Choose the run-style - Sequential or Parallel
+
+After the mode choice, ask a second `AskUserQuestion`:
+
+> "How should /surf build this run?"
+
+- **Sequential** - the explicit default, and identical to today. It keeps the one-issue-at-a-time
+  behavior already shipped.
+- **Parallel** - build in waves, with a manual concurrency cap.
+
+Sequential is the default run-style and behaves exactly as today. Parallel is only chosen
+interactively, never by a `--flag`, and it prompts for a **concurrency cap** in the inclusive
+range **2–10**. Values outside 2–10 are rejected and the prompt repeats until a valid integer is
+entered.
+
+When Parallel is selected, `/surf` uses `python3 -m sail waves` to compute each wave and keep the
+number of live builds under the cap.
+
 ---
 
 ## Start gate
@@ -481,6 +499,11 @@ error to surface, not to build through.
    #    (On resume, if the spawn-ts file is
    #    absent for an in-flight issue, treat it as a fresh launch and record one before polling.)
    ```
+   **Parallel bookkeeping.** In Parallel mode the supervisor writes `.surf/runs/<issue>/.in-flight`
+   when the worker is launched. If that worker returns green but is waiting for the serial merge
+   gate, the in-flight marker is replaced with `.surf/runs/<issue>/.awaiting-merge` until the
+   merge-time re-check runs.
+
    `/sail <issue> --unattended` is the worker's default engine (`/ship` is the optional heavier
    engine — see Step 8). It runs `/sail`'s **own front door** with whatever review allocation the
    environment carries; the **live shipped default** (`home/settings.reference.json`, per #83) is
@@ -835,6 +858,29 @@ loop ends when a re-scan finds no such issue — i.e. every remaining open issue
 Record the **termination cause** — **board-empty** (no build-appropriate issues left) vs a
 **cost/time cap** hit — for the wrap-up, so a capped run is never mistaken for a drained board.
 
+### Parallel wave scheduler
+
+When the run-style is **Parallel**, the board is worked in **waves**. A wave is the set of
+issues whose dependencies are all already merged to `main` in the Step 5b graph. `/surf` computes
+the next scheduler tick with a **single composed call**, `python3 -m sail waves state`, passing it
+the Step 5b dependency graph, the manual `--cap`, the set already `--merged` to `main`, and — this
+is load-bearing — the live issues: those `--in-flight` (a worker is building) and those
+`--awaiting-merge` (built green, queued for the serial merge re-check). `waves state` returns both
+the `eligible` set and the `launchable` set in one shot:
+
+- **Eligibility excludes every live issue.** A wave-eligible issue has all its deps merged to
+  `main` **and** is not itself in-flight or awaiting-merge — so an issue already being worked is
+  never re-offered or duplicate-launched. (Passing the in-flight + awaiting-merge sets is mandatory;
+  the lower-level `waves eligible`/`waves launchable` subcommands exist but the composed `waves
+  state` call is what `/surf` drives, precisely because it cannot forget to exclude the live set.)
+- **The cap counts concurrent _builds_.** `launchable` never exceeds the manual cap counting only
+  the **in-flight builds**; an awaiting-merge branch has finished building, so it holds no build
+  slot (it is excluded from eligibility, but it does not starve the cap).
+
+`/surf` launches the `launchable` issues, then after **each merge** re-runs `waves state` against
+the updated `main`, so any issue newly unblocked by that merge joins the **next** wave. Sequential
+mode skips this entirely and keeps today's one-at-a-time behavior.
+
 ---
 
 ## Worker delegation (headless worker for every issue)
@@ -966,6 +1012,12 @@ Step 8, for the full contract):
   non-pass gate, a CRITICAL/HIGH finding, an unmet AC, a stale/garbage/missing artifact, or any
   issue with an unanswered question past its deadline the charter says `/surf` may *not* decide — is
   parked with a written note, never merged.
+
+**Parallel merge safety.** In Parallel mode, a green worker does **not** merge immediately. `/surf`
+writes `.surf/runs/<issue>/.awaiting-merge`, then immediately before the merge it reruns
+`python3 -m sail run --diff main` against the current `main` so the branch is re-validated against
+the moved baseline. Green at re-check time means one `--no-ff` merge and a logged SHA; not-green
+means park the branch instead. Sequential mode keeps the merge path unchanged and stays one-at-a-time.
 
 **Safety property — the contract is fail-closed.** The decision **ignores the worker process exit
 code** (informational only — it reflects the `claude -p` process, not `/sail`'s commit-vs-park
@@ -1131,6 +1183,10 @@ generation-set by the shared suffix (the revive watcher and Resume rely on this 
   - whether it is reversible,
   - and, for a merge, the **merge SHA**.
 
+For Parallel runs, the journal also records durable phase markers: `.surf/runs/<issue>/.in-flight`
+while a worker is live, and `.surf/runs/<issue>/.awaiting-merge` after a green build has passed the
+worker phase but is waiting for the serial merge re-check.
+
 (Parked issues are also recorded in `.surf/parked-issues.md` per §7, the source §14 reads from.)
 
 The merge SHA is the recovery hinge. Because each green issue lands as one `--no-ff` commit with
@@ -1286,7 +1342,10 @@ keep alive, so there is nothing special about a cap versus any other stop.
   **before** any Step 7c re-scan so the run does not re-admit its own refinements). Then
   **cross-check against git**: for each issue the journal says was
   merged, confirm `sail/<issue>` is actually merged into `main` (capture the SHA); for each in-flight
-  issue, check whether the `sail/<issue>` branch exists. From that, rebuild the merged-issue→SHA map,
+  issue, check whether the `sail/<issue>` branch exists. Also reconcile the per-issue markers:
+  `.surf/runs/<issue>/.in-flight` means the issue needs to be re-queued, while
+  `.surf/runs/<issue>/.awaiting-merge` means the build finished green and should resume at the
+  serial merge re-check, not at the worker launch. From that, rebuild the merged-issue→SHA map,
   the parked set, the **generation-set + deferred-backlog set** (whole-board mode), and the **next
   unfinished issue**. **Re-rank any Step 7c auto-pickup issue into dependency order before launch**
   (re-run the Step 10 dependent-issue guard) so a parent discovered mid-run never sequences after a
@@ -1369,6 +1428,10 @@ not run headless — a premise now verified false).
   (self-healing resume, Step 15), or a superseded one (tombstoned at Step 0-pre) silences the
   watcher. To stop a mid-board run you do **not** want resumed, either `touch` the done-marker
   (`.surf/<charter>-done`) or bootout the LaunchAgent.
+- **Resume reconciliation is marker-aware.** If the latest charter describes a Parallel run, the
+  resume reader replays `.surf/runs/<issue>/.in-flight` and `.surf/runs/<issue>/.awaiting-merge`
+  before any new launch: in-flight gets re-queued, awaiting-merge resumes at the serial merge
+  re-check, and only then does `/surf` decide whether more work remains.
 - **Reset capture (conservative floor).** When the relaunched run hits the cap again, the watcher
   parses the reset time from the run's **own output** (a structured signal, not pane-scraping) and
   arms `resume-after = max(parsed_reset, now + MIN_BACKOFF)`. If the reset time is **unparseable**,

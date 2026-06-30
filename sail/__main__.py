@@ -53,6 +53,29 @@ def main() -> int:
     plan_parser.add_argument("--plan-adversary", action="store_true")
     plan_parser.add_argument("--grounded-plan", action="store_true")
 
+    waves_parser = subparsers.add_parser("waves")
+    waves_subparsers = waves_parser.add_subparsers(dest="waves_command", required=True)
+
+    waves_cap_parser = waves_subparsers.add_parser("cap")
+    waves_cap_parser.add_argument("--value", required=True)
+
+    waves_eligible_parser = waves_subparsers.add_parser("eligible")
+    waves_eligible_parser.add_argument("--graph", required=True)
+    waves_eligible_parser.add_argument("--merged", default="")
+    waves_eligible_parser.add_argument("--exclude", default="")
+
+    waves_launchable_parser = waves_subparsers.add_parser("launchable")
+    waves_launchable_parser.add_argument("--eligible", required=True)
+    waves_launchable_parser.add_argument("--cap", required=True)
+    waves_launchable_parser.add_argument("--in-flight", dest="in_flight", default="")
+
+    waves_state_parser = waves_subparsers.add_parser("state")
+    waves_state_parser.add_argument("--graph", required=True)
+    waves_state_parser.add_argument("--cap", required=True)
+    waves_state_parser.add_argument("--merged", default="")
+    waves_state_parser.add_argument("--in-flight", dest="in_flight", default="")
+    waves_state_parser.add_argument("--awaiting-merge", dest="awaiting_merge", default="")
+
     build_parser = subparsers.add_parser("build")
     build_parser.add_argument("--target")
     build_parser.add_argument("--run-dir")
@@ -139,6 +162,9 @@ def main() -> int:
     if args.command == "plan":
         from sail.plan import run_plan
         return run_plan(args.target or ".", args.run_dir, args.advisory, plan_adversary=args.plan_adversary, grounded_plan=args.grounded_plan)
+    if args.command == "waves":
+        from sail.waves import run_waves
+        return run_waves(args)
     if args.command == "build":
         from sail.build import run_build
         return run_build(args.target or ".", args.run_dir, mode=args.mode, round=args.round, change_class=args.change_class)
