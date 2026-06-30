@@ -231,6 +231,12 @@ python3 -m sail review --target DIR --diff <git-ref> [--run-dir DIR] [--advisory
   diff's core behavior change would be caught by the new/changed tests, flagging a vacuous/tautological
   test as a `category: test-adequacy` finding (severity reviewer-assigned; no second LLM call). It
   no-ops on test-free diffs. The heavyweight mutation-testing tool run is deferred to `/fortify`.
+- **Build-side mutation verification (#131):** `python3 -m sail mutation-verify` is the executable
+  complement to the inline #70 probe. It is a no-op unless the diff is a bug-fix, has at least one
+  new/changed test file, and has at least one non-test source change. When it fires, it reverts only
+  the source hunks with `git apply -R`, reruns the new/changed tests, restores the tree in
+  `try/finally`, and records vacuous tests as `category: test-adequacy` findings tagged
+  `lens: mutation-verify` in `review.json`.
 - **Gate semantics:** exits **1** when any CRITICAL/HIGH finding is present (or when the backend
   response is unusable on a non-empty diff — errors never silently pass); exits **0** under
   `--advisory` (findings still recorded) or when there are no blocking findings.

@@ -13,6 +13,7 @@ import tempfile
 from sail import codexlatch
 from sail.build import _backend_family
 from sail.decisionlog import DecisionLog
+from sail.mutation_verify import merge_mutation_verify_findings
 
 DEFAULT_BACKEND = ["claude", "-p"]
 
@@ -1310,6 +1311,7 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
                 log.review_marker(
                     "red-team escalation triggered (high-stakes) but no SAIL_REDTEAM_CMD — single-lens")
 
+    findings = merge_mutation_verify_findings(findings, run_dir, result.get("diff_hash"))
     counts = severity_counts(findings)
 
     # plan_verification (#47): the traceability spine. A malformed plan.json fails closed

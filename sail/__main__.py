@@ -48,6 +48,13 @@ def main() -> int:
     build_parser.add_argument("--mode", choices=["build", "fix"], default="build")
     build_parser.add_argument("--round", type=int, default=1)
 
+    mutation_parser = subparsers.add_parser("mutation-verify")
+    mutation_parser.add_argument("--target")
+    mutation_parser.add_argument("--diff", required=True)
+    mutation_parser.add_argument("--run-dir")
+    mutation_parser.add_argument("--title")
+    mutation_parser.add_argument("--bug-fix", action="store_true")
+
     subparsers.add_parser("spec")
 
     isolate_parser = subparsers.add_parser("isolate")
@@ -109,6 +116,13 @@ def main() -> int:
     if args.command == "build":
         from sail.build import run_build
         return run_build(args.target or ".", args.run_dir, mode=args.mode, round=args.round)
+    if args.command == "mutation-verify":
+        from sail.mutation_verify import run_mutation_verify
+
+        rc, _payload, _artifact_path = run_mutation_verify(
+            args.target or ".", args.diff, args.run_dir, bug_fix=args.bug_fix, title=args.title
+        )
+        return rc
     if args.command == "spec":
         from sail.spec import run_spec
         return run_spec()
