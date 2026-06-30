@@ -108,6 +108,20 @@ def main() -> int:
     handoff_parser.add_argument("--issue")
     handoff_parser.add_argument("--finding-ids", default="")
 
+    # #113: minor-finding disposition — the driver consults the deterministic inline-fix ceiling
+    # and records the durable inline-fix visibility marker through this subcommand.
+    disposition_parser = subparsers.add_parser("disposition")
+    disposition_parser.add_argument("--files", type=int, default=0)
+    disposition_parser.add_argument("--public-interface", dest="public_interface", action="store_true")
+    disposition_parser.add_argument("--adds-dependency", dest="adds_dependency", action="store_true")
+    disposition_parser.add_argument("--adds-behavior", dest="adds_behavior", action="store_true")
+    disposition_parser.add_argument("--changed-lines", dest="changed_lines", type=int, default=None)
+    disposition_parser.add_argument("--max-lines", dest="max_lines", type=int, default=None)
+    disposition_parser.add_argument("--record-inline-fix", dest="record_inline_fix", action="store_true")
+    disposition_parser.add_argument("--run-dir")
+    disposition_parser.add_argument("--file")
+    disposition_parser.add_argument("--summary")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -148,6 +162,9 @@ def main() -> int:
     if args.command == "land":
         from sail.lifecycle import run_land
         return run_land(args.run_dir, args.issue, args.title, args.pr, args.prefix)
+    if args.command == "disposition":
+        from sail.disposition import run_disposition
+        return run_disposition(args)
     if args.command == "converge":
         from sail.convergence import (
             area_saturated,

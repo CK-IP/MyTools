@@ -221,7 +221,20 @@ def _render_gates(counts):
     return " · ".join(f"{k}: {counts.get(k, 0)}" for k in order)
 
 
-def land_comment(issue, review_data, resolutions, review_state="ok"):
+def _render_inline_fixes(inline_fixes):
+    """Render the inline opportunistic-fix narrative section (#113). `inline_fixes` is the list
+    of {file, summary} dicts from DecisionLog.read_inline_fixes. Never raises."""
+    lines = []
+    for fix in inline_fixes or []:
+        if not isinstance(fix, dict):
+            continue
+        file = _safe_text(fix.get("file", ""))
+        summary = _safe_text(fix.get("summary", ""))
+        lines.append(f"- `{file}` — {summary}")
+    return lines
+
+
+def land_comment(issue, review_data, resolutions, review_state="ok", inline_fixes=None):
     """Build the closing-comment markdown — a pure function (no I/O).
 
     Reuses the already-produced review evidence (AC verdicts + findings + gate counts); it
@@ -245,6 +258,14 @@ def land_comment(issue, review_data, resolutions, review_state="ok"):
         out += ["### Findings"] + _render_findings(findings, resolutions) + [""]
         counts = review_data.get("counts") if isinstance(review_data, dict) else None
         out += ["### Gate results", _render_gates(counts), ""]
+
+        # #113: surface any TRIVIAL in-blast-radius opportunistic fixes made inline, so the
+        # "always logged/surfaced — no silent diff growth" guarantee reaches the delivery comment.
+        inline_lines = _render_inline_fixes(inline_fixes)
+        if inline_lines:
+            out += ["### Inline opportunistic fixes",
+                    "_Trivial in-blast-radius corrections made while editing "
+                    "(also corrected X while editing Y):_"] + inline_lines + [""]
 
         # Review degradation (#116): if a cross-family lens the diff gated for did not run, the
         # closing report must SAY SO (never silent). Derived from review.json's own per-round
@@ -289,15 +310,18 @@ def run_land(run_dir, issue, title, pr_mode=False, prefix="sail"):
     review_data, review_state = _load_review(run_dir)
 
     resolutions = {}
+    inline_fixes = []
     try:
         from sail.decisionlog import DecisionLog
-        resolutions = DecisionLog(run_dir).read_resolutions()
+        log = DecisionLog(run_dir)
+        resolutions = log.read_resolutions()
+        inline_fixes = log.read_inline_fixes()
     except (ValueError, OSError):
         # Fail-graceful (matches _load_review): a corrupt/undecodable decision-log must not
         # crash the unattended /surf land step — degrade to no dispositions, never raise.
         pass
 
-    comment = land_comment(iss, review_data, resolutions, review_state)
+    comment = land_comment(iss, review_data, resolutions, review_state, inline_fixes=inline_fixes)
     commit_msg = land_commit_message(title, iss, prefix)
 
     os.makedirs(run_dir, exist_ok=True)

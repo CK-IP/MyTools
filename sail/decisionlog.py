@@ -136,6 +136,35 @@ class DecisionLog:
             f"- gate-reuse: {int(count)} already-green gate(s) reused ({_sanitize_text(reason)})"
         )
 
+    def inline_fix_marker(self, file, summary):
+        # #113: the DURABLE visibility record for a TRIVIAL in-blast-radius opportunistic fix made
+        # inline (the guard against silent diff growth — "also corrected X while editing Y"). It is
+        # a NARRATIVE marker, deliberately NOT a finding_resolution: read_resolutions never returns
+        # it, so it can never be misread by the convergence buckets (materiality floor keys on
+        # `deferred`, oscillation on rejected/deferred). Parallels plan_marker/codex_marker.
+        self._append_marker(
+            f"- inline-fix: [{_sanitize_text(file)}] {_sanitize_text(summary)}"
+        )
+
+    def read_inline_fixes(self):
+        # Read the inline-fix narrative markers back as a list of {file, summary} dicts, in log
+        # order. Deliberately SEPARATE from read_resolutions (these are author-action notes, not
+        # finding dispositions) so the convergence buckets never see them. Consumed by `sail land`
+        # to surface inline opportunistic fixes on the closing comment (#113 visibility guard).
+        out = []
+        prefix = "- inline-fix: ["
+        for line in self._read_lines():
+            if not line.startswith(prefix):
+                continue
+            end = line.find("]", len(prefix))
+            if end == -1:
+                continue
+            file = line[len(prefix):end]
+            remainder = line[end + 1 :]
+            summary = remainder[1:] if remainder.startswith(" ") else remainder
+            out.append({"file": file, "summary": summary})
+        return out
+
     def finding_resolution(self, finding_id, disposition, rationale, round=None):
         # Per-finding resolution log (#47): records the driver's disposition of one review
         # finding across the convergence loop. disposition is expected to be one of

@@ -499,6 +499,74 @@ hard-ceiling PARK is the deterministic backstop for true non-convergence — kee
 path `/surf` depends on from wasting rounds (or, since #130, from parking a genuinely-converging run
 at a fixed round count) while still never letting a churning or runaway run loop forever.
 
+## Minor-finding disposition — split by blast radius, never by self-assessed "cheapness" (#113)
+
+When `/sail` (or `/surf`) **catches** a minor issue mid-build that the plan did not call for, "file it
+for later" too often means never — but a blanket "fix cheap out-of-scope bugs" rule fights `/sail`'s
+trust properties and the standing Surgical-Changes rule (`~/.claude/CLAUDE.md` §3, "every changed
+line traces to the request"): an out-of-scope fix has no plan AC (it trips the #47 traceability
+reviewer or passes unverified), it muddies revertibility and bisect, it breaks `/sail`-vs-`/ship`
+A/B comparability, and "cheap" is self-assessed and often wrong (a one-line change in shared code can
+ripple). So the split is by **blast radius**, not by cheapness. This is the inverse of the #103
+materiality floor ("is a *deferred* finding material enough to *block*?") — here: "is a *caught*
+finding trivial+safe enough to *fix now*?" — and it is a **scoped, guarded exception** to
+Surgical-Changes §3, not a repeal of it.
+
+**The policy (three rules):**
+
+1. **Trivial AND inside code already being touched AND zero behavior change → fix inline, logged
+   visibly.** This is the blast radius you are already in — craftsmanship, not scope creep. The fix
+   is logged in the form **"also corrected X while editing Y"**, recorded durably via
+   `DecisionLog.inline_fix_marker(file, summary)` (a narrative marker in `decision-log.md` —
+   deliberately **not** a finding disposition, so it never touches the convergence buckets). Visibility
+   is the guard against silent diff growth; an unlogged opportunistic hunk is treated by the reviewer
+   as a scope finding, not as an explained change.
+2. **Genuinely out-of-scope → never expand the diff; capture it cheaply instead.** Record a
+   **deferred finding** (the existing #103/#100 `DecisionLog` disposition — the *guaranteed* capture
+   floor that survives resume, for both `/sail` and `/surf`) and **optionally** auto-file a one-line
+   follow-up issue. Catching-and-recording is the cheap default; *fixing* is not.
+3. **The hard ceiling on "inline" is testable** (`sail/disposition.py::inline_fix_eligible`): a
+   candidate is inline-eligible only when it stays within **single file, a few lines, no
+   public-interface change, no new dependency, no new behavior.** Touch a **second file** or a
+   **public interface** (or add a dependency / new behavior, or exceed the few-line budget) → it is
+   **not** eligible for inline; it becomes a deferred finding / follow-up issue. The mechanizable
+   boundary (file count, dependency, line budget) is the deterministic predicate; the un-mechanizable
+   parts ("trivial", "zero behavior change") stay LLM-reviewer judgment (infra-placement). This is
+   **not** an auto-classifier of opportunistic-vs-planned hunks — it only answers whether an
+   already-identified opportunistic candidate exceeds the ceiling.
+
+**How the driver invokes it (reachable, not dormant).** The ceiling check and the durable visibility
+marker are both invocable as a deterministic subcommand (the established `python3 -m sail …`
+pattern), so the driver never eyeballs the ceiling or hand-writes the marker:
+
+```bash
+# Ceiling check — prints `eligible` (rc 0) or `exceeds-ceiling` (rc 1):
+python3 -m sail disposition --files 1            # a single-file candidate is eligible
+python3 -m sail disposition --files 2            # a 2nd file exceeds → capture as a deferred finding
+python3 -m sail disposition --files 1 --public-interface   # public-interface change → exceeds
+
+# Record the durable inline-fix visibility marker after making a within-ceiling fix:
+python3 -m sail disposition --record-inline-fix --run-dir "$SESSION_DIR" \
+  --file path/to/edited --summary "also corrected X while editing Y"
+```
+
+The marker lands in `decision-log.md` and is surfaced on the Stage-5 land comment under an **Inline
+opportunistic fixes** section — the "always logged/surfaced" guarantee reaching the delivery surface.
+
+**Optional auto-file — reuse the #108 safe pattern (never the cheap-but-unsafe path).** If a
+follow-up issue is filed: write the body to a tempfile and pass `--body-file` (**never** interpolate
+untrusted finding text into a shell argument — OWASP LLM01), use a **fixed** title with only the
+trusted issue number interpolated, and **dedup** by a stable finding fingerprint (search for an
+existing open follow-up via a structured/sanitized label query before creating, so repeated `/sail`
+or `/surf` runs don't spam duplicates). `gh issue create` is **not** blocked by the unattended
+delivery-gate (only commit/push/merge/close are), but filing stays optional — the durable deferred
+finding is the floor, so a failed/declined file never loses the finding.
+
+**Reporting — INFO-tier per #112, never silent.** Both dispositions are surfaced: an inline fix as
+`INFO: also corrected X while editing Y`; an out-of-scope capture as `INFO: out-of-scope Y noted →
+filed #N` (when filed) or `→ recorded as deferred finding` (when not). These are expected, designed
+behavior → neutral INFO, not ALERT.
+
 ## Unattended mode (standalone `/sail --unattended <issue>`, #108)
 
 `/surf` is already autonomous (it drives `/sail` and handles termini in its own loop). The gap #108
