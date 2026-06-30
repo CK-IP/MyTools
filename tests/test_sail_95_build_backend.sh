@@ -232,3 +232,115 @@ README="$REPO_ROOT/sail/README.md"; INSTALL_MD="$REPO_ROOT/INSTALL.md"
 grep -q 'SAIL_BUILD_CMD' "$README"     || fail "S4: sail/README.md missing SAIL_BUILD_CMD docs"
 grep -q 'SAIL_BUILD_CMD' "$INSTALL_MD" || fail "S4: INSTALL.md missing SAIL_BUILD_CMD docs"
 echo "PASS S4: SAIL_BUILD_CMD documented in sail/README.md + INSTALL.md"
+
+# ============ #133: prose/spec-heavy classification + cross-family-preserving build routing ============
+# Doc-dominated changes route to SAIL_BUILD_CMD_PROSE (a capable cross-family builder), preserving
+# the #83 invariant (implementer family ≠ reviewer family). When the selected prose builder collides
+# with the active reviewer family, build.json records the collapse (cross_family:lost + ALERT) but
+# still proceeds. Code-class routing is unchanged.
+
+# Logging mocks (the #95 mocks above don't record which backend ran). Each appends its name to RAN_LOG.
+# shellcheck disable=SC2016  # '${MOCK_RC:-0}' is single-quoted on purpose: the literal is written into
+# the generated mock so each mock reads MOCK_RC from its own runtime env, not expanded at printf time.
+for name in pcodex pclaude prosebot; do
+  printf '%s\n' '#!/usr/bin/env bash' 'cat >/dev/null' "echo $name >> \"\$RAN_LOG\"" 'exit ${MOCK_RC:-0}' > "$BIN/$name"
+  chmod +x "$BIN/$name"
+done
+xfam()   { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("cross_family") or "")' "$1"; }
+crouted(){ python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("change_class") or "")' "$1"; }
+classify(){ python3 -c 'import json,sys; from sail.build import classify_change; print(classify_change(json.loads(sys.argv[1])))' "$1"; }
+
+# P1: deterministic classify_change (all-doc→prose, any-code→code, empty→code)
+[ "$(classify '["commands/surf.md","README.md"]')" = prose ] || fail "P1: all-doc set should classify prose"
+[ "$(classify '["commands/surf.md","sail/build.py"]')" = code ] || fail "P1: any .py should classify code"
+[ "$(classify '["docs/x.rst"]')" = prose ] || fail "P1: lone .rst should classify prose"
+[ "$(classify '[]')" = code ] || fail "P1: empty set should default to code (safe)"
+echo "PASS P1 (#133): classify_change deterministic — T-prose-classify / T-code-classify"
+
+# P2: prose class routes to SAIL_BUILD_CMD_PROSE over SAIL_BUILD_CMD
+RD="$WORK/rdp2"; mark_red "$TGT"; export RAN_LOG="$WORK/ranp2"; : > "$RAN_LOG"
+set +e; SAIL_BUILD_CMD="pcodex" SAIL_BUILD_CMD_PROSE="prosebot" MOCK_RC=0 \
+  python3 -m sail build --target "$TGT" --run-dir "$RD" --change-class prose >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 0 ] || fail "P2: prose route should exit 0, got $rc"
+[ "$(status "$RD/build.json")" = delegated ] || fail "P2: prose route status should be delegated"
+grep -q '^prosebot$' "$RAN_LOG" || fail "P2: prose backend should have run"
+grep -q '^pcodex$' "$RAN_LOG" && fail "P2: default backend must NOT run on prose route"
+echo "PASS P2 (#133): prose class → SAIL_BUILD_CMD_PROSE used (not SAIL_BUILD_CMD)"
+
+# P3: prose class, SAIL_BUILD_CMD_PROSE unset → fall back to SAIL_BUILD_CMD (clean degrade)
+RD="$WORK/rdp3"; mark_red "$TGT"; export RAN_LOG="$WORK/ranp3"; : > "$RAN_LOG"
+set +e; SAIL_BUILD_CMD="pcodex" MOCK_RC=0 python3 -m sail build --target "$TGT" --run-dir "$RD" --change-class prose >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 0 ] || fail "P3: prose fallback should exit 0, got $rc"
+grep -q '^pcodex$' "$RAN_LOG" || fail "P3: with PROSE unset, SAIL_BUILD_CMD should run"
+echo "PASS P3 (#133): prose + PROSE unset → falls back to SAIL_BUILD_CMD"
+
+# P4: cross-family PRESERVED — prose builder (codex-ish) ≠ reviewer (claude lens1); lens2 UNSET
+RD="$WORK/rdp4"; mark_red "$TGT"; export RAN_LOG="$WORK/ranp4"; : > "$RAN_LOG"
+set +e; SAIL_BUILD_CMD="pclaude" SAIL_BUILD_CMD_PROSE="pcodex" SAIL_REVIEW_CMD="pclaude -p" MOCK_RC=0 \
+  python3 -m sail build --target "$TGT" --run-dir "$RD" --change-class prose >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 0 ] || fail "P4: cross-family prose route should exit 0, got $rc"
+[ "$(xfam "$RD/build.json")" != lost ] || fail "P4: cross-family preserved must NOT record cross_family:lost"
+[ -z "$(warn "$RD/build.json")" ] || fail "P4: cross-family preserved must NOT set same_family_warning"
+echo "PASS P4 (#133): T-prose-cross-family-ok — prose builder ≠ reviewer family → no loss"
+
+# P5: same-family ALERT — prose builder == active reviewer lens1 (lens2 UNSET, the live allocation)
+RD="$WORK/rdp5"; mark_red "$TGT"; export RAN_LOG="$WORK/ranp5"; : > "$RAN_LOG"
+set +e; SAIL_BUILD_CMD="pcodex" SAIL_BUILD_CMD_PROSE="pclaude -p --model opus" SAIL_REVIEW_CMD="pclaude -p --model sonnet" MOCK_RC=0 \
+  python3 -m sail build --target "$TGT" --run-dir "$RD" --change-class prose >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 0 ] || fail "P5: same-family prose route should STILL exit 0 (proceeds), got $rc"
+[ "$(status "$RD/build.json")" = delegated ] || fail "P5: same-family route status should be delegated"
+[ "$(xfam "$RD/build.json")" = lost ] || fail "P5: same-family must record cross_family:lost"
+W="$(warn "$RD/build.json")"; [ -n "$W" ] || fail "P5: same-family must set same_family_warning"
+printf '%s' "$W" | grep -q 'SAIL_BUILD_CMD_PROSE' || fail "P5: warning must name the SAIL_BUILD_CMD_PROSE remediation"
+echo "PASS P5 (#133): T-prose-same-family-ALERT — collision vs lens1 (lens2 unset) → cross_family:lost + ALERT, still delegated"
+
+# P5b (#133 review MEDIUM lens1-ba28ed0e9017): cross_family:lost fires on the SAIL_BUILD_CMD FALLBACK
+# collision too — not only when the backend came from SAIL_BUILD_CMD_PROSE. PROSE unset, prose class,
+# SAIL_BUILD_CMD collides with the claude reviewer → the loss must still be recorded.
+RD="$WORK/rdp5b"; mark_red "$TGT"; export RAN_LOG="$WORK/ranp5b"; : > "$RAN_LOG"
+set +e; SAIL_BUILD_CMD="pclaude -p" SAIL_REVIEW_CMD="pclaude -p --model sonnet" MOCK_RC=0 \
+  python3 -m sail build --target "$TGT" --run-dir "$RD" --change-class prose >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 0 ] || fail "P5b: prose-fallback-collision should exit 0, got $rc"
+[ "$(xfam "$RD/build.json")" = lost ] || fail "P5b: prose class + SAIL_BUILD_CMD fallback collision must record cross_family:lost"
+printf '%s' "$(warn "$RD/build.json")" | grep -q 'SAIL_BUILD_CMD_PROSE' || fail "P5b: fallback-collision warning must still name SAIL_BUILD_CMD_PROSE remediation"
+echo "PASS P5b (#133): cross_family:lost on the SAIL_BUILD_CMD fallback collision (class-gated, not env-gated)"
+
+# P6: code class routing UNCHANGED — default backend, prose backend untouched, no prose fields
+RD="$WORK/rdp6"; mark_red "$TGT"; export RAN_LOG="$WORK/ranp6"; : > "$RAN_LOG"
+set +e; SAIL_BUILD_CMD="pcodex" SAIL_BUILD_CMD_PROSE="prosebot" MOCK_RC=0 \
+  python3 -m sail build --target "$TGT" --run-dir "$RD" --change-class code >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = 0 ] || fail "P6: code route should exit 0, got $rc"
+grep -q '^pcodex$' "$RAN_LOG" || fail "P6: code route must use SAIL_BUILD_CMD"
+grep -q '^prosebot$' "$RAN_LOG" && fail "P6: code route must NOT use the prose backend"
+[ "$(xfam "$RD/build.json")" != lost ] || fail "P6: code route must not record a prose cross_family loss"
+echo "PASS P6 (#133): T-code-routing-unchanged — code class → SAIL_BUILD_CMD, prose backend untouched"
+
+# P7: backstop — no --change-class, classify off plan.json scope (prose-dominated → prose route)
+RD="$WORK/rdp7"; mark_red "$TGT"; export RAN_LOG="$WORK/ranp7"; : > "$RAN_LOG"; mkdir -p "$RD"
+printf '%s' '{"status":"completed","approach":"rewrite the spec","scope":{"in":["commands/surf.md","docs/guide.rst"],"out":[]}}' > "$RD/plan.json"
+set +e; SAIL_BUILD_CMD="pcodex" SAIL_BUILD_CMD_PROSE="prosebot" MOCK_RC=0 \
+  python3 -m sail build --target "$TGT" --run-dir "$RD" >/dev/null 2>&1; rc=$?; set -e
+[ "$(crouted "$RD/build.json")" = prose ] || fail "P7: backstop should derive change_class=prose from plan scope"
+grep -q '^prosebot$' "$RAN_LOG" || fail "P7: backstop prose classification should route to prose backend"
+echo "PASS P7 (#133): no --change-class → deterministic backstop classifies off plan scope (prose)"
+
+# P8: backstop code — plan scope with a .py → code route, no prose backend
+RD="$WORK/rdp8"; mark_red "$TGT"; export RAN_LOG="$WORK/ranp8"; : > "$RAN_LOG"; mkdir -p "$RD"
+printf '%s' '{"status":"completed","approach":"x","scope":{"in":["commands/surf.md","sail/build.py"],"out":[]}}' > "$RD/plan.json"
+set +e; SAIL_BUILD_CMD="pcodex" SAIL_BUILD_CMD_PROSE="prosebot" MOCK_RC=0 \
+  python3 -m sail build --target "$TGT" --run-dir "$RD" >/dev/null 2>&1; rc=$?; set -e
+[ "$(crouted "$RD/build.json")" = code ] || fail "P8: backstop with a .py in scope should derive code"
+grep -q '^pcodex$' "$RAN_LOG" || fail "P8: backstop code route must use SAIL_BUILD_CMD"
+echo "PASS P8 (#133): backstop code class off plan scope → SAIL_BUILD_CMD"
+
+# P-docs: prose route documented across the prose-spec touchpoints
+SAILMD="$REPO_ROOT/commands/sail.md"
+grep -qiE 'SAIL_BUILD_CMD_PROSE' "$SAILMD"            || fail "P-docs: sail.md missing SAIL_BUILD_CMD_PROSE"
+grep -qiE '[-][-]change-class' "$SAILMD"              || fail "P-docs: sail.md missing --change-class"
+grep -qiE 'prose|spec.heavy' "$SAILMD"                || fail "P-docs: sail.md missing prose/spec classification"
+grep -q 'SAIL_BUILD_CMD_PROSE' "$REPO_ROOT/home/settings.reference.json" || fail "P-docs: settings.reference.json missing SAIL_BUILD_CMD_PROSE"
+grep -q 'SAIL_BUILD_CMD_PROSE' "$README"              || fail "P-docs: sail/README.md missing SAIL_BUILD_CMD_PROSE"
+grep -q 'SAIL_BUILD_CMD_PROSE' "$INSTALL_MD"          || fail "P-docs: INSTALL.md missing SAIL_BUILD_CMD_PROSE"
+echo "PASS P-docs (#133): prose route documented in sail.md + settings.reference.json + README + INSTALL"
+
+echo "PASS: #133 prose-build routing contract verified"

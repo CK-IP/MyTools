@@ -47,6 +47,7 @@ def main() -> int:
     build_parser.add_argument("--run-dir")
     build_parser.add_argument("--mode", choices=["build", "fix"], default="build")
     build_parser.add_argument("--round", type=int, default=1)
+    build_parser.add_argument("--change-class", choices=["prose", "code"])
 
     mutation_parser = subparsers.add_parser("mutation-verify")
     mutation_parser.add_argument("--target")
@@ -115,7 +116,7 @@ def main() -> int:
         return run_plan(args.target or ".", args.run_dir, args.advisory, plan_adversary=args.plan_adversary, grounded_plan=args.grounded_plan)
     if args.command == "build":
         from sail.build import run_build
-        return run_build(args.target or ".", args.run_dir, mode=args.mode, round=args.round)
+        return run_build(args.target or ".", args.run_dir, mode=args.mode, round=args.round, change_class=args.change_class)
     if args.command == "mutation-verify":
         from sail.mutation_verify import run_mutation_verify
 
