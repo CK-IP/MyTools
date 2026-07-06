@@ -15,9 +15,13 @@ fi
 
 set +e
 file_path="$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty' 2>/dev/null)"
-jq_rc=$?
+file_path_rc=$?
+old_string_present="$(printf '%s' "$input" | jq -r '(.tool_input // {}) | has("old_string")' 2>/dev/null)"
+old_string_present_rc=$?
+new_string_present="$(printf '%s' "$input" | jq -r '(.tool_input // {}) | has("new_string")' 2>/dev/null)"
+new_string_present_rc=$?
 set -e
-if [ "$jq_rc" -ne 0 ]; then
+if [ "$file_path_rc" -ne 0 ] || [ "$old_string_present_rc" -ne 0 ] || [ "$new_string_present_rc" -ne 0 ]; then
   printf '%s\n' 'tdd-guard: malformed hook input — failing closed' >&2
   exit 2
 fi
@@ -33,6 +37,18 @@ esac
 case "$norm" in
   tests/*|*/tests/*) exit 0 ;;
 esac
+
+if [ "$old_string_present" = "true" ] && [ "$new_string_present" = "true" ]; then
+  # Pipe the RAW hook JSON to the helper — the strings are never captured via
+  # $(...) (which strips trailing newlines and would let a reconstructed edit
+  # phantom-match an earlier occurrence); the helper unwraps .tool_input itself.
+  # 2>/dev/null: this hook is globally symlinked and fires on .py edits in
+  # EVERY project — where no sail package exists the import failure must
+  # fall through to the marker check silently, not leak a traceback.
+  if printf '%s' "$input" | PYTHONPATH="$PWD" python3 -m sail.tdd_guard 2>/dev/null; then
+    exit 0
+  fi
+fi
 
 if [ -f "$PWD/.sail/last-test-failed" ]; then
   exit 0
