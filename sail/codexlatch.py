@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import shutil
 import sys
 import tempfile
 import time
 from datetime import datetime, timezone
+
+from sail.argvpeel import peel_argv
 
 # Per-process dedupe: the always-on stderr notice prints at most once per kind per process,
 # so the many probe/invoke calls in one phase don't spam the log.
@@ -103,30 +104,8 @@ def latch_active(now=None):
     return True
 
 
-def _peel_argv(argv):
-    # Peel wrappers the way build.py:_backend_family does and return the resolved program
-    # basename, lower-cased. Returns "" for an empty/unresolvable argv.
-    if not argv:
-        return ""
-    if argv[0] == "env":
-        i = 1
-        while i < len(argv) and (argv[i].startswith("-") or ("=" in argv[i] and not argv[i].startswith("-"))):
-            i += 1
-        return _peel_argv(argv[i:]) if i < len(argv) else ""
-    prog = os.path.basename(argv[0])
-    if prog in ("bash", "sh") and len(argv) >= 3 and argv[1] in ("-lc", "-c"):
-        try:
-            inner = shlex.split(argv[2])
-        except (ValueError, OSError):
-            return prog.lower()
-        return os.path.basename(inner[0]).lower() if inner else prog.lower()
-    if prog.startswith("python") and len(argv) >= 3 and argv[1] == "-m":
-        return os.path.basename(argv[2]).lower()
-    return prog.lower()
-
-
 def is_codex_family(argv):
-    return "codex" in _peel_argv(argv)
+    return "codex" in peel_argv(argv).lower()
 
 
 _AVAILABILITY_PATTERNS = (

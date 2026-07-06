@@ -7,6 +7,7 @@ import subprocess
 import uuid
 from datetime import datetime, timezone
 
+from sail.argvpeel import peel_argv
 from sail import codexlatch
 from sail.checkers import _DOC_SUFFIXES
 
@@ -49,23 +50,7 @@ def _backend_family(cmd):
             argv = shlex.split(cmd)
         except (ValueError, OSError, AttributeError):
             return ""
-    if not argv:
-        return ""
-    prog = os.path.basename(argv[0])
-    if prog == "env":
-        i = 1
-        while i < len(argv) and (argv[i].startswith("-") or ("=" in argv[i] and not argv[i].startswith("-"))):
-            i += 1
-        return _backend_family(" ".join(argv[i:])) if i < len(argv) else ""
-    if prog in ("bash", "sh") and len(argv) >= 3 and argv[1] in ("-lc", "-c"):
-        try:
-            inner = shlex.split(argv[2])
-        except (ValueError, OSError):
-            return prog
-        return os.path.basename(inner[0]) if inner else prog
-    if prog.startswith("python") and len(argv) >= 3 and argv[1] == "-m":
-        return os.path.basename(argv[2])
-    return prog
+    return peel_argv(argv)
 
 
 def _review_families():
