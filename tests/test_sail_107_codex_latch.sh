@@ -55,10 +55,20 @@ def reset():
 # ---- is_codex_family: wrapper peeling (detection) ----
 assert L.is_codex_family(["codex", "exec"]) is True
 assert L.is_codex_family(["env", "K=V", "codex", "exec"]) is True
+# #138: env given by ABSOLUTE PATH must still peel to the wrapped program (the #118 build.py
+# fix applied here too — basename BEFORE the env comparison).
+assert L.is_codex_family(["/usr/bin/env", "K=V", "codex", "exec"]) is True
 assert L.is_codex_family(["bash", "-lc", "codex exec -m gpt-5.4-mini"]) is True
 assert L.is_codex_family(["python", "-m", "codex"]) is True
 assert L.is_codex_family(["claude", "-p"]) is False
 assert L.is_codex_family([]) is False
+
+# #138: build.py's family resolution keeps its contract through the shared-helper refactor —
+# str-or-list input, case-preserved basename — so review.py's cross-family checks are unaffected.
+from sail.build import _backend_family
+assert _backend_family("/usr/bin/env codex exec") == "codex"
+assert _backend_family("codex exec") == "codex"
+assert _backend_family(["env", "K=V", "codex", "exec"]) == "codex"
 
 # ---- AC1: first availability failure trips the latch (writes the marker) ----
 reset()
