@@ -243,6 +243,125 @@ python3 -m sail mutation-verify --target "$FIX10C" --diff "$BASE10C" --run-dir "
 echo "PASS T10c: pre-staged source -> index state preserved (before == after)"
 
 # ============================================================================
+# Part B2 — #141: absent-runner visibility (skip_kind + runner_absent)
+# ============================================================================
+# A scrubbed-PATH stub dir carrying everything mutation-verify needs EXCEPT pytest, so
+# shutil.which("pytest") is None inside the run regardless of the host (hermetic either way).
+STUB="$WORK/stubbin"; mkdir -p "$STUB"
+for tool in git bash sh python3 env; do ln -s "$(command -v "$tool")" "$STUB/$tool"; done
+
+# T14: .py regression test with pytest ABSENT -> the skipped result carries skip_kind
+# 'runner-absent' and the payload's top-level runner_absent is true (the #112 ALERT basis:
+# a real 'tests not actually run' situation must be visible, not a bland skip).
+FIX14="$WORK/fix14"
+mkdir -p "$FIX14/lib" "$FIX14/tests"
+( cd "$FIX14"; git init -q; git config user.email t@t; git config user.name t
+  printf 'compute() { echo 5; }\n' > lib/source.sh; git add lib/source.sh; git commit -qm base
+  printf 'compute() { echo 6; }\n' > lib/source.sh
+  printf 'def test_x():\n    assert True\n' > tests/test_regress.py )
+BASE14="$(cd "$FIX14" && git rev-parse HEAD)"; RD14="$WORK/rd14"
+PATH="$STUB" python3 -m sail mutation-verify --target "$FIX14" --diff "$BASE14" --run-dir "$RD14" --bug-fix >/dev/null 2>&1 \
+  || fail "T14: absent-runner mutation-verify should still exit 0 (visibility, not a gate)"
+python3 - "$RD14/mutation-verify.json" <<'PY' || fail "T14: runner_absent contract (pytest absent)"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d.get("runner_absent") is True, f"payload must set runner_absent true when pytest is absent: {d}"
+tests = d.get("tests") or []
+py = [t for t in tests if str(t.get("file", "")).endswith(".py")]
+assert py, f"the .py test result must be recorded: {tests}"
+assert py[0].get("status") == "skipped", py
+assert py[0].get("skip_kind") == "runner-absent", f"skipped .py result must carry skip_kind 'runner-absent': {py[0]}"
+print("T14 ok")
+PY
+echo "PASS T14: pytest absent -> skip_kind runner-absent + top-level runner_absent true"
+
+# T14b: MIXED tests (a genuine .sh that runs + a .py needing the absent pytest) -> the check
+# COMPLETES (verdict from the sh test) yet runner_absent is STILL true — the conservative rule:
+# ANY new/changed test that was not actually run for want of a runner surfaces, even when a
+# sibling test did run (a partially-run check must not stay quiet).
+FIX14B="$WORK/fix14b"; BASE14B="$(mkfix "$FIX14B" '. ./lib/source.sh; [ "$(compute)" = 6 ]')"
+( cd "$FIX14B"; printf 'def test_x():\n    assert True\n' > tests/test_regress.py )
+RD14B="$WORK/rd14b"
+PATH="$STUB" python3 -m sail mutation-verify --target "$FIX14B" --diff "$BASE14B" --run-dir "$RD14B" --bug-fix >/dev/null 2>&1 \
+  || fail "T14b: mixed-runner mutation-verify should exit 0"
+[ "$(jget "$RD14B/mutation-verify.json" status)" = completed ] || fail "T14b: mixed check should complete (sh test ran)"
+python3 - "$RD14B/mutation-verify.json" <<'PY' || fail "T14b: completed payload still surfaces runner_absent"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d.get("runner_absent") is True, f"completed payload must still set runner_absent true when any test needed the absent runner: {d}"
+print("T14b ok")
+PY
+echo "PASS T14b: completed verdict + a runner-absent sibling -> runner_absent still true"
+
+# T14c: the ALERT is emitted by the CLI ITSELF (tested Python, stderr), not left to the
+# orchestrating prompt to remember each round (CLAUDE.md infra-placement: deterministic
+# decisions never live in the markdown prompt — lens1-0f107c73512b). A runner-absent run
+# prints an '[ALERT] ... not actually run/runner ...' line to stderr; an ordinary run
+# (runner present) prints no ALERT.
+FIX14D="$WORK/fix14d"
+mkdir -p "$FIX14D/lib" "$FIX14D/tests"
+( cd "$FIX14D"; git init -q; git config user.email t@t; git config user.name t
+  printf 'compute() { echo 5; }\n' > lib/source.sh; git add lib/source.sh; git commit -qm base
+  printf 'compute() { echo 6; }\n' > lib/source.sh
+  printf 'def test_x():\n    assert True\n' > tests/test_regress.py )
+BASE14D="$(cd "$FIX14D" && git rev-parse HEAD)"; RD14D="$WORK/rd14d"
+ERR14D="$(PATH="$STUB" python3 -m sail mutation-verify --target "$FIX14D" --diff "$BASE14D" --run-dir "$RD14D" --bug-fix 2>&1 >/dev/null)" \
+  || fail "T14c: absent-runner CLI run should still exit 0"
+printf '%s\n' "$ERR14D" | grep -qiE '\[ALERT\].*(not actually run|runner)' \
+  || fail "T14c: CLI must emit the absent-runner ALERT on stderr itself, got: '$ERR14D'"
+FIX14E="$WORK/fix14e"; BASE14E="$(mkfix "$FIX14E" '. ./lib/source.sh; [ "$(compute)" = 6 ]')"
+RD14E="$WORK/rd14e"
+ERR14E="$(python3 -m sail mutation-verify --target "$FIX14E" --diff "$BASE14E" --run-dir "$RD14E" --bug-fix 2>&1 >/dev/null)" \
+  || fail "T14c: ordinary run should exit 0"
+printf '%s\n' "$ERR14E" | grep -qi 'ALERT' && fail "T14c: an ordinary run (runner present) must emit NO ALERT, got: '$ERR14E'"
+echo "PASS T14c: the CLI itself emits the absent-runner ALERT on stderr (and stays quiet when the runner ran)"
+
+# T15: unsupported-type-ONLY skip -> skip_kind 'unsupported-type' (distinguishable from
+# 'runner-absent') and runner_absent is NOT true — an unsupported file type is not a missing
+# runner, so it must never trip the absent-runner ALERT.
+FIX15="$WORK/fix15"
+mkdir -p "$FIX15/lib" "$FIX15/tests"
+( cd "$FIX15"; git init -q; git config user.email t@t; git config user.name t
+  printf 'compute() { echo 5; }\n' > lib/source.sh; git add lib/source.sh; git commit -qm base
+  printf 'compute() { echo 6; }\n' > lib/source.sh
+  printf '# ruby-ish test placeholder\n' > tests/test_regress.rb )
+BASE15="$(cd "$FIX15" && git rev-parse HEAD)"; RD15="$WORK/rd15"
+python3 -m sail mutation-verify --target "$FIX15" --diff "$BASE15" --run-dir "$RD15" --bug-fix >/dev/null 2>&1 \
+  || fail "T15: unsupported-type mutation-verify should exit 0"
+python3 - "$RD15/mutation-verify.json" <<'PY' || fail "T15: unsupported-type skip_kind contract"
+import json, sys
+d = json.load(open(sys.argv[1]))
+tests = d.get("tests") or []
+rb = [t for t in tests if str(t.get("file", "")).endswith(".rb")]
+assert rb, f"the unsupported test result must be recorded: {tests}"
+assert rb[0].get("status") == "skipped", rb
+assert rb[0].get("skip_kind") == "unsupported-type", f"unsupported-file skip must carry skip_kind 'unsupported-type': {rb[0]}"
+assert d.get("runner_absent") is False, f"an unsupported-type-only skip must NOT set runner_absent true: {d}"
+print("T15 ok")
+PY
+echo "PASS T15: unsupported-type skip is distinguishable and never trips runner_absent"
+
+# T16: diff_hash freshness basis for the per-round re-run — a re-run on an UNCHANGED diff
+# reproduces the same diff_hash (the round's artifact stays fresh), and a CHANGED diff yields a
+# different one (a stale prior-round artifact is dropped by the merge gate, per T11).
+FIX16="$WORK/fix16"; BASE16="$(mkfix "$FIX16" '. ./lib/source.sh; [ "$(compute)" = 6 ]')"
+RD16A="$WORK/rd16a"; RD16B="$WORK/rd16b"; RD16C="$WORK/rd16c"
+python3 -m sail mutation-verify --target "$FIX16" --diff "$BASE16" --run-dir "$RD16A" --bug-fix >/dev/null 2>&1 \
+  || fail "T16: first run should exit 0"
+python3 -m sail mutation-verify --target "$FIX16" --diff "$BASE16" --run-dir "$RD16B" --bug-fix >/dev/null 2>&1 \
+  || fail "T16: unchanged re-run should exit 0"
+DH16A="$(jget "$RD16A/mutation-verify.json" diff_hash)"
+DH16B="$(jget "$RD16B/mutation-verify.json" diff_hash)"
+[ -n "$DH16A" ] || fail "T16: diff_hash missing from the artifact"
+[ "$DH16A" = "$DH16B" ] || fail "T16: re-run on an unchanged diff must reproduce the same diff_hash ($DH16A != $DH16B)"
+( cd "$FIX16"; printf 'compute() { echo 7; }\n' > lib/source.sh )   # the diff changes (a later round's fix)
+python3 -m sail mutation-verify --target "$FIX16" --diff "$BASE16" --run-dir "$RD16C" --bug-fix >/dev/null 2>&1 \
+  || fail "T16: changed-diff re-run should exit 0"
+DH16C="$(jget "$RD16C/mutation-verify.json" diff_hash)"
+[ "$DH16A" != "$DH16C" ] || fail "T16: a changed diff must change diff_hash (stale-artifact freshness basis)"
+echo "PASS T16: diff_hash stable across an unchanged re-run, changes with the diff (per-round freshness basis)"
+
+# ============================================================================
 # Part C — review.json union (rides the existing finding pipeline)
 # ============================================================================
 
@@ -321,5 +440,29 @@ pin 'vacuous|tautolog' "vacuous-test rationale documented"
 pin '#70' "complements (not replaces) the #70 probe"
 grep -q 'mutation.verify\|mutation-verify' "$REPO_ROOT/sail/README.md" || fail "Part D: sail/README.md missing mutation-verify docs"
 echo "PASS Part D: sail.md + README.md document the mutation-verify step"
+
+# Part D2 (#141): the per-round re-run is anchored INSIDE the Stage-3 review convergence loop
+# (not only the one-shot Stage-2 position), framed per-round and before the round's
+# `sail run --diff`; and sail.md carries the runner_absent ALERT branch (#112 tone rule).
+python3 - "$SAILMD" <<'PY' || fail "Part D2: per-round mutation-verify not anchored in the Stage-3 review loop"
+import re, sys
+src = open(sys.argv[1]).read()
+stage3 = src[src.index("### Stage 3"):src.index("### Stage 4")]
+assert re.search(r"mutation.verify", stage3, re.I), "no mutation-verify mention inside Stage 3"
+k = re.search(r"mutation.verify", stage3, re.I).start()
+window = stage3[max(0, k - 800):k + 800]
+assert re.search(r"(each|every|per)[- ](convergence[- ])?round", window, re.I), \
+    "Stage-3 mutation-verify mention is not framed as a per-round re-run"
+print("Part D2 loop-anchor ok")
+PY
+pin 'runner_absent' "sail.md reads the runner_absent field"
+python3 - "$SAILMD" <<'PY' || fail "Part D2: runner_absent ALERT branch missing from sail.md"
+import re, sys
+src = open(sys.argv[1]).read()
+assert re.search(r"\[?ALERT\]?[^\n]*(runner|not actually run)|runner_absent[\s\S]{0,400}ALERT", src, re.I), \
+    "no ALERT wording tied to the absent runner / runner_absent"
+print("Part D2 ALERT ok")
+PY
+echo "PASS Part D2: per-round re-run anchored in Stage 3 + runner_absent ALERT branch documented"
 
 echo "ALL PASS: sail #131 mutation-verify contract verified"
