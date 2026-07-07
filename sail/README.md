@@ -172,13 +172,17 @@ gets a `- mode: <mode>` marker line. (Unix-focused: Windows path case-folding is
 `python3 -m sail plan` does one LLM pass over a spec on stdin and writes `plan.json` in the
 run-dir.
 
-- **Spec feed (`sail spec`, #60):** the front door fetches the issue with
-  `gh issue view <n> --json title,body,comments` and pipes it through `python3 -m sail spec`,
+- **Spec feed (`sail spec`, #60/#75):** the front door fetches the issue with
+  `gh issue view <n> --json title,body,comments,author` and pipes it through `python3 -m sail spec`,
   which assembles title + body + comments into the plain-text spec on stdin. Feeding the **full**
   issue (not body-only or `--comments`-only, which varies by `gh` version) is what lets
   `is_plan_risky` see signals that live in different parts of the issue. It **fails closed**
   (exit 1) on empty/invalid input or a missing body, so an upstream `gh` failure can't feed a
-  partial spec.
+  partial spec. Comments are a prompt-injection surface on shared repos (#75): they are emitted
+  inside an explicit untrusted-data fence (with in-body fence/header sentinels neutralized), and
+  `SAIL_COMMENT_TRUST=all|author|none` controls exposure — `all` (default) keeps every comment
+  fenced, `author` keeps only the issue author's comments, `none` drops comments entirely; an
+  unrecognized value fails closed (exit 1).
 - **Backend:** `SAIL_PLAN_CMD` supplies the planner command. If no backend is available, the
   stage skips cleanly instead of attempting a plan.
 - **Exit semantics:** exits `0` for a clean, usable plan; exits `1` when the plan is blocking,
