@@ -101,8 +101,9 @@ decide-vs-ask behavior** are unmistakable with **zero user memory required**. Th
 a single mechanism whose purpose is to make the mode-dependent behavior visible at a glance;
 it states the **active mode**, the **active scope** (Step 4 #2 — `selected-set` or `whole-board`,
 so what the run will pick up is visible at a glance and "what's left" is never a surprise), plus
-an **inline escape instruction on the same line** (the way to flip modes is always shown, never
-memorized — consistent with the no-flags principle). **Scope is chosen at Step 5**, *after* this
+an **inline switch-path note on the same line** (edit the charter's `mode` field or re-run
+`/surf` in the other mode; the supported way to change modes is always shown, never memorized —
+consistent with the no-flags principle). **Scope is chosen at Step 5**, *after* this
 first banner, so the very first (startup) banner shows `scope: pending` and the scope token
 resolves to the chosen mode from the Step 5 selection onward — and at every Step 7 re-anchor (the
 banner's main reprint point), the resolved scope is always shown:
@@ -114,29 +115,28 @@ SUPERVISED stanza; `scope: <…>` is a placeholder, not a literal menu of altern
 - **Autonomous:**
   > ▶ `/surf` running in **AUTO** · **scope: `<selected-set | whole-board | pending>`** — code
   > decisions are made-and-logged, never waited on; an unresolved domain call gets a bounded
-  > window then best-bet-and-record. *Press Esc / type `supervise` to switch to checkpoints.*
+  > window then best-bet-and-record. *To switch to checkpoints, edit the charter's `mode` field
+  > to `supervised` — or stop and re-run `/surf` in the other mode.*
 - **Supervised:**
   > ▶ `/surf` running in **SUPERVISED** · **scope: `<selected-set | whole-board | pending>`** —
   > domain calls pause for you (up to the Step 11 deadline); code decisions still auto-proceed.
-  > *Press Esc / type `autonomous` to stop being asked.*
+  > *To stop being asked, edit the charter's `mode` field to `autonomous` — or stop and re-run
+  > `/surf` in the other mode.*
 
 The banner exists so a non-programmer never has to remember which mode is live or what it will
 and won't ask about. The load-bearing distinction it makes plain: **AUTO means "don't bug me
 about code," it never means "guess at my domain"** (see Domain gating, Step 11b). The inline
-escape instruction lives on the **same line** as the mode so the switch is always one keystroke
-away and never something to look up.
+switch path lives on the **same line** as the mode so the supported change is always visible and
+never something to look up.
 
-**The escape is a real control, consumed at the next checkpoint.** The inline escape is not
-decorative — there is a runtime path that consumes it. At any time the operator may request a
-switch (press **Esc** to interrupt and type the new mode, or type the keyword `supervise` /
-`autonomous`); `/surf` records the request and **applies it at the next issue boundary** — the
-Step 7 re-anchor, the same checkpoint that re-reads the charter and re-prints the banner. The
-switch **updates the mode recorded in the charter** (Step 4), so it is durable and survives
-resume, and the next issue's re-anchor re-prints the banner in the new mode. The change takes
-effect from the **next** issue, **never mid-build** — an in-flight worker finishes under the
-mode it started in — so mode stays a charter-anchored fact, not a volatile chat state. This is
-still **no `--flag`**: flipping mode is an interactive keystroke, in keeping with the no-flags
-principle.
+**The supported switch path is charter-anchored and applied at the next issue boundary.** If the
+operator needs a different mode, edit the charter's `mode` field; `/surf` picks that up at the
+next Step 7 re-anchor, which re-reads the charter and re-prints the banner. The alternative is to
+stop and re-run `/surf` in the other mode. Either way, the change is durable because it updates the
+mode recorded in the charter (Step 4), but it still takes effect from the **next** issue,
+**never mid-build** — an in-flight worker finishes under the mode it started in — so mode stays a
+charter-anchored fact, not a volatile chat state. This is still **no `--flag`**: mode changes are
+explicit run decisions, not hidden runtime keystrokes, in keeping with the no-flags principle.
 
 ### Step 0a: Choose the run-style - Sequential or Parallel
 
@@ -1490,8 +1490,9 @@ claude --dangerously-skip-permissions
   `.ship/domain.md` (taught via `/train`) so they are not re-asked; an autonomous best-bet stays
   **provisional** in the decision-log until confirmed.
 - **The mode banner makes decide-vs-ask unmistakable (Step 0b).** At startup and at each
-  re-anchor, `/surf` prints a one-line banner stating the active mode + an **inline escape
-  instruction on the same line** — zero user memory required.
+  re-anchor, `/surf` prints a one-line banner stating the active mode + an **inline switch-path
+  note on the same line** (edit the charter's `mode` field / re-run `/surf`) — zero user memory
+  required.
 - One `--no-ff` merge commit per green issue; log every merge SHA so each is `git revert`-able.
 - **Sandbox repo only. No force-push or destructive git.** Park anything irreversible.
 - **Every issue is built by a fresh per-issue headless `claude -p` worker — in both modes**, never
