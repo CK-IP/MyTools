@@ -953,6 +953,14 @@ def domain_fingerprint(target):
     return _sha256(read_domain_memory(target) or "")
 
 
+def domain_hash_stale(target, stored_domain_hash):
+    current = domain_fingerprint(target)
+    empty_sentinel = _sha256("")
+    if stored_domain_hash is None:
+        return current != empty_sentinel
+    return stored_domain_hash != current
+
+
 def _invoke(prompt, argv=None, cwd=None):
     # cwd is set (to the target repo) for the #66 red-team pass so a tool-capable backend resolves
     # its Read/Grep exploration against the target — the concrete mechanism that makes the pass

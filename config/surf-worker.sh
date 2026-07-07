@@ -237,7 +237,7 @@ surf_worker_result() {
   # AC, block-tier tidiness, stale fingerprint, or unimportable sail.review → PARK.
   local verdict
   verdict="$(SURF_REPO_ROOT="$_repo_root" python3 - "$rs" "$rj" "$run_dir" "$target" <<'PY' 2>/dev/null || true
-import hashlib, json, sys, os
+import json, sys, os
 
 rs_path, rj_path, run_dir, target_arg = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
@@ -313,7 +313,7 @@ repo_root = os.environ.get("SURF_REPO_ROOT", "")
 if repo_root and repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 try:
-    from sail.review import diff_fingerprint, plan_fingerprint, domain_fingerprint
+    from sail.review import diff_fingerprint, plan_fingerprint, domain_hash_stale
 except Exception:
     park()   # can't load /sail's hashing → cannot prove currency → PARK
 
@@ -346,12 +346,8 @@ try:
         park()                               # diff changed since the review → stale → PARK
     if rj.get("plan_hash") != plan_fingerprint(run_dir):
         park()                               # plan ACs changed since the review → stale → PARK
-    current_domain_hash = domain_fingerprint(target_abs)
     stored_domain_hash = rj.get("domain_hash")
-    if stored_domain_hash is None:
-        if current_domain_hash != hashlib.sha256(b"").hexdigest():
-            park()                           # domain memory changed since the review → stale → PARK
-    elif stored_domain_hash != current_domain_hash:
+    if domain_hash_stale(target_abs, stored_domain_hash):
         park()                               # domain memory changed since the review → stale → PARK
 except Exception:
     park()                                   # fingerprint compute failed → can't prove fresh → PARK
