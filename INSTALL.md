@@ -480,6 +480,9 @@ rebuilds board position from the durable `.surf/` files + git (no session needs 
 wrapper is pure bash and touches **zero** Claude tokens on an idle tick — the "is it time yet?"
 decision is entirely in shell.
 
+> **LaunchAgent gotchas.** After `bootstrap`, run `launchctl kickstart -k "gui/$(id -u)/com.surf.resume"` so the watcher starts immediately instead of waiting for the next interval. On recent macOS releases, Background Task Management (BTM) approval may still be required before the agent is allowed to run in the background, and the watcher will not fire while the Mac is asleep. The relaunch also depends on `claude` being resolvable under the watcher's PATH, so keep it on PATH or install it at `~/.local/bin/claude`.
+> If your worker checkpoints are slower than the default heartbeat window, set `SURF_HEARTBEAT_STALE_SECS` higher before relying on stale-heartbeat takeover.
+
 > **Recovery is the same in every case.** A usage cap, a crash, a reboot, or a user-stop all
 > recover via `/surf resume` reading the durable `.surf/` files — there is no session to keep alive,
 > so a reboot is no longer a special "automatic recovery lost" case. You can also recover manually
