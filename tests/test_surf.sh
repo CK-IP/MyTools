@@ -275,26 +275,26 @@ grep -qiE 'orphan' "$TARGET" && pass "in-flight run-dir treated as orphaned pinn
 
 # --- #57: domain-gated input windows + clear mode banner ---
 
-# D1. Mode banner: states active mode + inline escape instruction on the same line
+# D1. Mode banner: states active mode + supported switch path on the same line
 grep -qiE 'mode banner' "$TARGET" && pass "mode banner present" || fail "mode banner missing"
-grep -qiE 'inline escape instruction' "$TARGET" && pass "inline escape instruction present" || fail "inline escape instruction missing"
+grep -qiE 'supported way to change modes|switch-path note on the same line|same line.*supported' "$TARGET" && pass "supported switch path present" || fail "supported switch path missing"
 grep -qiE 'zero user memory|nothing to memorize|never (something to look up|memorized)' "$TARGET" && pass "banner zero-memory rationale present" || fail "banner zero-memory rationale missing"
 
-# D1b. Bind each mode's Step-0b banner to its OWN escape — a swap or a missing escape must fail.
+# D1b. Bind each mode's Step-0b banner to its OWN switch path — a swap or a missing switch must fail.
 # The mode labels recur in Step 11b and the banner phrases wrap across lines, so: bound extraction
 # to the Step-0b section, capture each mode's stanza, strip the blockquote markers, and collapse
-# wrapping. Keyword-anywhere greps would pass even on a supervise/autonomous escape swap.
+# wrapping. Keyword-anywhere greps would pass even on a supervised/autonomous target swap.
 norm() { sed -E 's/^[[:space:]]*>[[:space:]]?//' | tr '\n' ' ' | tr -s ' '; }
 AUTO_BLOCK=$(awk '/### Step 0b:/{s=1} /^## Start gate/{s=0} s&&/\*\*Autonomous:\*\*/{f=1} s&&/\*\*Supervised:\*\*/{f=0} f' "$TARGET" | norm)
 SUP_BLOCK=$(awk '/### Step 0b:/{s=1} /^## Start gate/{s=0} s&&/\*\*Supervised:\*\*/{f=1} s&&/^The banner exists/{f=0} f' "$TARGET" | norm)
 printf '%s' "$AUTO_BLOCK" | grep -qF 'AUTO' && pass "autonomous banner names AUTO" || fail "autonomous banner missing AUTO"
-printf '%s' "$AUTO_BLOCK" | grep -qF '`supervise`' && pass "AUTO banner escape token is supervise" || fail "AUTO banner escape (supervise) missing/swapped"
-printf '%s' "$AUTO_BLOCK" | grep -qiF 'switch to checkpoints' && pass "AUTO banner escape target = checkpoints" || fail "AUTO banner escape target missing/swapped"
-printf '%s' "$AUTO_BLOCK" | grep -qiF 'Press Esc' && pass "AUTO banner has Press Esc escape" || fail "AUTO banner Press Esc missing"
+printf '%s' "$AUTO_BLOCK" | grep -qiE "edit the charter's.*mode.*re-run.*/surf.*other mode" && pass "AUTO banner switch path = charter edit / rerun" || fail "AUTO banner charter switch path missing"
+printf '%s' "$AUTO_BLOCK" | grep -qF '`supervised`' && pass "AUTO banner switch target is supervised" || fail "AUTO banner switch target (supervised) missing/swapped"
+printf '%s' "$AUTO_BLOCK" | grep -qiF 'switch to checkpoints' && pass "AUTO banner switch intent = checkpoints" || fail "AUTO banner switch intent missing/swapped"
 printf '%s' "$SUP_BLOCK" | grep -qF 'SUPERVISED' && pass "supervised banner names SUPERVISED" || fail "supervised banner missing SUPERVISED"
-printf '%s' "$SUP_BLOCK" | grep -qF '`autonomous`' && pass "SUPERVISED banner escape token is autonomous" || fail "SUPERVISED banner escape (autonomous) missing/swapped"
-printf '%s' "$SUP_BLOCK" | grep -qiF 'stop being asked' && pass "SUPERVISED banner escape target = stop being asked" || fail "SUPERVISED banner escape target missing/swapped"
-printf '%s' "$SUP_BLOCK" | grep -qiF 'Press Esc' && pass "SUPERVISED banner has Press Esc escape" || fail "SUPERVISED banner Press Esc missing"
+printf '%s' "$SUP_BLOCK" | grep -qiE "edit the charter's.*mode.*re-run.*/surf.*other mode" && pass "SUPERVISED banner switch path = charter edit / rerun" || fail "SUPERVISED banner charter switch path missing"
+printf '%s' "$SUP_BLOCK" | grep -qF '`autonomous`' && pass "SUPERVISED banner switch target is autonomous" || fail "SUPERVISED banner switch target (autonomous) missing/swapped"
+printf '%s' "$SUP_BLOCK" | grep -qiF 'stop being asked' && pass "SUPERVISED banner switch intent = stop being asked" || fail "SUPERVISED banner switch intent missing/swapped"
 
 # D1c. Banner is reprinted at the Step 7 re-anchor (not only at startup) + is spec'd as one-line.
 # Bind the reprint check to the Step 7 section so a regression that drops it from re-anchor fails.
@@ -302,9 +302,18 @@ REANCHOR=$(awk '/### Step 7:/{s=1} s&&/### Step 8:/{s=0} s' "$TARGET")
 printf '%s' "$REANCHOR" | grep -qiF 'mode banner' && pass "Step 7 re-anchor reprints the mode banner" || fail "Step 7 re-anchor banner reprint missing"
 grep -qiE 'one-line (\*\*)?mode banner|one-line banner' "$TARGET" && pass "banner specified as one-line" || fail "one-line banner property missing"
 
-# D1d. The banner escape is a real control: a runtime mode-toggle path consumes Esc/keyword input.
-grep -qiE 'applies it at the next issue boundary|consumed at the next checkpoint|escape is (a )?real control' "$TARGET" && pass "mid-run mode-toggle runtime path defined" || fail "mode-toggle runtime path missing"
-grep -qiE 'never mid-build|effect from the \*\*next\*\* issue|takes effect from the' "$TARGET" && pass "mode switch takes effect next issue (not mid-build)" || fail "mode-switch timing missing"
+# D1d. The banner points only at SUPPORTED switch paths (#85): edit the charter's mode or
+# re-run /surf in the other mode, and the switch is applied at the next issue boundary.
+grep -qiE "edit the charter's.*mode.*field" "$TARGET" && pass "charter-edit switch path defined" || fail "charter-edit switch path missing"
+grep -qiE 're-run.*\/surf.*other mode' "$TARGET" && pass "re-run switch path defined" || fail "re-run switch path missing"
+grep -qiE 'next issue boundary|next Step 7 re-anchor' "$TARGET" && pass "charter-edit switch honored at next issue boundary" || fail "next-issue-boundary switch timing missing"
+grep -qiE 'never mid-build|takes effect from the \*\*next\*\* issue' "$TARGET" && pass "mode switch takes effect next issue (not mid-build)" || fail "mode-switch timing missing"
+
+# Negative (#85): the banner must not promise a mid-run Esc/keystroke capture ANYWHERE in the
+# file (the summary bullets restate the banner) — the default headless path (#124: no
+# orchestrator-in-a-pane) cannot observe one. Guards against reintroducing the unwired control.
+grep -qiE 'press esc|one keystroke away|inline escape instruction' "$TARGET" && fail "banner promises an unwired mid-run keystroke capture" || pass "no unwired mid-run keystroke promise"
+grep -qE 'type .(supervise|autonomous).' "$TARGET" && fail "banner promises an unwired typed-keyword capture" || pass "no unwired typed-keyword promise"
 
 # D2. Domain gating: auto-for-code / ask-for-domain ownership split
 grep -qiE 'domain gating|auto-for-code|ask-for-domain' "$TARGET" && pass "domain-gating concept present" || fail "domain-gating concept missing"
