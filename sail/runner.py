@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import inspect
 import json
 import os
@@ -634,13 +633,7 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
             reuse_candidate = None
             decision_log.review_marker("prior review stale (plan acceptance criteria changed); re-reviewing")
         if reuse_candidate is not None:
-            current_domain_hash = review_mod.domain_fingerprint(target_root)
-            stored_domain_hash = reuse_candidate.get("domain_hash")
-            if stored_domain_hash is None:
-                if current_domain_hash != hashlib.sha256(b"").hexdigest():
-                    reuse_candidate = None
-                    decision_log.review_marker("prior review stale (domain memory changed); re-reviewing")
-            elif stored_domain_hash != current_domain_hash:
+            if review_mod.domain_hash_stale(target_root, reuse_candidate.get("domain_hash")):
                 reuse_candidate = None
                 decision_log.review_marker("prior review stale (domain memory changed); re-reviewing")
         if reuse_candidate is not None and review_mod.load_plan_acs(run_dir)[1] == "malformed":
