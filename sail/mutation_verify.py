@@ -219,6 +219,7 @@ def _run_test_file(target, path):
                 "rc": 127,
                 "status": "skipped",
                 "reason": "pytest unavailable",
+                "skip_kind": "runner-absent",
             }
         result = subprocess.run(
             ["pytest", path],
@@ -251,6 +252,7 @@ def _run_test_file(target, path):
         "rc": 0,
         "status": "skipped",
         "reason": "unsupported test file type",
+        "skip_kind": "unsupported-type",
     }
 
 
@@ -300,6 +302,19 @@ def _write_artifact(path, payload):
                 os.remove(tmp_path)
             except OSError:
                 pass
+
+
+def _runner_absent(test_results):
+    return any(
+        isinstance(result, dict) and result.get("skip_kind") == "runner-absent"
+        for result in (test_results or [])
+    )
+
+
+def runner_absent_alert(payload):
+    if not isinstance(payload, dict) or not payload.get("runner_absent"):
+        return None
+    return "[ALERT] mutation-verify: tests were not actually run — pytest runner was absent"
 
 
 def run_mutation_verify(target, diff_ref, run_dir=None, bug_fix=False, title=None):
@@ -369,6 +384,7 @@ def run_mutation_verify(target, diff_ref, run_dir=None, bug_fix=False, title=Non
                     "diff_hash": diff_hash,
                     "findings": [],
                     "tests": test_results,
+                    "runner_absent": _runner_absent(test_results),
                 }
                 return 0, payload, artifact_path
 
@@ -379,6 +395,7 @@ def run_mutation_verify(target, diff_ref, run_dir=None, bug_fix=False, title=Non
                 "diff_hash": diff_hash,
                 "findings": findings,
                 "tests": test_results,
+                "runner_absent": _runner_absent(test_results),
             }
             return 0, payload, artifact_path
         finally:

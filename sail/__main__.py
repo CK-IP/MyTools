@@ -169,11 +169,14 @@ def main() -> int:
         from sail.build import run_build
         return run_build(args.target or ".", args.run_dir, mode=args.mode, round=args.round, change_class=args.change_class)
     if args.command == "mutation-verify":
-        from sail.mutation_verify import run_mutation_verify
+        from sail.mutation_verify import run_mutation_verify, runner_absent_alert
 
-        rc, _payload, _artifact_path = run_mutation_verify(
+        rc, payload, _artifact_path = run_mutation_verify(
             args.target or ".", args.diff, args.run_dir, bug_fix=args.bug_fix, title=args.title
         )
+        alert = runner_absent_alert(payload)
+        if alert:
+            print(alert, file=sys.stderr)
         return rc
     if args.command == "spec":
         from sail.spec import run_spec
