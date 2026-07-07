@@ -26,6 +26,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MIN_BACKOFF="${SURF_RESUME_MIN_BACKOFF:-300}"        # never relaunch sooner than 5 min after a cap
 DEFAULT_BACKOFF="${SURF_RESUME_DEFAULT_BACKOFF:-18000}"  # parse-miss → 5h long default
 MAX_RUN_AGE="${SURF_RESUME_MAX_RUN_AGE:-7200}"       # a lockdir older than 2h is stale → reclaim
+HEARTBEAT_STALE_SECS="${SURF_HEARTBEAT_STALE_SECS:-2700}"  # live active pid older than 45 min heartbeat → stalled
 LOG="${SURF_RESUME_LOG:-/tmp/surf-resume.log}"
 CAP_NOTICE_RE='weekly limit|hit your .*limit|usage limit|usage cap|rate limit|try again later|limit will reset|resets at|/usage-credits'
 
@@ -33,6 +34,7 @@ SURF_DIR="${SURF_RESUME_DIR:-$REPO_ROOT/.surf}"   # overridable so the functiona
 RESUME_AFTER="$SURF_DIR/resume-after"
 LOCKDIR="$SURF_DIR/resume.lock"
 ACTIVE="$SURF_DIR/active"
+HEARTBEAT="$SURF_DIR/heartbeat"
 
 log() { printf '%s surf-resume: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >>"$LOG" 2>/dev/null || true; }
 
@@ -64,6 +66,29 @@ mtime_of() {
     return 0
   fi
   stat -c %Y "$p" 2>/dev/null || true
+}
+
+heartbeat_is_stale() {
+  [ -f "$HEARTBEAT" ] || return 0
+  local hb_mtime age
+  hb_mtime="$(mtime_of "$HEARTBEAT")"
+  [ -n "$hb_mtime" ] || return 0
+  age=$(( $(now_epoch) - hb_mtime ))
+  [ "$age" -ge "$HEARTBEAT_STALE_SECS" ]
+}
+
+resolve_claude() {
+  local found
+  found="$(command -v claude 2>/dev/null || true)"
+  if [ -n "$found" ]; then
+    printf '%s\n' "$found"
+    return 0
+  fi
+  if [ -x "$HOME/.local/bin/claude" ]; then
+    printf '%s\n' "$HOME/.local/bin/claude"
+    return 0
+  fi
+  return 1
 }
 
 # Is there real unfinished board work? The done-marker is the authoritative "quiet"
@@ -124,6 +149,10 @@ active_session() {
   local pid
   pid="$(cat "$ACTIVE" 2>/dev/null || true)"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    if heartbeat_is_stale; then
+      log "live .surf/active (pid $pid) but stale heartbeat — treating as stalled"
+      return 1
+    fi
     log "live .surf/active (pid $pid) — a /surf is already running"
     return 0
   fi
@@ -284,11 +313,20 @@ main() {
   # NOTE (deferred → §5c): no crash-loop escalating backoff here — bounded retry-on-transient is the
   # §5c backlog item, out of scope for this swap-only land. A persistent cap is bounded by the
   # resume-after floor below; a persistent non-cap failure simply re-relaunches each tick.
-  log "relaunching: (cd $REPO_ROOT) claude --dangerously-skip-permissions -p \"/surf resume\""
+  local claude_bin
+  claude_bin="$(resolve_claude || true)"
+  if [ -z "$claude_bin" ]; then
+    log "claude not found (PATH=${PATH:-}) — cannot relaunch /surf resume"
+    exit 1
+  fi
+  log "relaunching: (cd $REPO_ROOT) $claude_bin --dangerously-skip-permissions -p \"/surf resume\""
   # launchd sets no WorkingDirectory, so this script can run from `/` or `$HOME`. cd to the repo
   # root before relaunch so /surf resume — and /sail's cwd-relative run-dir discovery — resolve
   # against the right repo, not launchd's inherited cwd (#136 review).
-  ( cd "$REPO_ROOT" && claude --dangerously-skip-permissions -p "/surf resume" ) >"$out" 2>&1 || true
+  ( cd "$REPO_ROOT" && "$claude_bin" --dangerously-skip-permissions -p "/surf resume" ) >"$out" 2>&1 &
+  claude_pid=$!
+  printf '%s\n' "$claude_pid" >"$ACTIVE" 2>/dev/null || true
+  wait "$claude_pid" || true
   cat "$out" >>"$LOG" 2>/dev/null || true
 
   # If the relaunched run hit the cap again, arm a conservative resume-after floor so the next tick
@@ -313,6 +351,12 @@ main() {
     # behavior the pre-#124 revive model had. #124 R2-3.)
     rm -f "$RESUME_AFTER" 2>/dev/null || true
     log "run finished without hitting the cap — cleared any crossed resume-after floor"
+  fi
+
+  # Takeover/cleanup: only remove the marker if it still names this relaunch's launch pid.
+  # If the resumed /surf wrote its own pid into `.surf/active`, leave that ownership intact.
+  if [ -n "${claude_pid:-}" ] && [ -f "$ACTIVE" ] && [ "$(cat "$ACTIVE" 2>/dev/null || true)" = "$claude_pid" ]; then
+    rm -f "$ACTIVE" 2>/dev/null || true
   fi
   # lockdir + tmp removed by the EXIT trap.
 }

@@ -52,6 +52,8 @@ cat >"$WORK/bin/claude" <<STUB
 #!/usr/bin/env bash
 printf 'INVOKE %s\n' "\$*" >>"$CLAUDE_REC"
 printf 'CWD %s\n' "\$(pwd -P)" >>"$CLAUDE_REC"
+# Optional: simulate the resumed /surf run's Step-7 own-pid write into .surf/active (n2b).
+[ -n "\${CLAUDE_WRITE_ACTIVE:-}" ] && printf '%s\n' "\${CLAUDE_WRITE_ACTIVE}" >"$WORK/.surf/active" || true
 printf '%s\n' "\${CLAUDE_OUT:-run finished cleanly}"
 STUB
 chmod +x "$WORK/bin/claude"
@@ -111,13 +113,18 @@ if [ "$c" -eq 0 ]; then pass "(c) done-marker → gate closed, no relaunch"; els
 rm -f "$WORK/.surf/charter-20260101T000000.md-done"
 
 # --- (d) live .surf/active PID → a /surf already running → NO relaunch --------
+# #126 heartbeat contract: a live pid alone no longer closes the gate — a live-but-CAP-FROZEN
+# supervisor must be taken over (see (n)). "Already running" now means live pid + FRESH
+# `.surf/heartbeat`; a missing heartbeat counts as stale (backward-compat takeover). So this
+# test seeds a fresh heartbeat to keep pinning the live-and-working → no-relaunch behavior.
 seed_charter
 rm -f "$WORK/.surf/resume-after"
 echo "$$" >"$WORK/.surf/active"   # this test process is alive
+touch "$WORK/.surf/heartbeat"     # fresh heartbeat: live AND working
 run_watcher
 c="$(invoke_count)"
-if [ "$c" -eq 0 ]; then pass "(d) live .surf/active → already running, no relaunch"; else fail "(d) expected 0 relaunches, got $c"; fi
-rm -f "$WORK/.surf/active"
+if [ "$c" -eq 0 ]; then pass "(d) live .surf/active + fresh heartbeat → already running, no relaunch"; else fail "(d) expected 0 relaunches, got $c"; fi
+rm -f "$WORK/.surf/active" "$WORK/.surf/heartbeat"
 
 # --- (e) armed resume-after still in the future → NO relaunch (waiting) -------
 seed_charter
@@ -263,6 +270,174 @@ seed_charter
 rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
 CLAUDE_OUT="Claude usage limit reached" run_watcher
 if [ -s "$WORK/.surf/resume-after" ]; then pass "(m) genuine 'Claude usage limit reached' → still detected as a cap (coverage preserved)"; else fail "(m) genuine usage-limit notice NOT detected — cap coverage lost"; fi
+
+# --- (n) #126 cap-stall auto-resume: heartbeat stale-live detection + takeover -------------------
+# A live `.surf/active` pid can belong to a CAP-FROZEN interactive supervisor (live-but-stalled —
+# fired twice live, board runs 2026-07-06/07: the frozen session held the pid and the gate stayed
+# closed forever). The watcher must treat a live pid as STALLED when `.surf/heartbeat` is older
+# than SURF_HEARTBEAT_STALE_SECS (default ~2700s); a MISSING heartbeat counts as stale (backward
+# compatible with pre-heartbeat charters). Stale-live bypasses ONLY the liveness gate — the
+# done-marker and resume-after floor still apply on the takeover path.
+
+# (n1) fresh heartbeat + live pid → gate stays closed (current behavior pinned).
+seed_charter
+rm -f "$WORK/.surf/resume-after"
+echo "$$" >"$WORK/.surf/active"
+touch "$WORK/.surf/heartbeat"
+run_watcher
+c="$(invoke_count)"
+if [ "$c" -eq 0 ]; then pass "(n1) fresh heartbeat + live pid → gate closed, no takeover"; else fail "(n1) expected 0 relaunches on fresh heartbeat, got $c"; fi
+if [ ! -f "$WORK/.surf/resume-after" ]; then pass "(n1) fresh heartbeat → no backoff armed"; else fail "(n1) spurious resume-after armed on fresh heartbeat"; fi
+
+# (n2) STALE heartbeat + live pid → the live pid is a cap-frozen supervisor → takeover relaunch
+# fires. The watcher overwrites `.surf/active` with the relaunch pid BEFORE the run (so the frozen
+# session's re-anchor check fails and it stands down), and after the run it must NOT leave a dead
+# marker behind: the stub never writes `.surf/active` itself, so once the relaunch exits the marker
+# must be gone (a dead-pid marker would make `.surf/active` an unreliable liveness signal until the
+# next tick happens to clean it).
+seed_charter
+rm -f "$WORK/.surf/resume-after"
+echo "$$" >"$WORK/.surf/active"
+touch -t 202001010000 "$WORK/.surf/heartbeat"   # heartbeat mtime far past any sane threshold
+run_watcher
+c="$(invoke_count)"
+if [ "$c" -eq 1 ]; then pass "(n2) stale heartbeat + live pid → takeover relaunch fires"; else fail "(n2) expected 1 takeover relaunch on stale heartbeat, got $c"; fi
+if ! grep -qxF "$$" "$WORK/.surf/active" 2>/dev/null; then pass "(n2) stalled pid no longer owns .surf/active after takeover"; else fail "(n2) .surf/active still holds the stalled pid after takeover"; fi
+if [ ! -f "$WORK/.surf/active" ]; then pass "(n2) no dead-pid marker left in .surf/active after the relaunch exits"; else fail "(n2) dead-pid marker left in .surf/active after relaunch (holds: $(cat "$WORK/.surf/active" 2>/dev/null))"; fi
+rm -f "$WORK/.surf/active" "$WORK/.surf/heartbeat"
+
+# (n2b) The resumed run OWNS the marker: when the relaunched /surf writes its own pid into
+# `.surf/active` (the Step-7 write, simulated by the stub via CLAUDE_WRITE_ACTIVE), the watcher's
+# post-run cleanup must NOT clobber it — only a marker still holding the watcher's own launch pid
+# is cleaned.
+seed_charter
+rm -f "$WORK/.surf/resume-after"
+echo "$$" >"$WORK/.surf/active"
+touch -t 202001010000 "$WORK/.surf/heartbeat"
+CLAUDE_WRITE_ACTIVE=4242 run_watcher
+if [ "$(cat "$WORK/.surf/active" 2>/dev/null)" = "4242" ]; then pass "(n2b) resumed run's own .surf/active write preserved (watcher cleanup is conditional)"; else fail "(n2b) watcher clobbered the resumed run's .surf/active (holds: $(cat "$WORK/.surf/active" 2>/dev/null || echo '<absent>'))"; fi
+rm -f "$WORK/.surf/active" "$WORK/.surf/heartbeat"
+
+# (n3) MISSING heartbeat + live pid (pre-heartbeat charter) → counts as stale → takeover fires.
+seed_charter
+rm -f "$WORK/.surf/resume-after" "$WORK/.surf/heartbeat"
+echo "$$" >"$WORK/.surf/active"
+run_watcher
+c="$(invoke_count)"
+if [ "$c" -eq 1 ]; then pass "(n3) missing heartbeat + live pid → stale (backward compat), takeover fires"; else fail "(n3) expected 1 relaunch on missing heartbeat, got $c"; fi
+rm -f "$WORK/.surf/active"
+
+# (n4) stale heartbeat + live pid + FUTURE resume-after floor → takeover still honors the floor.
+seed_charter
+echo "$$" >"$WORK/.surf/active"
+touch -t 202001010000 "$WORK/.surf/heartbeat"
+rfc3339_at 36000 >"$WORK/.surf/resume-after"   # 10h out
+run_watcher
+c="$(invoke_count)"
+if [ "$c" -eq 0 ]; then pass "(n4) stale heartbeat but future floor → takeover waits (floor honored)"; else fail "(n4) takeover ignored the resume-after floor ($c relaunches)"; fi
+rm -f "$WORK/.surf/active" "$WORK/.surf/heartbeat" "$WORK/.surf/resume-after"
+
+# (n5) stale heartbeat + live pid + done-marker → no work remains → no takeover.
+seed_charter
+echo "$$" >"$WORK/.surf/active"
+touch -t 202001010000 "$WORK/.surf/heartbeat"
+touch "$WORK/.surf/charter-20260101T000000.md-done"
+run_watcher
+c="$(invoke_count)"
+if [ "$c" -eq 0 ]; then pass "(n5) stale heartbeat but done-marker → gate closed (work_remains honored)"; else fail "(n5) takeover fired despite done-marker ($c relaunches)"; fi
+rm -f "$WORK/.surf/active" "$WORK/.surf/heartbeat" "$WORK/.surf/charter-20260101T000000.md-done"
+
+# --- (o) #126 latent PATH bug: relaunch must resolve `claude` under launchd's minimal PATH -------
+# launchd runs the watcher with PATH=/usr/bin:/bin:/usr/sbin:/sbin — a bare `claude` never resolves
+# (~/.local/bin is not on that PATH) and the `|| true` swallowed the failure silently. The script
+# must resolve claude via an explicit PATH export / absolute-path fallback (e.g. $HOME/.local/bin).
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
+rm -rf "$WORK/.surf/resume.lock"
+mkdir -p "$WORK/.local/bin"
+cp "$WORK/bin/claude" "$WORK/.local/bin/claude"
+: >"$CLAUDE_REC"
+env -i HOME="$WORK" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+  SURF_RESUME_LOG="$WORK/.surf/watch.log" CLAUDE_OUT="run finished cleanly" \
+  SURF_RESUME_MIN_BACKOFF=60 SURF_RESUME_DEFAULT_BACKOFF=36000 SURF_RESUME_MAX_RUN_AGE=7200 \
+  bash "$WORK/config/surf-resume.sh" >/dev/null 2>&1 || true
+c="$(invoke_count)"
+if [ "$c" -eq 1 ]; then pass "(o) launchd minimal PATH → claude resolved via \$HOME/.local/bin (PATH fix)"; else fail "(o) bare \`claude\` did not resolve under launchd's minimal PATH ($c relaunches)"; fi
+
+# (o2) claude resolvable NOWHERE → the watcher must fail LOUDLY (a 'claude not found' log line),
+# not die silently. Under `set -euo pipefail` a bare `claude_bin="$(resolve_claude)"` assignment
+# aborts the script before any diagnostic can run — the exact silent-failure mode the PATH fix
+# set out to eliminate — so the not-found path needs its own pin.
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
+rm -rf "$WORK/.surf/resume.lock"
+rm -f "$WORK/.local/bin/claude"
+: >"$CLAUDE_REC"
+: >"$WORK/.surf/watch.log"
+env -i HOME="$WORK" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+  SURF_RESUME_LOG="$WORK/.surf/watch.log" \
+  SURF_RESUME_MIN_BACKOFF=60 SURF_RESUME_DEFAULT_BACKOFF=36000 SURF_RESUME_MAX_RUN_AGE=7200 \
+  bash "$WORK/config/surf-resume.sh" >/dev/null 2>&1 || true
+c="$(invoke_count)"
+if [ "$c" -eq 0 ] && grep -qi 'claude not found' "$WORK/.surf/watch.log" 2>/dev/null; then
+  pass "(o2) claude unresolvable → loud 'claude not found' log, no silent death"
+else
+  fail "(o2) unresolvable claude died silently (invokes=$c, log: $(grep -ci 'claude not found' "$WORK/.surf/watch.log" 2>/dev/null || echo 0) matches)"
+fi
+mkdir -p "$WORK/.local/bin"; cp "$WORK/bin/claude" "$WORK/.local/bin/claude"   # restore for any later test
+
+# --- (q) surf.md spec pins for the heartbeat/takeover contract (mirrors test (g)'s style) --------
+if grep -qiE '\.surf/heartbeat' "$SURF_MD" 2>/dev/null && grep -qiE 'heartbeat.*(poll tick|worker launch)|(poll tick|worker launch).*heartbeat' "$SURF_MD" 2>/dev/null; then
+  pass "(q) surf.md: supervisor touches .surf/heartbeat at checkpoints (worker launch / poll tick)"
+else
+  fail "(q) surf.md heartbeat-touch rule missing"
+fi
+if grep -qiE 'stand(s|[- ])?down' "$SURF_MD" 2>/dev/null && grep -qiE '\.surf/active.*no longer|no longer.*\.surf/active' "$SURF_MD" 2>/dev/null; then
+  pass "(q) surf.md: re-anchor rule — session stands down when .surf/active no longer holds its pid"
+else
+  fail "(q) surf.md re-anchor/stand-down rule missing"
+fi
+if grep -qiE 'overwrit[a-z]*[^.]*\.surf/active|\.surf/active[^.]*overwrit' "$SURF_MD" 2>/dev/null; then
+  pass "(q) surf.md: takeover supervisor overwrites .surf/active with its own pid"
+else
+  fail "(q) surf.md takeover-overwrite rule missing"
+fi
+# (q4) The re-anchor/stand-down check must run at EVERY heartbeat checkpoint, BEFORE the
+# checkpoint's action — a cap-frozen supervisor wakes MID-issue, so a per-issue-boundary-only
+# re-anchor leaves a window where two supervisors double-drive one worktree (round-1 HIGH).
+if grep -qiE '(re-anchor|ownership|stand[- ]?down)[^.]*(every|each)[^.]*checkpoint|(every|each)[^.]*checkpoint[^.]*(re-anchor|stand[- ]?down)' "$SURF_MD" 2>/dev/null \
+   && grep -qiE 'before[^.]*(checkpoint.{0,40}action|acting|performing)' "$SURF_MD" 2>/dev/null; then
+  pass "(q4) surf.md: re-anchor check at every heartbeat checkpoint, before the action"
+else
+  fail "(q4) surf.md per-checkpoint re-anchor-before-action rule missing"
+fi
+# (q5) The heartbeat threshold only works if the poll cadence is pinned well under it: surf.md
+# must state a concrete polling interval bound while a worker is in flight (round-1 MEDIUM —
+# an unpinned cadence lets a slow-but-healthy run be misjudged stale).
+if grep -qiE 'at least every [0-9]+ ?(minutes|min)' "$SURF_MD" 2>/dev/null; then
+  pass "(q5) surf.md: poll cadence pinned to a concrete bound (heartbeat margin holds)"
+else
+  fail "(q5) surf.md poll-cadence bound missing — heartbeat staleness margin unpinned"
+fi
+
+# --- (r) INSTALL.md documents the watcher-agent operational gotchas ------------------------------
+INSTALL_MD="$SRC_DIR/INSTALL.md"
+if grep -qF 'launchctl kickstart' "$INSTALL_MD" 2>/dev/null; then
+  pass "(r) INSTALL.md documents launchctl kickstart after load"
+else
+  fail "(r) INSTALL.md missing launchctl kickstart step"
+fi
+if grep -qiE 'Background Task Management|BTM' "$INSTALL_MD" 2>/dev/null && grep -qiE 'sleep' "$INSTALL_MD" 2>/dev/null; then
+  pass "(r) INSTALL.md notes the BTM approval + sleep limitation"
+else
+  fail "(r) INSTALL.md missing BTM/sleep limitation note"
+fi
+# New config knob (docs-impact, #56): the heartbeat staleness threshold env var must be documented.
+if grep -qF 'SURF_HEARTBEAT_STALE_SECS' "$INSTALL_MD" 2>/dev/null; then
+  pass "(r) INSTALL.md documents the SURF_HEARTBEAT_STALE_SECS knob"
+else
+  fail "(r) INSTALL.md missing SURF_HEARTBEAT_STALE_SECS documentation"
+fi
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

@@ -414,12 +414,16 @@ surviving — those are unreliable over a long board run. Instead:
   because a headless `-p` process hosts `/sail`'s crew (depth-0 subagents) just as well as an
   interactive session does.
 - **Live-session marker.** At the start of the per-issue loop (Step 7), write `.surf/active`
-  containing this process's PID, and **remove it on clean exit** (board exhausted, or the user
-  stops the run). This is the marker the cap-recovery watcher (Step 16) checks: a **live** PID in
-  `.surf/active` means a `/surf` is already running, so the watcher does **not** relaunch on top of
-  it; a *stale* marker (its PID is dead — the session was killed or the machine rebooted) is
-  ignored and cleaned, and the watcher then relaunches `/surf resume` headlessly once the cap
-  resets.
+  containing this process's PID, and **touch `.surf/heartbeat` at each checkpoint** (worker launch,
+  each poll tick, each merge/park decision, and each journal write) while the run is active; while
+  a worker is in flight, keep touching `.surf/heartbeat` at least every 10 minutes; **remove
+  `.surf/active` on clean exit** (board exhausted, or the user stops the run). This is the marker
+  the cap-recovery watcher (Step 16) checks: a **live** PID in `.surf/active` with a **fresh**
+  heartbeat means a `/surf` is already running, so the watcher does **not** relaunch on top of it;
+  at every heartbeat checkpoint, before performing the checkpoint action, re-anchor and stand down
+  if `.surf/active` no longer holds this session's pid instead of double-driving the board. A
+  *stale* marker (its PID is dead — the session was killed or the machine rebooted) is ignored and
+  cleaned, and the watcher then relaunches `/surf resume` headlessly once the cap resets.
 
 ---
 
@@ -1418,8 +1422,11 @@ not run headless — a premise now verified false).
 - **The gate (cheap-shell, no Claude call).** The watcher relaunches only when **all** hold: no
   live relaunch lock; **no live `.surf/active` session** already running (a live PID marker means a
   `/surf` is already working — do not launch on top of it; a stale marker with a dead PID is
-  ignored and cleaned, so a crash self-heals); the armed `.surf/resume-after` floor is absent or
-  has passed; and **real unfinished work remains**. Otherwise it exits immediately.
+  ignored and cleaned, so a crash self-heals. A live pid is only a blocker while `.surf/heartbeat`
+  is fresh; if the heartbeat is stale or missing, the watcher treats the live pid as stalled and
+  continues through the rest of the gate instead of double-driving); the armed `.surf/resume-after`
+  floor is absent or has passed; and **real unfinished work remains**. Otherwise it exits
+  immediately.
 - **"Work remains" = charter present AND no done-marker.** If the newest `.surf/charter-*.md` (by
   its sortable `<timestamp>` suffix) exists and there is **no** done-marker (no `.surf/<charter>-done`
   file and no `- done:` line in **that charter's own** journal — written as `board exhausted` or
@@ -1432,6 +1439,9 @@ not run headless — a premise now verified false).
   resume reader replays `.surf/runs/<issue>/.in-flight` and `.surf/runs/<issue>/.awaiting-merge`
   before any new launch: in-flight gets re-queued, awaiting-merge resumes at the serial merge
   re-check, and only then does `/surf` decide whether more work remains.
+- **The takeover relaunch overwrites `.surf/active`.** If the watcher takes over a stalled live
+  session, the fresh relaunch pid replaces the stale pid in `.surf/active` so the resumed run owns
+  the marker again.
 - **Reset capture (conservative floor).** When the relaunched run hits the cap again, the watcher
   parses the reset time from the run's **own output** (a structured signal, not pane-scraping) and
   arms `resume-after = max(parsed_reset, now + MIN_BACKOFF)`. If the reset time is **unparseable**,
