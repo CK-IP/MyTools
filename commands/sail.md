@@ -396,16 +396,18 @@ python3 -m sail converge --rc "$RC" --round "$ROUND" --run-dir "$SESSION_DIR" --
 **Convergence guardrails — trend-stall + cost backstop + hard ceiling (#130).** The old fixed
 3-round cap conflated true non-convergence (stop) with a deep-but-converging run (continue) and a
 just-introduced regression (continue). It is replaced by a layered guard, evaluated **on a non-green
-round only, AFTER the commit-eligible floors** (reappearance / spec-conflict / materiality) so a
-mechanically-sound run still gets to `proceed-hardening`/`proceed-dissent` rather than being parked:
+round only, AFTER the early PARK guards (reappearance / whack-a-mole) and the commit-eligible
+floors (spec-conflict / materiality) so a mechanically-sound run still gets to
+`proceed-hardening`/`proceed-dissent` rather than being parked:
 
 - **cost-backstop (the PRIMARY runaway guard).** Wall-clock elapsed since the run started —
   `elapsed_seconds(run_dir)` measures from the **later** of `run-state.json` `started_at` and the
   most-recent decision-log resume marker, so a parked-then-resumed run gets a fresh budget instead
   of tripping instantly on a stale start — past `SAIL_COST_CEILING_SECONDS` → `park`. The elapsed
   value is **surfaced to stderr** on every `sail converge` call (the per-run cost line). It
-  **fails OPEN**: an unset/invalid ceiling is inert, and a missing/unparseable start time never
-  parks (a PARK guard must never park on bad data — the hard ceiling below is the guaranteed catch).
+  **fails OPEN**: unset uses the documented 14400s (4h) default; explicit invalid/non-positive values
+  still fail open and disable the ceiling, and a missing/unparseable start time never parks (a
+  PARK guard must never park on bad data — the hard ceiling below is the guaranteed catch).
   `/sail` cannot observe subagent **token** counts from `sail/` Python (only the harness can), so the
   deterministic backstop and the surfaced per-run cost are **wall-time**; tokens are shown only if
   the driver supplies them.
@@ -416,6 +418,10 @@ mechanically-sound run still gets to `proceed-hardening`/`proceed-dissent` rathe
   finding is **not** parked. The streak is reconstructed from a durable per-round ledger
   (`trend-ledger.jsonl`, hydrated from each round's `review.json` + decision-log under the
   **strong** `review_current_and_clean` freshness check), so a resumed process never resets it.
+- **whack-a-mole (the addressed-reappearance PARK).** When a blocking fingerprint keeps reappearing
+  while being dispositioned `addressed` each round, the trend ledger's `blocking_fingerprints` and
+  `addressed_fingerprints` trail lets `sail converge` detect the churn and park with a distinct
+  `whack-a-mole:` stderr callout instead of letting the streak reset forever.
 - **same-area saturation (advisory, never a park).** When the same trend ledger shows
   `SAIL_SATURATION_WINDOW` consecutive rounds concentrated on one dominant file area, `sail
   converge` prints a `same-area-saturation:` stderr callout naming the area and streak. This is a

@@ -4,13 +4,21 @@
 # backstop, retaining the round cap as the ULTIMATE hard ceiling.
 #
 # The oracle now layers three guards on a non-green round (after the commit-eligible floors):
-#   1. cost-backstop  — wall-clock elapsed since run start > SAIL_COST_CEILING_SECONDS (PRIMARY
-#                       runaway guard). Fails OPEN: unparseable/missing start or unset ceiling
-#                       never parks (the hard ceiling is the guaranteed catch).
+#   1. cost-backstop  — wall-clock elapsed since run start > the cost ceiling. #142: ships an
+#                       ACTIVE default ceiling (14400s = 4h) when SAIL_COST_CEILING_SECONDS is
+#                       unset; an explicit 0/non-positive/unparseable value disables it. Still
+#                       fails OPEN on bad data: an unparseable/missing start never parks (the
+#                       hard ceiling is the guaranteed catch).
 #   2. trend-stall    — N (SAIL_TREND_WINDOW, default 3) consecutive rounds where max blocking
 #                       severity did NOT drop AND nothing was `addressed` (true churn). A round
 #                       that drops severity or addresses a finding resets the streak.
 #   3. hard ceiling   — round_num >= --max-rounds (default raised above 3) — ultimate backstop.
+#
+# #142 whack-a-mole: a blocking finding fingerprint (file+id) that is dispositioned `addressed`
+# yet REAPPEARS in later rounds evades the trend-stall (each re-address resets the streak). The
+# ledger rows now persist per-round blocking/addressed fingerprints, and a distinct PARK guard
+# (alongside the reappeared-rejected/deferred oscillation guard, before the commit-eligible
+# floors) fires when one fingerprint keeps reappearing after being addressed.
 #
 # Durable: the trend streak is reconstructed from trend-ledger.jsonl in the run-dir, so a
 # resumed process never resets it to zero.
@@ -115,6 +123,31 @@ fi
 grep -q '^ok$' "$LOG_FILE" || fail "T1 pure-function test did not reach 'ok'"
 
 # ---------------------------------------------------------------------------
+# T1b — #142: cost ceiling ships an ACTIVE documented default (14400s = 4h)
+# ---------------------------------------------------------------------------
+if ! python3 - <<'PY' >"$LOG_FILE" 2>&1
+import os
+from sail.convergence import cost_ceiling_seconds
+
+os.environ.pop("SAIL_COST_CEILING_SECONDS", None)
+assert cost_ceiling_seconds() == 14400.0, (
+    f"unset env must yield the documented 4h default, got {cost_ceiling_seconds()}")
+os.environ["SAIL_COST_CEILING_SECONDS"] = "60"
+assert cost_ceiling_seconds() == 60.0, "env override must win over the default"
+os.environ["SAIL_COST_CEILING_SECONDS"] = "0"
+assert cost_ceiling_seconds() is None, "explicit 0 must DISABLE the ceiling (escape hatch)"
+os.environ["SAIL_COST_CEILING_SECONDS"] = "-5"
+assert cost_ceiling_seconds() is None, "non-positive must disable, not fall back to the default"
+os.environ["SAIL_COST_CEILING_SECONDS"] = "not-a-number"
+assert cost_ceiling_seconds() is None, "unparseable must fail open (None), not default"
+print("ok-default")
+PY
+then
+  fail "T1b cost_ceiling_seconds default contract (#142) not implemented"
+fi
+grep -q '^ok-default$' "$LOG_FILE" || fail "T1b did not reach 'ok-default'"
+
+# ---------------------------------------------------------------------------
 # T2 — durable ledger: record idempotent per round + survives a fresh process
 # ---------------------------------------------------------------------------
 if ! python3 - "$TMP_ROOT/rd_ledger" <<'PY' >"$LOG_FILE" 2>&1
@@ -215,9 +248,24 @@ out=$(SAIL_COST_CEILING_SECONDS=5 converge --rc 1 --round 1 --run-dir "$RD_COST"
 [ "$out" = "park" ] || fail "cost backstop should PARK past ceiling, got '$out'"
 grep -qi "cost.backstop\|cost-backstop" "$TMP_ROOT/stderr.log" || fail "cost-backstop stop-reason not printed to stderr"
 
-# Ceiling unset -> inert (revise, not park).
+# #142 REVERSAL: ceiling unset -> the documented DEFAULT (14400s) is enforced, no longer inert.
+# The seeded start is years past, far over 4h -> park with the cost-backstop reason.
 out=$(converge --rc 1 --round 1 --run-dir "$RD_COST" --max-rounds 99) || fail "converge cost-unset exited non-zero"
-[ "$out" = "revise" ] || fail "unset cost ceiling must be inert ('revise'), got '$out'"
+[ "$out" = "park" ] || fail "unset ceiling must enforce the 14400s default (park on a years-old start), got '$out'"
+grep -qi "cost.backstop\|cost-backstop" "$TMP_ROOT/stderr.log" || fail "default-ceiling park must print the cost-backstop stop-reason"
+
+# A FRESH start stays under the default -> revise (the default must not clip a normal run).
+RD_FRESHSTART="$TMP_ROOT/rd_freshstart"
+mkdir -p "$RD_FRESHSTART"
+cat > "$RD_FRESHSTART/run-state.json" <<JSON
+{"run_id": "x", "started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)", "schema_version": 1, "gates": []}
+JSON
+out=$(converge --rc 1 --round 1 --run-dir "$RD_FRESHSTART" --max-rounds 99) || fail "converge fresh-start exited non-zero"
+[ "$out" = "revise" ] || fail "a fresh run under the default ceiling must 'revise' (no false park), got '$out'"
+
+# Explicit escape hatch: SAIL_COST_CEILING_SECONDS=0 disables the ceiling entirely.
+out=$(SAIL_COST_CEILING_SECONDS=0 converge --rc 1 --round 1 --run-dir "$RD_COST" --max-rounds 99) || fail "converge cost-disabled exited non-zero"
+[ "$out" = "revise" ] || fail "explicit 0 must disable the ceiling ('revise'), got '$out'"
 
 # Fail OPEN: unparseable started_at -> elapsed unknown -> NEVER park (revise).
 RD_BADSTART="$TMP_ROOT/rd_badstart"
@@ -300,6 +348,148 @@ out=$(SAIL_COST_CEILING_SECONDS=5 converge --rc 1 --round 4 --run-dir "$RD_ANCHO
 [ "$out" = "park" ] || fail "a far-past cost anchor must PARK despite recent same-session resume markers (r3 cumulative fix), got '$out'"
 
 # ---------------------------------------------------------------------------
+# T8 — #142 whack-a-mole: an `addressed`-then-reappearing fingerprint trips a PARK
+# ---------------------------------------------------------------------------
+# Pure predicate: addressed_reappearance_streak counts, for a fingerprint still blocking in the
+# LATEST round, the rounds where it reappeared after having been dispositioned `addressed`.
+if ! python3 - <<'PY' >"$LOG_FILE" 2>&1
+from sail.convergence import addressed_reappearance_streak
+
+F = "sail/foo.py::F1"
+whack = lambda n: [
+    {"round": r, "max_blocking_severity_rank": 1, "addressed_count": 1,
+     "blocking_fingerprints": [F], "addressed_fingerprints": [F]}
+    for r in range(1, n + 1)
+]
+# 4 rounds re-addressing the same reappearing fingerprint: F reappears at rounds 2,3,4 -> streak 3.
+assert addressed_reappearance_streak(whack(4)) == 3, addressed_reappearance_streak(whack(4))
+# 2 rounds -> one reappearance -> streak 1.
+assert addressed_reappearance_streak(whack(2)) == 1, addressed_reappearance_streak(whack(2))
+# A single round can never be a reappearance.
+assert addressed_reappearance_streak(whack(1)) == 0
+
+# Genuine progress: each round addresses a DISTINCT finding that then stays gone -> 0.
+progress = [
+    {"round": 1, "max_blocking_severity_rank": 1, "addressed_count": 1,
+     "blocking_fingerprints": ["a.py::1"], "addressed_fingerprints": ["a.py::1"]},
+    {"round": 2, "max_blocking_severity_rank": 1, "addressed_count": 1,
+     "blocking_fingerprints": ["b.py::2"], "addressed_fingerprints": ["b.py::2"]},
+    {"round": 3, "max_blocking_severity_rank": 1, "addressed_count": 0,
+     "blocking_fingerprints": ["c.py::3"], "addressed_fingerprints": []},
+]
+assert addressed_reappearance_streak(progress) == 0, "distinct fingerprints must never count"
+
+# Latest-round gating: stale whack history but the CURRENT round no longer carries the
+# fingerprint -> 0 (never park on history the run has moved past).
+moved_on = whack(3) + [
+    {"round": 4, "max_blocking_severity_rank": 1, "addressed_count": 0,
+     "blocking_fingerprints": ["new.py::9"], "addressed_fingerprints": []},
+]
+assert addressed_reappearance_streak(moved_on) == 0, "must gate on the latest round's fingerprints"
+
+# Legacy rows lacking the fingerprint keys (pre-#142 ledger) -> 0, resume-safe.
+legacy = [
+    {"round": 1, "max_blocking_severity_rank": 1, "addressed_count": 1},
+    {"round": 2, "max_blocking_severity_rank": 1, "addressed_count": 1},
+]
+assert addressed_reappearance_streak(legacy) == 0, "legacy ledgers must default fingerprints to []"
+
+# Robustness: junk input never raises.
+assert addressed_reappearance_streak("not-a-list") == 0
+assert addressed_reappearance_streak(None) == 0
+assert addressed_reappearance_streak([{"round": "x"}, "junk"]) == 0
+print("ok-whack-pure")
+PY
+then
+  fail "T8 addressed_reappearance_streak predicate (#142) not implemented"
+fi
+grep -q '^ok-whack-pure$' "$LOG_FILE" || fail "T8 pure predicate did not reach 'ok-whack-pure'"
+
+# Persistence round-trip: record_trend_row persists the fingerprint fields; read_trend reads them
+# back and defaults them to [] on legacy rows (AC1/AC2 backward-compatible resume).
+if ! python3 - "$TMP_ROOT/rd_fp" <<'PY' >"$LOG_FILE" 2>&1
+import json, os, sys
+from sail.convergence import record_trend_row, read_trend
+
+rd = sys.argv[1]
+F = "sail/foo.py::F1"
+assert record_trend_row(rd, 1, 1, 1, area="sail/foo.py",
+                        blocking_fingerprints=[F], addressed_fingerprints=[F]) is True
+# A legacy row with no fingerprint keys, as a pre-#142 process would have written.
+with open(os.path.join(rd, "trend-ledger.jsonl"), "a") as fh:
+    fh.write(json.dumps({"round": 2, "max_blocking_severity_rank": 1, "addressed_count": 0}) + "\n")
+rows = read_trend(rd)
+assert rows[0]["blocking_fingerprints"] == [F], rows[0]
+assert rows[0]["addressed_fingerprints"] == [F], rows[0]
+assert rows[1]["blocking_fingerprints"] == [], "legacy row must default blocking_fingerprints to []"
+assert rows[1]["addressed_fingerprints"] == [], "legacy row must default addressed_fingerprints to []"
+print("ok-whack-roundtrip")
+PY
+then
+  fail "T8 fingerprint ledger round-trip (#142) not implemented"
+fi
+grep -q '^ok-whack-roundtrip$' "$LOG_FILE" || fail "T8 round-trip did not reach 'ok-whack-roundtrip'"
+
+# Hydrate extraction: the PRODUCTION path that feeds the whack-a-mole guard — hydrate_trend_row
+# reading a real review.json + real decision-log resolutions — persists the correct fingerprints.
+# Monkeypatch only the strong-freshness gate (same recipe as test_sail_132 T4, no git needed);
+# the extraction itself (severity filter, disposition filter, file::id shape) runs for real.
+if ! python3 - "$TMP_ROOT/rd_hydrate_fp" <<'PY' >"$LOG_FILE" 2>&1
+import os, sys, json
+import sail.convergence as C
+from sail.decisionlog import DecisionLog
+
+rd = sys.argv[1]; os.makedirs(rd, exist_ok=True)
+C.review_current_and_clean = lambda run_dir, target, round: True
+with open(os.path.join(rd, "review.json"), "w") as fh:
+    json.dump({
+        "status": "completed", "round": 3,
+        "findings": [
+            {"id": "f1", "severity": "HIGH", "file": "sail/foo.py"},   # addressed this round
+            {"id": "f2", "severity": "HIGH", "file": "sail/bar.py"},   # deferred -> NOT addressed
+            {"id": "f3", "severity": "LOW", "file": "sail/baz.py"},    # non-blocking -> excluded
+        ],
+    }, fh)
+dl = DecisionLog(rd)
+dl.finding_resolution("f1", "addressed", "fixed the guard", round=3)
+dl.finding_resolution("f2", "deferred", "follow-up filed", round=3)
+
+C.hydrate_trend_row(rd, ".", 3)
+row = next(r for r in C.read_trend(rd) if r["round"] == 3)
+assert sorted(row["blocking_fingerprints"]) == ["sail/bar.py::f2", "sail/foo.py::f1"], row
+assert row["addressed_fingerprints"] == ["sail/foo.py::f1"], (
+    "only the finding with a real `addressed` disposition may be recorded as addressed", row)
+print("ok-hydrate-fp")
+PY
+then
+  fail "T8b hydrate fingerprint extraction (review.json + decision-log) not proven"
+fi
+grep -q '^ok-hydrate-fp$' "$LOG_FILE" || fail "T8b did not reach 'ok-hydrate-fp'"
+
+# CLI: a seeded whack-a-mole ledger PARKs with a DISTINCT stderr stop-reason. Note the seeded
+# rounds each have addressed_count=1, so the ORIGINAL trend-stall would reset every round and
+# never fire — this case discriminates exactly the #142 gap.
+RD_WHACK="$TMP_ROOT/rd_whack"
+mkdir -p "$RD_WHACK"
+cat > "$RD_WHACK/trend-ledger.jsonl" <<'JSONL'
+{"round": 1, "max_blocking_severity_rank": 1, "addressed_count": 1, "area": "sail/foo.py", "blocking_fingerprints": ["sail/foo.py::F1"], "addressed_fingerprints": ["sail/foo.py::F1"]}
+{"round": 2, "max_blocking_severity_rank": 1, "addressed_count": 1, "area": "sail/foo.py", "blocking_fingerprints": ["sail/foo.py::F1"], "addressed_fingerprints": ["sail/foo.py::F1"]}
+{"round": 3, "max_blocking_severity_rank": 1, "addressed_count": 1, "area": "sail/foo.py", "blocking_fingerprints": ["sail/foo.py::F1"], "addressed_fingerprints": ["sail/foo.py::F1"]}
+{"round": 4, "max_blocking_severity_rank": 1, "addressed_count": 1, "area": "sail/foo.py", "blocking_fingerprints": ["sail/foo.py::F1"], "addressed_fingerprints": ["sail/foo.py::F1"]}
+JSONL
+out=$(converge --rc 1 --round 4 --run-dir "$RD_WHACK" --max-rounds 99) || fail "converge whack exited non-zero"
+[ "$out" = "park" ] || fail "an addressed-then-reappearing fingerprint (streak 3) must PARK, got '$out'"
+grep -qiE "whack|re-?addressed|addressed.*reappear" "$TMP_ROOT/stderr.log" || fail "whack-a-mole PARK must emit a distinct stderr stop-reason"
+
+# The window is honored: a wider SAIL_TREND_WINDOW keeps the same ledger on 'revise'.
+out=$(SAIL_TREND_WINDOW=5 converge --rc 1 --round 4 --run-dir "$RD_WHACK" --max-rounds 99) || fail "converge whack-window exited non-zero"
+[ "$out" = "revise" ] || fail "window 5 over a whack-streak-3 ledger must 'revise', got '$out'"
+
+# Green still wins: rc 0 proceeds regardless of the whack ledger.
+out=$(converge --rc 0 --round 4 --run-dir "$RD_WHACK" --max-rounds 99) || fail "converge whack-green exited non-zero"
+[ "$out" = "proceed" ] || fail "rc 0 must 'proceed' regardless of whack history, got '$out'"
+
+# ---------------------------------------------------------------------------
 # T5 — hard ceiling is the ultimate backstop (round cap still parks); default raised above 3
 # ---------------------------------------------------------------------------
 # No run-dir => no trend/cost data; pure round-vs-ceiling behavior.
@@ -362,5 +552,12 @@ assert_md 'SAIL_COST_CEILING_SECONDS' "$SAIL_MD" "sail.md must document the cost
 assert_md 'SAIL_TREND_WINDOW' "$SAIL_MD" "sail.md must document the trend-window env var"
 assert_md 'SAIL_HARD_ROUND_CEILING' "$SAIL_MD" "sail.md must document the hard-ceiling override env var"
 [ -f "$README" ] && assert_md 'trend.stall|cost.backstop|hard ceiling' "$README" "README missing the layered oracle decision order"
+
+# #142: the default ceiling and the whack-a-mole stop are documented, and the reference config
+# carries the SAIL_COST_CEILING_SECONDS override guidance.
+assert_md '14400' "$SAIL_MD" "sail.md must document the 14400s (4h) default cost ceiling"
+assert_md 'whack.a.mole|re-?addressed|addressed.*reappear' "$SAIL_MD" "sail.md missing the addressed-reappearance (whack-a-mole) stop"
+grep -q 'SAIL_COST_CEILING_SECONDS' "$REPO_ROOT/home/settings.reference.json" \
+  || fail "settings.reference.json must document the SAIL_COST_CEILING_SECONDS default/override (#142)"
 
 echo "PASS: test_sail_130_convergence_trend.sh"

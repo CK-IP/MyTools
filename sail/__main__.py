@@ -206,6 +206,7 @@ def main() -> int:
             read_trend,
             loop_decision,
             materiality_floor,
+            addressed_reappearance_streak,
             reappeared_dispositioned,
             saturation_window,
             same_area_saturation_streak,
@@ -216,6 +217,7 @@ def main() -> int:
 
         target_root = args.target or os.getcwd()
         elapsed = elapsed_seconds(args.run_dir) if args.run_dir else None
+        trend_guard_window = trend_window()
         if args.run_dir:
             hydrate_trend_row(args.run_dir, target_root, args.round)
             if elapsed is not None:
@@ -228,12 +230,12 @@ def main() -> int:
         decision = loop_decision(args.rc, args.round, args.max_rounds)
         trend_rows = read_trend(args.run_dir)
         if args.run_dir:
-            window = saturation_window()
-            if area_saturated(trend_rows, window):
+            saturation_guard_window = saturation_window()
+            if area_saturated(trend_rows, saturation_guard_window):
                 streak = same_area_saturation_streak(trend_rows)
                 area = trend_rows[-1].get("area")
                 print(
-                    f"same-area-saturation: area={area} streak={streak} window={window}",
+                    f"same-area-saturation: area={area} streak={streak} window={saturation_guard_window}",
                     file=sys.stderr,
                 )
             reappeared = reappeared_dispositioned(args.run_dir, args.round)
@@ -241,6 +243,15 @@ def main() -> int:
                 print(
                     "non-convergence: blocking finding re-flagged after rejected/deferred disposition: "
                     + ",".join(reappeared),
+                    file=sys.stderr,
+                )
+                print(PARK)
+                return 0
+            whack_streak = addressed_reappearance_streak(trend_rows)
+            if whack_streak >= trend_guard_window:
+                print(
+                    f"whack-a-mole: addressed blocking fingerprint reappeared across streak "
+                    f"{whack_streak} >= window {trend_guard_window}",
                     file=sys.stderr,
                 )
                 print(PARK)
@@ -277,11 +288,10 @@ def main() -> int:
             )
             print(PARK)
             return 0
-        window = trend_window()
         streak = trend_no_progress_streak(trend_rows)
-        if streak >= window:
+        if streak >= trend_guard_window:
             print(
-                f"trend-stall: no-progress streak {streak} >= window {window}",
+                f"trend-stall: no-progress streak {streak} >= window {trend_guard_window}",
                 file=sys.stderr,
             )
             print(PARK)
