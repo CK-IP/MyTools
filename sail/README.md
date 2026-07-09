@@ -280,14 +280,15 @@ decision the autonomous driver consults. It prints exactly one of
 guards are evaluated in this order:
 
 1. **reappearance → park** — a blocking finding re-flagged after a prior `rejected`/`deferred`.
-2. **spec-conflict → proceed-dissent** — every blocking finding validly `spec-conflict`-dispositioned (#108).
-3. **materiality → proceed-hardening** — the deterministic audit is clean and every blocking finding is `deferred` + judged immaterial (#103).
-4. **cost-backstop → park (#130)** — wall-clock elapsed > `SAIL_COST_CEILING_SECONDS` (the PRIMARY runaway guard). Elapsed is measured by `elapsed_seconds(run_dir)` from the **later** of `run-state.json` `started_at` and the most-recent decision-log resume marker, so a parked-then-resumed run gets a fresh budget. **Fails open**: unset/invalid ceiling is inert, unparseable start never parks.
-5. **trend-stall → park (#130)** — `SAIL_TREND_WINDOW` (default 3) consecutive churn rounds (`max_blocking_severity_rank` did not drop AND nothing `addressed`). Streak reconstructed from the durable `trend-ledger.jsonl` ledger (resume-safe), hydrated only under the strong `review_current_and_clean` freshness check.
-6. **same-area saturation → advisory only** — `SAIL_SATURATION_WINDOW` (default 3) consecutive rounds concentrated on one dominant file area cause a `same-area-saturation:` stderr callout naming the area and streak. It is a steer to widen the budget / rethink the design, never a park, never an exit-code change, and is distinct from the by-id `genuine-oscillation` PARK.
-7. **hard ceiling → park (#130)** — `round_num >= --max-rounds` (default raised above 3, overridable via `SAIL_HARD_ROUND_CEILING`), the ultimate always-available backstop.
+2. **reappearing-addressed whack-a-mole → park (#142)** — a blocking fingerprint that keeps reappearing while being dispositioned `addressed` each round (persisted in `trend-ledger.jsonl` as `blocking_fingerprints`/`addressed_fingerprints`) trips a distinct `whack-a-mole:` stderr stop-reason instead of resetting the trend streak forever.
+3. **spec-conflict → proceed-dissent** — every blocking finding validly `spec-conflict`-dispositioned (#108).
+4. **materiality → proceed-hardening** — the deterministic audit is clean and every blocking finding is `deferred` + judged immaterial (#103).
+5. **cost-backstop → park (#130)** — wall-clock elapsed > `SAIL_COST_CEILING_SECONDS` (the PRIMARY runaway guard). Elapsed is measured by `elapsed_seconds(run_dir)` from the **later** of `run-state.json` `started_at` and the most-recent decision-log resume marker, so a parked-then-resumed run gets a fresh budget. **Unset now uses the documented default** (`14400s` = 4h); explicit invalid/non-positive values still fail open and disable the ceiling, and an unparseable start never parks.
+6. **trend-stall → park (#130)** — `SAIL_TREND_WINDOW` (default 3) consecutive churn rounds (`max_blocking_severity_rank` did not drop AND nothing `addressed`). Streak reconstructed from the durable `trend-ledger.jsonl` ledger (resume-safe), hydrated only under the strong `review_current_and_clean` freshness check.
+7. **same-area saturation → advisory only** — `SAIL_SATURATION_WINDOW` (default 3) consecutive rounds concentrated on one dominant file area cause a `same-area-saturation:` stderr callout naming the area and streak. It is a steer to widen the budget / rethink the design, never a park, never an exit-code change, and is distinct from the by-id `genuine-oscillation` PARK.
+8. **hard ceiling → park (#130)** — `round_num >= --max-rounds` (default raised above 3, overridable via `SAIL_HARD_ROUND_CEILING`), the ultimate always-available backstop.
 
-The commit-eligible floors (2–3) are checked **before** the PARK backstops (4, 5, 7) so a
+The oscillation guards (1–2) run first; the commit-eligible floors (3–4) are then checked **before** the remaining PARK backstops (5, 6, 8) so a
 mechanically-sound run still commits rather than being parked. `/sail` cannot observe subagent token
 counts from `sail/` Python, so cost is measured/surfaced as wall-time (tokens only if the driver
 supplies them).

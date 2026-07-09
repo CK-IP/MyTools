@@ -100,6 +100,85 @@ def dominant_area_for_findings(findings: object) -> str | None:
     return top_areas[0] if len(top_areas) == 1 else None
 
 
+def _normalized_fingerprint(value: object) -> str | None:
+    if value is None:
+        return None
+    fingerprint = str(value).strip()
+    return fingerprint if fingerprint else None
+
+
+def _normalized_fingerprint_list(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        fingerprint = _normalized_fingerprint(value)
+        if fingerprint is None or fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        out.append(fingerprint)
+    return out
+
+
+def _finding_fingerprint(finding: object) -> str | None:
+    if not isinstance(finding, dict):
+        return None
+    finding_id = _normalized_fingerprint(finding.get("id"))
+    if finding_id is None:
+        return None
+    file_name = _normalized_fingerprint(finding.get("file")) or ""
+    return f"{file_name}::{finding_id}"
+
+
+def _blocking_fingerprints_for_findings(findings: object) -> list[str]:
+    if not isinstance(findings, list):
+        return []
+    fingerprints: list[str] = []
+    seen: set[str] = set()
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        severity = str(finding.get("severity", "")).strip().upper()
+        if severity not in _BLOCKING:
+            continue
+        fingerprint = _finding_fingerprint(finding)
+        if fingerprint is None or fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        fingerprints.append(fingerprint)
+    return fingerprints
+
+
+def _addressed_fingerprints_for_findings(
+    findings: object, resolutions: object
+) -> list[str]:
+    if not isinstance(findings, list) or not isinstance(resolutions, dict):
+        return []
+    fingerprints: list[str] = []
+    seen: set[str] = set()
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        severity = str(finding.get("severity", "")).strip().upper()
+        if severity not in _BLOCKING:
+            continue
+        finding_id = finding.get("id")
+        if not finding_id:
+            continue
+        resolution = resolutions.get(finding_id)
+        if not isinstance(resolution, dict):
+            continue
+        if str(resolution.get("disposition", "")).strip().lower() != "addressed":
+            continue
+        fingerprint = _finding_fingerprint(finding)
+        if fingerprint is None or fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        fingerprints.append(fingerprint)
+    return fingerprints
+
+
 def read_trend(run_dir: str | None) -> list[dict[str, Any]]:
     if not run_dir:
         return []
@@ -133,6 +212,12 @@ def read_trend(run_dir: str | None) -> list[dict[str, Any]]:
                     "max_blocking_severity_rank": max_rank,
                     "addressed_count": addressed_count,
                     "area": item.get("area"),
+                    "blocking_fingerprints": _normalized_fingerprint_list(
+                        item.get("blocking_fingerprints")
+                    ),
+                    "addressed_fingerprints": _normalized_fingerprint_list(
+                        item.get("addressed_fingerprints")
+                    ),
                 }
     except OSError:
         return []
@@ -145,6 +230,8 @@ def record_trend_row(
     max_rank: int,
     addressed_count: int,
     area: str | None = None,
+    blocking_fingerprints: object = None,
+    addressed_fingerprints: object = None,
 ) -> bool:
     if not run_dir:
         return False
@@ -163,6 +250,8 @@ def record_trend_row(
         "max_blocking_severity_rank": max_rank,
         "addressed_count": addressed_count,
         "area": area,
+        "blocking_fingerprints": _normalized_fingerprint_list(blocking_fingerprints),
+        "addressed_fingerprints": _normalized_fingerprint_list(addressed_fingerprints),
     }
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(payload) + "\n")
@@ -235,6 +324,56 @@ def trend_stalled(rows: object, window: int | None = None) -> bool:
         return trend_no_progress_streak(rows) >= int(window)
     except (TypeError, ValueError):
         return False
+
+
+def addressed_reappearance_streak(rows: Any) -> int:
+    try:
+        if isinstance(rows, (str, bytes)):
+            return 0
+        iterable = list(rows)
+    except TypeError:
+        return 0
+
+    normalized: dict[int, dict[str, Any]] = {}
+    for row in iterable:
+        if not isinstance(row, dict):
+            continue
+        raw_round = row.get("round")
+        if raw_round is None:
+            continue
+        try:
+            round_num = int(raw_round)
+        except (TypeError, ValueError):
+            continue
+        normalized[round_num] = {
+            "round": round_num,
+            "blocking_fingerprints": _normalized_fingerprint_list(
+                row.get("blocking_fingerprints")
+            ),
+            "addressed_fingerprints": _normalized_fingerprint_list(
+                row.get("addressed_fingerprints")
+            ),
+        }
+    ordered = [normalized[key] for key in sorted(normalized)]
+    if not ordered:
+        return 0
+
+    latest_blocking = set(ordered[-1]["blocking_fingerprints"])
+    if not latest_blocking:
+        return 0
+
+    best_streak = 0
+    for fingerprint in latest_blocking:
+        streak = 0
+        for row in reversed(ordered):
+            if fingerprint not in row["blocking_fingerprints"]:
+                break
+            if fingerprint not in row["addressed_fingerprints"]:
+                break
+            streak += 1
+        if streak > best_streak:
+            best_streak = streak
+    return best_streak - 1 if best_streak > 0 else 0
 
 
 def same_area_saturation_streak(rows: Any) -> int:
@@ -376,9 +515,13 @@ def cost_surface_line(elapsed: float) -> str:
 
 
 def cost_ceiling_seconds() -> float | None:
+    """Return the active cost ceiling in seconds.
+
+    Unset uses the documented 14400s (4h) default. Invalid or non-positive values fail open to None.
+    """
     raw = os.environ.get("SAIL_COST_CEILING_SECONDS")
     if raw is None:
-        return None
+        return 14400.0
     try:
         ceiling = float(raw)
     except (TypeError, ValueError):
@@ -453,7 +596,16 @@ def hydrate_trend_row(run_dir: str | None, target: str, round_num: int) -> int |
         rank = max_blocking_severity_rank(findings)
         area = dominant_area_for_findings(findings)
         addressed = addressed_count_for_round(run_dir, round_num)
-        record_trend_row(run_dir, round_num, rank, addressed, area=area)
+        resolutions = DecisionLog(run_dir).read_resolutions(round=round_num)
+        record_trend_row(
+            run_dir,
+            round_num,
+            rank,
+            addressed,
+            area=area,
+            blocking_fingerprints=_blocking_fingerprints_for_findings(findings),
+            addressed_fingerprints=_addressed_fingerprints_for_findings(findings, resolutions),
+        )
         return rank
     except Exception:
         return None
