@@ -210,6 +210,9 @@ converge() { python3 -m sail converge "$@" 2>"$TMP_ROOT/stderr.log"; }
 # A saturated ledger (trailing 3 rounds in one area). SAIL_TREND_WINDOW high + big --max-rounds +
 # no cost ceiling => the decision is plain "revise"; only the saturation callout differs.
 RD_SAT="$TMP_ROOT/rd_sat"; mkdir -p "$RD_SAT"
+cat > "$RD_SAT/run-state.json" <<'JSON'
+{"gates":[{"name":"ruff","status":"passed","new_failures":0}]}
+JSON
 cat > "$RD_SAT/trend-ledger.jsonl" <<'JSONL'
 {"round": 1, "max_blocking_severity_rank": 1, "addressed_count": 0, "area": "sail/lifecycle.py"}
 {"round": 2, "max_blocking_severity_rank": 1, "addressed_count": 0, "area": "sail/lifecycle.py"}

@@ -107,6 +107,9 @@ out=$(converge --rc 1 --round 2) || fail "case 9 exited non-zero"
 # 10. green result stays proceed even when a dispositioned finding reappears.
 RD10="$TMP_ROOT/rd10"
 seed_run_dir "$RD10" $'- resolution: [ID1] rejected — because' '{"round":2,"findings":[{"id":"ID1","severity":"HIGH"}]}'
+cat > "$RD10/run-state.json" <<'JSON'
+{"gates":[{"name":"ruff","status":"passed","new_failures":0}]}
+JSON
 out=$(converge --rc 0 --round 2 --run-dir "$RD10") || fail "case 10 exited non-zero"
 [ "$out" = "proceed" ] || fail "case 10 expected proceed, got '$out'"
 
