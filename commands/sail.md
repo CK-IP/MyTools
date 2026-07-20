@@ -19,6 +19,29 @@ mkdir -p "$SESSION_DIR"
 
 Pass `--run-dir "$SESSION_DIR"` to **both** `sail plan` and `sail run --diff` below.
 
+### Metrics ledger (#146)
+
+`sail metrics` keeps a per-repo JSONL telemetry ledger at `.sail/metrics.jsonl` — the enabler for
+every future /sail tuning decision (you can't tune what you don't measure). It records cost, rounds,
+outcomes, degraded flags (#116), backends, and escape rate. The ledger resolves to the **primary**
+worktree's `.sail/` even when the run is isolated in a linked worktree, so a worktree prune at land
+never drops the history.
+
+- The file is created automatically on first write; no INSTALL.md setup (it's under the gitignored `.sail/`).
+- **Emit is DRIVER-owned, once per converge CYCLE at the terminus** — never per `sail run` round (a
+  per-round emit cannot know the cycle terminus and would corrupt the rates). At the Stage-4 terminus
+  the driver appends one record, mapping the `sail converge` decision to `--terminus`:
+  `proceed`→`merged-green`, `proceed-hardening`→`proceed-hardening`, `proceed-dissent`→`proceed-dissent`,
+  `park`→`parked+<reason>`. Backends are read from the run's `SAIL_*` env automatically:
+  ```bash
+  python3 -m sail metrics record --run-dir "$SESSION_DIR" --issue <issue> --terminus <terminus>
+  ```
+- `python3 -m sail metrics report [--ledger PATH]` prints the cross-run rollup (run count, merge/park
+  rate, avg rounds, degraded-run rate, cost per merged issue when cost data is present, escape rate).
+- `python3 -m sail metrics escape <issue> [--note TEXT]` records a post-land defect against the
+  most-recent shipped run for that issue (tie-break: latest finished), making review-escape rate computable.
+- Metrics are **fail-open**: any write/report error is logged to stderr and never blocks or fails the run.
+
 ### Stage 0.5 — Isolate (opening git bookend, #65)
 
 `/sail`'s **opening bookend**: by default isolate the run on its own git worktree + branch so it never collides with a separate ongoing run in the shared working tree (the live `/surf` incident in #65 was exactly this collision). This is the OPENING bookend; the **commit** lands at the end of Stage 3 (after green), and #59 (land/merge) is the closing bookend.
@@ -253,6 +276,17 @@ if [ "$COMMIT" = "yes" ]; then
   TITLE="$(printf '%s' "$RAW" | python3 -c 'import json,sys; print(json.load(sys.stdin)["title"])')"
   sail_commit_on_branch "$WORK_DIR" <issue> "$TITLE"   # conventional subject + (#<issue>); no-op on a clean tree
 fi
+```
+
+**Emit the metrics ledger line at the terminus (#146).** Once this converge CYCLE reaches its
+terminus — a green/hardening/dissent commit above, OR a park — append exactly one telemetry record.
+Map the `sail converge` decision to `--terminus` and call it here (fail-open, so `|| true` is
+belt-and-suspenders; it never blocks the run). The emit is DRIVER-owned and fires exactly once per
+cycle — never wire it into the per-round `sail run`:
+
+```bash
+# TERMINUS ∈ merged-green (converge=proceed) | proceed-hardening | proceed-dissent | parked+<reason>.
+python3 -m sail metrics record --run-dir "$SESSION_DIR" --issue <issue> --terminus "$TERMINUS" || true
 ```
 
 **Degraded-review visibility at the autonomous commit terminus (#116).** When the codex-family

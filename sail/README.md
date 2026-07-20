@@ -37,6 +37,16 @@ Crash-safety and resume are also intentional:
 - Finished gates are not redone.
 - The decision log keeps appending, including a resume marker.
 
+## Metrics ledger
+
+`sail metrics` records a per-repo JSONL ledger at `.sail/metrics.jsonl`.
+
+- The ledger is created automatically on first write.
+- `python3 -m sail metrics record --run-dir DIR --issue N --terminus TERM` appends one cycle record.
+- `python3 -m sail metrics report --ledger PATH` prints the rollup.
+- `python3 -m sail metrics escape ISSUE --note TEXT --ledger PATH` records a review escape against the most recent shipped run for that issue.
+- Metrics are fail-open: ledger errors are logged and never block the run.
+
 ## What `test` does
 
 `python3 -m sail test` manages the local TDD marker used by the fallback hook.

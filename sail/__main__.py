@@ -145,6 +145,25 @@ def main() -> int:
     disposition_parser.add_argument("--file")
     disposition_parser.add_argument("--summary")
 
+    metrics_parser = subparsers.add_parser("metrics")
+    metrics_subparsers = metrics_parser.add_subparsers(dest="metrics_command", required=True)
+
+    metrics_record_parser = metrics_subparsers.add_parser("record")
+    metrics_record_parser.add_argument("--run-dir", required=True)
+    metrics_record_parser.add_argument("--issue")
+    metrics_record_parser.add_argument("--terminus", required=True)
+    metrics_record_parser.add_argument("--ledger")
+    metrics_record_parser.add_argument("--now")
+
+    metrics_report_parser = metrics_subparsers.add_parser("report")
+    metrics_report_parser.add_argument("--ledger")
+
+    metrics_escape_parser = metrics_subparsers.add_parser("escape")
+    metrics_escape_parser.add_argument("issue")
+    metrics_escape_parser.add_argument("--note", default="")
+    metrics_escape_parser.add_argument("--ledger")
+    metrics_escape_parser.add_argument("--now")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -194,6 +213,29 @@ def main() -> int:
     if args.command == "disposition":
         from sail.disposition import run_disposition
         return run_disposition(args)
+    if args.command == "metrics":
+        from sail import metrics as metrics_mod
+
+        if args.metrics_command == "record":
+            metrics_mod.record_cycle(
+                args.run_dir,
+                issue=args.issue,
+                terminus=args.terminus,
+                ledger_path=args.ledger,
+                now=args.now,
+            )
+            return 0
+        if args.metrics_command == "report":
+            print(metrics_mod.format_report(metrics_mod.report(args.ledger)))
+            return 0
+        if args.metrics_command == "escape":
+            metrics_mod.record_escape(
+                args.issue,
+                args.note,
+                ledger_path=args.ledger,
+                now=args.now,
+            )
+            return 0
     if args.command == "converge":
         from sail.convergence import (
             area_saturated,
