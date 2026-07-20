@@ -201,6 +201,7 @@ def main() -> int:
             cost_exceeded,
             cost_surface_line,
             elapsed_seconds,
+            gates_all_green,
             hydrate_trend_row,
             PARK,
             read_trend,
@@ -224,10 +225,24 @@ def main() -> int:
                 print(cost_surface_line(elapsed), file=sys.stderr)
 
         if args.rc == 0:
-            print("proceed")
-            return 0
-
-        decision = loop_decision(args.rc, args.round, args.max_rounds)
+            # rc=0 (the driver's last stage was clean) does NOT prove a green terminus: a hygiene
+            # gate can still be red in run-state.json. Re-audit gates here so converge never
+            # green-lights a commit over a failed gate. But only when run-state.json EXISTS — the
+            # plan stage shares this same --run-dir yet never writes run-state.json, so its absence
+            # means "gates haven't run" (nothing to contradict rc=0), NOT "red gate" (#156 review).
+            run_state_present = bool(args.run_dir) and os.path.exists(
+                os.path.join(args.run_dir, "run-state.json")
+            )
+            if run_state_present and not gates_all_green(args.run_dir):
+                print(
+                    "gate-not-green: rc=0 but a run-state gate is not passed/skipped "
+                    f"(run-dir={args.run_dir})",
+                    file=sys.stderr,
+                )
+            else:
+                print("proceed")
+                return 0
+        decision = loop_decision(args.rc if args.rc != 0 else 1, args.round, args.max_rounds)
         trend_rows = read_trend(args.run_dir)
         if args.run_dir:
             saturation_guard_window = saturation_window()

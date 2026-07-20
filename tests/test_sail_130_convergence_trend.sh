@@ -222,6 +222,9 @@ cat > "$RD_TREND/trend-ledger.jsonl" <<'JSONL'
 {"round": 4, "max_blocking_severity_rank": 1, "addressed_count": 0}
 JSONL
 # No review.json -> hydration no-ops (strong-freshness gated), so the seeded ledger is authoritative.
+cat > "$RD_TREND/run-state.json" <<'JSON'
+{"gates":[{"name":"ruff","status":"passed","new_failures":0}]}
+JSON
 out=$(converge --rc 1 --round 4 --run-dir "$RD_TREND" --max-rounds 99) || fail "converge trend-stall exited non-zero"
 [ "$out" = "park" ] || fail "trend-stall should PARK, got '$out'"
 grep -qi "trend.stall\|trend-stall" "$TMP_ROOT/stderr.log" || fail "trend-stall stop-reason not printed to stderr"
@@ -230,7 +233,7 @@ grep -qi "trend.stall\|trend-stall" "$TMP_ROOT/stderr.log" || fail "trend-stall 
 out=$(SAIL_TREND_WINDOW=5 converge --rc 1 --round 4 --run-dir "$RD_TREND" --max-rounds 99) || fail "converge wide-window exited non-zero"
 [ "$out" = "revise" ] || fail "window 5 over a streak-3 ledger should 'revise', got '$out'"
 
-# Green (rc 0) NEVER parks, even with a churn ledger present (proceed wins; backstops gate on red).
+# Green (rc 0) still proceeds when the run-state gate is green, even with a churn ledger present.
 out=$(converge --rc 0 --round 4 --run-dir "$RD_TREND" --max-rounds 99) || fail "converge rc0 exited non-zero"
 [ "$out" = "proceed" ] || fail "rc 0 must 'proceed' regardless of trend ledger, got '$out'"
 
@@ -471,6 +474,9 @@ grep -q '^ok-hydrate-fp$' "$LOG_FILE" || fail "T8b did not reach 'ok-hydrate-fp'
 # never fire — this case discriminates exactly the #142 gap.
 RD_WHACK="$TMP_ROOT/rd_whack"
 mkdir -p "$RD_WHACK"
+cat > "$RD_WHACK/run-state.json" <<'JSON'
+{"gates":[{"name":"ruff","status":"passed","new_failures":0}]}
+JSON
 cat > "$RD_WHACK/trend-ledger.jsonl" <<'JSONL'
 {"round": 1, "max_blocking_severity_rank": 1, "addressed_count": 1, "area": "sail/foo.py", "blocking_fingerprints": ["sail/foo.py::F1"], "addressed_fingerprints": ["sail/foo.py::F1"]}
 {"round": 2, "max_blocking_severity_rank": 1, "addressed_count": 1, "area": "sail/foo.py", "blocking_fingerprints": ["sail/foo.py::F1"], "addressed_fingerprints": ["sail/foo.py::F1"]}
