@@ -50,7 +50,7 @@ import sys
 
 state_path = sys.argv[1]
 log_path = sys.argv[2]
-expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage"]
+expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage", "shell-runtime"]
 
 with open(state_path, "r", encoding="utf-8") as fh:
     data = json.load(fh)
@@ -99,16 +99,17 @@ for gate in gates:
             file=sys.stderr,
         )
         raise SystemExit(1)
+    # Diff-only gates are skipped in whole-repo mode with a "diff-only gate" reason.
     # diff-coverage is a DIFF-ONLY gate (#52): in this whole-repo run it is always skipped with
     # a "diff-only gate" reason — regardless of whether diff-cover is installed. Accept that
     # legitimate skip explicitly (mirrors the pytest legit-skip whitelist) before the
     # tool-availability invariant below.
-    if name == "diff-coverage":
+    if name in ("diff-coverage", "shell-runtime"):
         if status != "skipped":
-            print(f"FAIL: diff-coverage must be skipped in whole-repo mode, got {status!r}", file=sys.stderr)
+            print(f"FAIL: {name} must be skipped in whole-repo mode, got {status!r}", file=sys.stderr)
             raise SystemExit(1)
         if "diff-only" not in (gate.get("reason") or ""):
-            print(f"FAIL: diff-coverage whole-repo skip must record a diff-only reason, got {gate.get('reason')!r}", file=sys.stderr)
+            print(f"FAIL: {name} whole-repo skip must record a diff-only reason, got {gate.get('reason')!r}", file=sys.stderr)
             raise SystemExit(1)
         continue
     available = shutil.which(_tool_by_name.get(name, name)) is not None
@@ -155,9 +156,9 @@ if len(header_lines) != 1:
     raise SystemExit(1)
 
 seq_lines = [line for line in lines if "seq=" in line]
-if len(seq_lines) != 10:
+if len(seq_lines) != 11:
     print(
-        f"FAIL: decision-log.md expected 10 outcome lines with seq=, got {len(seq_lines)}",
+        f"FAIL: decision-log.md expected 11 outcome lines with seq=, got {len(seq_lines)}",
         file=sys.stderr,
     )
     raise SystemExit(1)

@@ -31,7 +31,7 @@ if ! python3 - <<'PY' >"$LOG_FILE" 2>&1
 import shutil
 import sail.checkers as checkers
 
-expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage"]
+expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage", "shell-runtime"]
 expected_artifacts = {
     "ruff": "ruff.sarif",
     "mypy": "mypy.junit.xml",
@@ -43,6 +43,7 @@ expected_artifacts = {
     "gitleaks": "gitleaks.sarif",
     "npm-audit": "npm-audit.json",
     "diff-coverage": "diff-coverage.json",
+    "shell-runtime": "shell-runtime.json",
 }
 
 registry = checkers.build_registry()
@@ -369,17 +370,17 @@ if got != ["ruff", "pytest"]:
 
 # empty string = the full registry (backward compatible)
 os.environ["SAIL_CHECKERS"] = ""
-if len(checkers.build_registry()) != 10:
+if len(checkers.build_registry()) != 11:
     raise SystemExit("FAIL: empty SAIL_CHECKERS must yield the full registry")
 
 # whitespace-only = the full registry (treated as empty)
 os.environ["SAIL_CHECKERS"] = "   "
-if len(checkers.build_registry()) != 10:
+if len(checkers.build_registry()) != 11:
     raise SystemExit("FAIL: whitespace-only SAIL_CHECKERS must yield the full registry")
 
 # unset = the full registry in order (#52 adds npm-audit + diff-coverage after gitleaks)
 del os.environ["SAIL_CHECKERS"]
-if [c.name for c in checkers.build_registry()] != ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage"]:
+if [c.name for c in checkers.build_registry()] != ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage", "shell-runtime"]:
     raise SystemExit("FAIL: unset SAIL_CHECKERS must yield the full registry in order")
 
 print("PASS: SAIL_CHECKERS allowlist restricts the registry; unset/empty = full registry (#51, #52)")

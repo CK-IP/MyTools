@@ -4,6 +4,8 @@ import os
 import shutil
 import configparser
 import re
+import subprocess
+import sys
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -240,6 +242,12 @@ class Checker:
             return any(f.endswith((".py", ".pyi")) or os.path.basename(f) in _MYPY_CONFIGS for f in changed_files)
         if name == "shellcheck":
             return any(f.endswith(".sh") or os.path.basename(f) in _SHELLCHECK_CONFIGS for f in changed_files)
+        if name == "shell-runtime":
+            return any(
+                f.endswith(".sh")
+                or f.replace("\\", "/").startswith(("hooks/", "config/", "home/lib/"))
+                for f in changed_files
+            )
         if name == "pip-audit":
             return any(_is_pip_manifest(f) for f in changed_files)
         if name == "npm-audit":
@@ -377,6 +385,34 @@ class DiffCoverageChecker(Checker):
         return diff_coverage_threshold(target) is not None
 
 
+class ShellRuntimeChecker(Checker):
+    def available(self) -> bool:
+        try:
+            result = subprocess.run(
+                ["/bin/sh", "-c", "command -v zsh"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return False
+        return result.returncode == 0
+
+    def build_command(self, target: str, artifact_path: str, ctx: "Optional[CheckerContext]" = None) -> List[str]:
+        diff_ref = ctx.diff_ref if ctx else None
+        cmd = [
+            sys.executable,
+            os.path.join(os.path.dirname(__file__), "shell_runtime.py"),
+            "--target",
+            target,
+            "--artifact",
+            artifact_path,
+        ]
+        if diff_ref:
+            cmd += ["--diff-ref", diff_ref]
+        return cmd
+
+
 def build_registry() -> list[Checker]:
     registry = [
         Checker("ruff", "ruff", "ruff.sarif"),
@@ -389,6 +425,7 @@ def build_registry() -> list[Checker]:
         Checker("gitleaks", "gitleaks", "gitleaks.sarif"),
         Checker("npm-audit", "npm", "npm-audit.json", stdout_artifact=True),
         DiffCoverageChecker("diff-coverage", "diff-cover", "diff-coverage.json", blocking=False),
+        ShellRuntimeChecker("shell-runtime", "zsh", "shell-runtime.json"),
     ]
     # Opt-in allowlist (comma-separated checker names) to restrict the registry — e.g. fast
     # hermetic test runs that only need ruff/pytest as background gates (#51). Unset/empty =
