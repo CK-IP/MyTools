@@ -342,6 +342,54 @@ python3 -m sail land --run-dir "$RD" --issue <issue> --title "$TITLE"
 #          $RD/land-commit-msg.txt  (merge subject + a `Closes #<issue>` line)
 ```
 
+**Learning loop — post-land root-cause grouping into PROPOSED domain.md rules (#147).** The one
+`/ship` Stage-6 "Learn" step `/sail` had dropped. It runs at the terminus (here on a supervised
+land; on an unattended run it runs at the terminus artifact-writing step — see § Unattended mode) and
+is **fail-open**: any error is logged and swallowed, the run outcome is never affected. Deterministic
+Python (`sail/learn.py`) collects the finished run's blocking findings + their dispositions from
+`review.json` / `decision-log.md`; a **cheap LLM pass** (`SAIL_LEARN_CMD`, falling back to the review
+lens `SAIL_REVIEW_CMD`, else a clean no-op skip) groups them into root-cause classes
+(`domain_gap` / `plan_gap` / `implementation_drift` / `emergent`) and drafts proposed `.ship/domain.md`
+rule text for the `domain_gap` classes, which is then **deterministically deduped against existing
+domain.md content**. It writes proposals ONLY into the run-dir (`learn.json` + `learn-proposals.md`)
+— it **never** auto-applies. (Because #125 re-reads `.ship/domain.md` per plan/review with a
+`domain_hash` freshness key, an accepted rule takes effect mid-board with no relaunch.)
+
+```bash
+# Re-source the lib defensively (each prose block is its own shell — functions do NOT persist from
+# Stage 0.5; same reason the land block below re-sources). Without it `sail_primary_worktree` is
+# undefined, `$(...)` yields "", and `--target ""` → cwd → the LINKED worktree, whose `.ship/domain.md`
+# the branch prune then deletes — silently losing the human-accepted rule (#147 redteam).
+[ -f "$HOME/.claude/lib/sail-git-lifecycle.sh" ] && . "$HOME/.claude/lib/sail-git-lifecycle.sh"
+python3 -m sail learn --run-dir "$RD" --target "$(sail_primary_worktree .)" --unattended 0
+# writes:  $RD/learn.json           (root-cause groups + deduped proposed_rules)
+#          $RD/learn-proposals.md   (the human-readable proposals report)
+```
+
+**Supervised accept/skip (hands-on `/sail` only).** Present `learn-proposals.md` (each proposal is
+index-numbered). For the proposals the operator **accepts**, append them to `.ship/domain.md` via the
+explicit apply call (idempotent — a rule already present is not re-appended); **skip** by simply not
+selecting the index. This is the ONLY path that writes `.ship/domain.md`, and only on explicit human
+approval — never automatically:
+
+```bash
+# Re-source the lib defensively (own shell; see the note above — an unsourced `sail_primary_worktree`
+# would apply the accepted rule to the linked worktree's domain.md, lost on prune).
+[ -f "$HOME/.claude/lib/sail-git-lifecycle.sh" ] && . "$HOME/.claude/lib/sail-git-lifecycle.sh"
+# after the human accepts, e.g. proposals 0 and 2:
+python3 -m sail learn --apply --indices 0,2 --run-dir "$RD" --target "$(sail_primary_worktree .)"
+# `.ship/domain.md` is a TRACKED file (`!.ship/domain.md` in .gitignore) — commit the appended rule
+# so it propagates to origin/other machines; an uncommitted working-tree edit is lost on the next
+# checkout/reset/clean and #125's mid-board re-read on another checkout never sees it. Skip the benign
+# nothing-staged case (idempotent re-apply left the tree clean), but SURFACE a real commit failure
+# (a delivery-gate.sh hook rejection, missing identity, index lock) as an ALERT rather than swallow it.
+PW="$(sail_primary_worktree .)"; git -C "$PW" add .ship/domain.md
+if ! git -C "$PW" diff --cached --quiet -- .ship/domain.md; then
+  git -C "$PW" commit -m "docs(sail): accept learned domain rule(s) from #<issue>" \
+    || echo "sail: [ALERT] committing the accepted domain rule FAILED — commit .ship/domain.md manually so the rule propagates" >&2
+fi
+```
+
 **Unattended runs never reach this stage's outward actions (#108).** When `--unattended` is set, the run is **local-only**: it stops after the Stage 4 commit, may emit the local land artifacts (`land-comment.md` / `land-commit-msg.txt`) and the WIP handoff, and performs **no** push/merge/close/board-write/prune (see § Unattended mode). The outward block below runs only on a hands-on `/sail` (or via `/surf`'s own autonomous loop).
 
 **Human-gated terminus (hands-on `/sail` runs only).** Before any outward action, **show what land will do** — print `land-comment.md` and `land-commit-msg.txt` and the exact merge/close/prune commands below — and **pause for approval**. Merge to `main` only after the operator approves. (`/surf` is unattended and does **not** pause — see below.)
@@ -712,6 +760,29 @@ write, no branch prune. Those stay human-gated (Stage 5's human-gated terminus).
 `human-review` issue is the one permitted tracker write — it is additive, clearly marked for a human,
 and the opposite of a destructive outward action; if it fails the run parks rather than proceeding.
 
+**Learning proposals (unattended, #147).** Run the fail-open learning step in **unattended mode** at
+**every** unattended terminus — the commit terminus **AND** each of the four park termini
+(spec-conflict-fallback / oscillation / never-converged / park-loud). A parked run's unresolved
+blocking findings are in fact the *richest* learning signal, so the step must not be gated to the
+commit path. Proposals are written into the run-dir and folded into whichever terminus artifacts
+exist — `land-comment.md` (commit path) and/or the WIP handoff (commit or park) — for a human to
+review later; they are **NEVER auto-applied** to `.ship/domain.md` (the `--apply` path is
+supervised-only, matching `/ship`'s AC and the #108 termini philosophy). Any error is logged and
+swallowed, so the learning step never changes the local-only terminus outcome. **Known limitation
+(#159):** the collector reads only the final round's `review.json`, which is overwritten each round,
+so on a **converged-green commit** (no blocking findings remain) learning is typically a no-op — it
+yields proposals mainly on the **park / hardening / dissent** termini where blocking findings are
+still unresolved; cross-round finding accumulation is deferred to #159.
+
+On the **commit** terminus, run it here and fold into `land-comment.md` (the WIP handoff is folded in
+the Durable-handoff block below, after that file is written):
+
+```bash
+python3 -m sail learn --run-dir "$SESSION_DIR" --target "$WORK_DIR" --unattended 1 || true
+# writes $SESSION_DIR/learn-proposals.md. Do NOT call `sail learn --apply` on an unattended run.
+[ -f "$SESSION_DIR/learn-proposals.md" ] && [ -f "$SESSION_DIR/land-comment.md" ] && { printf '\n' >> "$SESSION_DIR/land-comment.md"; cat "$SESSION_DIR/learn-proposals.md" >> "$SESSION_DIR/land-comment.md"; }
+```
+
 **Durable handoff (AC6).** Every park (spec-conflict-fallback / oscillation / never-converged /
 headless-without-flag) writes a durable handoff naming the stop reason, the outstanding finding ids,
 and the **exact existing resume command** — no new resume command is invented:
@@ -720,6 +791,13 @@ and the **exact existing resume command** — no new resume command is invented:
 python3 -m sail handoff --run-dir "$SESSION_DIR" --reason "<oscillation|spec-conflict|never-converged|park-loud>" \
   --issue "<issue>" --finding-ids "<id1,id2>" \
   --resume "python3 -m sail run --target . --diff <base-ref> --run-dir $SESSION_DIR --round <N>"
+# On a PARK terminus the commit-path learning block above did NOT run, so run the fail-open learning
+# step HERE too (a park's unresolved blocking findings are the richest learning signal). It is
+# idempotent — rewrites learn.json/learn-proposals.md deterministically — so it is harmless if a
+# commit path already ran it. Then fold the proposals into wip-handoff.md (now that it exists) so a
+# human reading the handoff sees them (the AC requires proposals reach the handoff on every terminus).
+python3 -m sail learn --run-dir "$SESSION_DIR" --target "$WORK_DIR" --unattended 1 || true
+[ -f "$SESSION_DIR/learn-proposals.md" ] && [ -f "$SESSION_DIR/wip-handoff.md" ] && { printf '\n' >> "$SESSION_DIR/wip-handoff.md"; cat "$SESSION_DIR/learn-proposals.md" >> "$SESSION_DIR/wip-handoff.md"; }
 ```
 
 **Floor exercised live (#103).** The unattended terminus is where the materiality floor finally runs

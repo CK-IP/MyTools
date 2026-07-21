@@ -17,6 +17,8 @@
     "SAIL_PLAN_GROUNDED_CMD": "codex exec -m gpt-5.5 -c model_reasoning_effort=high",
     "SAIL_TIDINESS_CMD": "claude -p --model haiku",
     "SAIL_MATERIALITY_CMD": "codex exec -m gpt-5.5 -c model_reasoning_effort=high",
+    "_comment_sail_learn": "SAIL_LEARN_CMD (#147): the cheap LLM pass for the post-terminus learning loop (root-cause grouping of blocking findings into PROPOSED domain.md rules). Optional — if unset, sail learn falls back to the review lens (SAIL_REVIEW_CMD); if neither is set/runnable the learning step cleanly no-ops. A cheap model is appropriate.",
+    "SAIL_LEARN_CMD": "claude -p --model claude-sonnet-5",
     "_comment_sail_cost_ceiling": "SAIL_COST_CEILING_SECONDS: unset uses the documented 14400s (4h) default; override with a positive seconds value. 0/non-positive/unparseable disables the ceiling (fails open)."
   },
   "permissions": {
