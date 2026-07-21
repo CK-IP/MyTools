@@ -164,6 +164,15 @@ def main() -> int:
     metrics_escape_parser.add_argument("--ledger")
     metrics_escape_parser.add_argument("--now")
 
+    # #147: post-terminus learning loop — group a finished run's blocking findings by root cause
+    # and turn domain-gap causes into PROPOSED domain.md rules (human-approved, never auto-applied).
+    learn_parser = subparsers.add_parser("learn")
+    learn_parser.add_argument("--run-dir", required=True)
+    learn_parser.add_argument("--target", default=".")
+    learn_parser.add_argument("--unattended", type=int, choices=(0, 1), default=1)
+    learn_parser.add_argument("--apply", dest="apply", action="store_true")
+    learn_parser.add_argument("--indices", default="")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -417,6 +426,13 @@ def main() -> int:
         except OSError:
             pass
         return 0
+
+    if args.command == "learn":
+        from sail.learn import apply_proposals, run_learn
+
+        if args.apply:
+            return apply_proposals(args.run_dir, args.target, args.indices)
+        return run_learn(args.run_dir, args.target, unattended=bool(args.unattended))
 
     if args.command == "handoff":
         from sail.convergence import write_handoff
