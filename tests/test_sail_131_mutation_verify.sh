@@ -64,13 +64,13 @@ print("T2 ok")
 PY
 echo "PASS T2: partition_changed"
 
-# T3: should_mutation_verify eligibility predicate (the three no-op conditions)
+# T3: should_mutation_verify eligibility predicate (test+source only; title no longer gates)
 python3 - <<'PY' || fail "T3: should_mutation_verify"
 from sail.mutation_verify import should_mutation_verify as g
-assert g(True,  ["t"], ["s"]) is True       # bug-fix + test + source -> fire
-assert g(False, ["t"], ["s"]) is False      # not a bug-fix -> no-op
-assert g(True,  [],    ["s"]) is False       # no new tests -> no-op
-assert g(True,  ["t"], [])    is False       # no source to revert -> no-op
+assert g(["t"], ["s"]) is True
+assert g([], ["s"]) is False
+assert g(["t"], []) is False
+assert g([], []) is False
 print("T3 ok")
 PY
 echo "PASS T3: should_mutation_verify"
@@ -159,14 +159,15 @@ PY
 [ "$(cd "$FIX7" && git status --porcelain)" = "$BEFORE7" ] || fail "T7: tree NOT restored after a vacuous verdict — git status changed"
 echo "PASS T7: vacuous test -> HIGH test-adequacy finding, tree restored"
 
-# T8: NON-bug-fix diff (no --bug-fix) -> no-op skip, no revert, no finding
+# T8: NON-bug-fix diff (no --bug-fix) with test+source now FIRES
 FIX8="$WORK/fix8"; BASE8="$(mkfix "$FIX8" '. ./lib/source.sh; [ 1 = 1 ]')"
 RD8="$WORK/rd8"
 python3 -m sail mutation-verify --target "$FIX8" --diff "$BASE8" --run-dir "$RD8" >/dev/null 2>&1 \
   || fail "T8: non-bug-fix mutation-verify should exit 0"
-[ "$(jget "$RD8/mutation-verify.json" status)" = skipped ] || fail "T8: status should be skipped on non-bug-fix"
-[ "$(nfind "$RD8/mutation-verify.json")" = 0 ] || fail "T8: non-bug-fix must produce no finding"
-echo "PASS T8: non-bug-fix -> skipped no-op"
+[ "$(jget "$RD8/mutation-verify.json" status)" = completed ] || fail "T8: status should be completed on feature diff with test+source"
+[ "$(jget "$RD8/mutation-verify.json" verdict)" = vacuous ] || fail "T8: tautological feature diff should be vacuous"
+[ "$(nfind "$RD8/mutation-verify.json")" = 1 ] || fail "T8: vacuous feature diff must produce one finding"
+echo "PASS T8: non-bug-fix diff with test+source now fires"
 
 # T9: bug-fix but NO new test in the diff -> no-op skip
 FIX9="$WORK/fix9"
@@ -179,10 +180,9 @@ python3 -m sail mutation-verify --target "$FIX9" --diff "$BASE9" --run-dir "$RD9
 [ "$(jget "$RD9/mutation-verify.json" status)" = skipped ] || fail "T9: status should be skipped when no new tests"
 echo "PASS T9: bug-fix with no new tests -> skipped no-op"
 
-# T9b: the bug-fix DECISION is a deterministic Python predicate, not an orchestrator judgment call
-# (CLAUDE.md infra-placement). The CLI accepts --title and gates internally via is_bug_fix_title, so
-# the orchestrator passes the raw issue title and cannot misfire by always passing --bug-fix. A
-# "fix:" --title (no --bug-fix flag) must FIRE; a "feat:" --title must NO-OP.
+# T9b: the bug-fix DECISION is still a deterministic Python predicate, but it no longer gates the
+# trigger. The CLI accepts --title for provenance, and both fix:/feat: titles should fire when the
+# diff has test+source changes.
 FIX9B="$WORK/fix9b"; BASE9B="$(mkfix "$FIX9B" '. ./lib/source.sh; [ "$(compute)" = 6 ]')"
 RD9B="$WORK/rd9b"
 python3 -m sail mutation-verify --target "$FIX9B" --diff "$BASE9B" --run-dir "$RD9B" --title "fix(core): off-by-one" >/dev/null 2>&1 \
@@ -191,9 +191,10 @@ python3 -m sail mutation-verify --target "$FIX9B" --diff "$BASE9B" --run-dir "$R
 FIX9C="$WORK/fix9c"; BASE9C="$(mkfix "$FIX9C" '. ./lib/source.sh; [ "$(compute)" = 6 ]')"
 RD9C="$WORK/rd9c"
 python3 -m sail mutation-verify --target "$FIX9C" --diff "$BASE9C" --run-dir "$RD9C" --title "feat(core): add thing" >/dev/null 2>&1 \
-  || fail "T9c: --title feat: must exit 0 (no-op)"
-[ "$(jget "$RD9C/mutation-verify.json" status)" = skipped ] || fail "T9c: a 'feat:' --title must NO-OP (status skipped), got '$(jget "$RD9C/mutation-verify.json" status)'"
-echo "PASS T9b/T9c: --title gates the run via the deterministic is_bug_fix_title predicate"
+  || fail "T9c: --title feat: must exit 0"
+[ "$(jget "$RD9C/mutation-verify.json" status)" = completed ] || fail "T9c: a 'feat:' --title must FIRE (status completed), got '$(jget "$RD9C/mutation-verify.json" status)'"
+[ "$(jget "$RD9C/mutation-verify.json" verdict)" = genuine ] || fail "T9c: a 'feat:' --title with a failing-under-revert test should be genuine"
+echo "PASS T9b/T9c: --title is now provenance only; test+source triggers the run"
 
 # T10: CRASH-SAFE restore — force a raise after the revert; the try/finally MUST restore the tree
 FIX10="$WORK/fix10"; BASE10="$(mkfix "$FIX10" '. ./lib/source.sh; [ "$(compute)" = 6 ]')"

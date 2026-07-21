@@ -246,11 +246,14 @@ python3 -m sail review --target DIR --diff <git-ref> [--run-dir DIR] [--advisory
   test as a `category: test-adequacy` finding (severity reviewer-assigned; no second LLM call). It
   no-ops on test-free diffs. The heavyweight mutation-testing tool run is deferred to `/fortify`.
 - **Build-side mutation verification (#131):** `python3 -m sail mutation-verify` is the executable
-  complement to the inline #70 probe. It is a no-op unless the diff is a bug-fix, has at least one
-  new/changed test file, and has at least one non-test source change. When it fires, it reverts only
-  the source hunks with `git apply -R`, reruns the new/changed tests, restores the tree in
-  `try/finally`, and records vacuous tests as `category: test-adequacy` findings tagged
-  `lens: mutation-verify` in `review.json`.
+  complement to the inline #70 probe. It is a no-op unless the diff has at least one new/changed
+  test file and at least one non-test source change; `--title` / `--bug-fix` are still accepted,
+  but they no longer gate the trigger. When it fires, it reverts only the source hunks, reruns the
+  new/changed tests, restores the tree in `try/finally`, and records vacuous tests as
+  `category: test-adequacy` findings tagged `lens: mutation-verify` in `review.json`. The runtime
+  budget is controlled by `SAIL_MUTVERIFY_BUDGET_SECONDS` (also accepted:
+  `SAIL_MUTATION_VERIFY_BUDGET_SECS`), and a restore failure is loud: it exits non-zero and names
+  the partially reverted tree state.
 - **Gate semantics:** exits **1** when any CRITICAL/HIGH finding is present (or when the backend
   response is unusable on a non-empty diff — errors never silently pass); exits **0** under
   `--advisory` (findings still recorded) or when there are no blocking findings.
