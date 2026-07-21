@@ -19,7 +19,8 @@
     "SAIL_MATERIALITY_CMD": "codex exec -m gpt-5.5 -c model_reasoning_effort=high",
     "_comment_sail_learn": "SAIL_LEARN_CMD (#147): the cheap LLM pass for the post-terminus learning loop (root-cause grouping of blocking findings into PROPOSED domain.md rules). Optional — if unset, sail learn falls back to the review lens (SAIL_REVIEW_CMD); if neither is set/runnable the learning step cleanly no-ops. A cheap model is appropriate.",
     "SAIL_LEARN_CMD": "claude -p --model claude-sonnet-5",
-    "_comment_sail_cost_ceiling": "SAIL_COST_CEILING_SECONDS: unset uses the documented 14400s (4h) default; override with a positive seconds value. 0/non-positive/unparseable disables the ceiling (fails open)."
+    "_comment_sail_cost_ceiling": "SAIL_COST_CEILING_SECONDS: unset uses the documented 14400s (4h) default; override with a positive seconds value. 0/non-positive/unparseable disables the ceiling (fails open).",
+    "_comment_surf_cap_recovery": "/surf cap-recovery knobs (#163, read by sail/cap_recovery.py; all optional, they default in code). SAIL_CAP_RECOVERY_WALL_CLOCK_CEILING_SECS: the wall-clock ceiling any single armed resume-after wait is capped at — default 691200 (8 days) to cover a weekly reset window; recovery is bounded by wall-clock, never a retry COUNT. SAIL_CAP_RECOVERY_POST_RESET_MARGIN_SECS: seconds added past the reported reset so the first retry does not race the reset boundary — default 120. SAIL_CAP_RECOVERY_POST_RESET_JITTER_SECS: extra de-sync spread — default 0. SAIL_CAP_RECOVERY_DEFAULT_BACKOFF_SECS / SAIL_CAP_RECOVERY_MIN_BACKOFF_SECS: parse-miss long default and minimum floor (fall back to the legacy SURF_RESUME_DEFAULT_BACKOFF / SURF_RESUME_MIN_BACKOFF)."
   },
   "permissions": {
     "allow": [

@@ -35,6 +35,10 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/config" "$WORK/.surf" "$WORK/bin"
 cp "$SCRIPT_SRC" "$WORK/config/surf-resume.sh"
+# #163: the watcher's REPO_ROOT is $WORK (script lives at $WORK/config), and it now cd's to
+# REPO_ROOT before `python3 -m sail cap-recovery` (launchd sets no WorkingDirectory). Symlink the
+# real sail package under $WORK so the classifier/parser resolve exactly as they do in production.
+ln -s "$SRC_DIR/sail" "$WORK/sail"
 chmod +x "$WORK/config/surf-resume.sh"
 
 CLAUDE_REC="$WORK/claude-argv.log"
@@ -126,6 +130,33 @@ c="$(invoke_count)"
 if [ "$c" -eq 0 ]; then pass "(d) live .surf/active + fresh heartbeat → already running, no relaunch"; else fail "(d) expected 0 relaunches, got $c"; fi
 rm -f "$WORK/.surf/active" "$WORK/.surf/heartbeat"
 
+# --- (d-cap) #163 scenario 5: a live pid + FRESH heartbeat + `.surf/capped` relinquish marker +
+# an armed-but-PASSED resume-after → the supervisor self-relinquished while cap-blocked, so the
+# watcher must TAKE OVER (relaunch) despite the fresh heartbeat. This pins AC "watcher takeover
+# despite a live pid + capped marker" end-to-end through active_session()/main().
+seed_charter
+echo "$$" >"$WORK/.surf/active"          # supervisor pid still alive
+touch "$WORK/.surf/heartbeat"            # fresh heartbeat — would normally block; capped must override
+touch "$WORK/.surf/capped"               # relinquish marker
+rfc3339_at -60 >"$WORK/.surf/resume-after"   # armed floor already passed → relaunch may fire
+run_watcher
+c="$(invoke_count)"
+if [ "$c" -eq 1 ]; then pass "(d-cap) live pid + fresh heartbeat + capped + passed floor → watcher takes over"; else fail "(d-cap) expected 1 takeover relaunch, got $c"; fi
+rm -f "$WORK/.surf/active" "$WORK/.surf/heartbeat" "$WORK/.surf/capped" "$WORK/.surf/resume-after"
+
+# --- (d-cap2) #163 b321 guard: a LONE stale `.surf/capped` marker with NO armed resume-after must
+# NOT make a healthy live session look recoverable (no double-drive). relinquish/clear write and
+# remove the marker+floor as a pair, so a marker without a floor is stale and is ignored.
+seed_charter
+echo "$$" >"$WORK/.surf/active"
+touch "$WORK/.surf/heartbeat"
+touch "$WORK/.surf/capped"               # marker present but NO resume-after floor
+rm -f "$WORK/.surf/resume-after"
+run_watcher
+c="$(invoke_count)"
+if [ "$c" -eq 0 ]; then pass "(d-cap2) lone stale capped marker (no armed floor) → healthy session not double-driven"; else fail "(d-cap2) expected 0 relaunches, got $c"; fi
+rm -f "$WORK/.surf/active" "$WORK/.surf/heartbeat" "$WORK/.surf/capped"
+
 # --- (e) armed resume-after still in the future → NO relaunch (waiting) -------
 seed_charter
 rm -f "$WORK/.surf/active"
@@ -165,9 +196,12 @@ if [ "${rae:-0}" -gt "$(now_epoch)" ]; then pass "(i) weekly-cap floor parsed in
 # America/New_York. The old check (floor < fixed-default magnitude) was CLOCK-DEPENDENT — after 8pm
 # local the next 8pm legitimately rolls to tomorrow and is farther out than the default backoff, so
 # it false-failed late in the day. Assert the WALL-CLOCK, not the gap: the default fallback
-# (now + N hours) never lands exactly on 20:00:00 ET, so 20:00 uniquely proves the parser fired.
+# (now + N hours) never lands within a few minutes of 20:00 ET, so hour==20 & minute<5 uniquely
+# proves the parser fired. #163: `arm` adds a small post-reset margin (default 120s) so the floor
+# lands at ~20:02, not exactly 20:00 — hence the minute-window rather than an exact match.
 parsed_hhmm="$(TZ=America/New_York date -r "${rae:-0}" "+%H:%M" 2>/dev/null || TZ=America/New_York date -d "@${rae:-0}" "+%H:%M" 2>/dev/null || echo "")"
-if [ "$parsed_hhmm" = "20:00" ]; then pass "(i) floor came from the am/pm parser (lands on 20:00 ET)"; else fail "(i) floor not on parsed 20:00 ET wall-clock (got '$parsed_hhmm') — parser did not fire"; fi
+parsed_hh="${parsed_hhmm%%:*}"; parsed_mm="${parsed_hhmm##*:}"
+if [ "$parsed_hh" = "20" ] && [ -n "$parsed_mm" ] && [ "$((10#$parsed_mm))" -lt 5 ]; then pass "(i) floor came from the am/pm parser (lands ~20:00 ET + margin)"; else fail "(i) floor not on parsed 20:00 ET wall-clock (got '$parsed_hhmm') — parser did not fire"; fi
 
 # --- (j) #124 R2-6: a relaunch whose BODY mentions cap phrases but whose TAIL is a normal
 # completion must NOT arm a backoff (cap detection is tail-anchored).
@@ -243,23 +277,21 @@ else
   pass "(g) stale 'same --run-dir' resume language removed"
 fi
 
-# --- (m) #126 §121: a BENIGN non-cap line that merely contains "limit reached" (e.g. a CLI's
+# --- (m) #126 §121 / #163: a BENIGN non-cap line that merely contains "limit reached" (e.g. a CLI's
 # "max retries limit reached" / "concurrency limit reached") must NOT be detected as a usage cap, so
 # no spurious multi-hour resume-after backoff is armed on a non-cap stop. The GENUINE Anthropic
-# notice "Claude usage limit reached" must STILL be detected (coverage preserved via the surviving
-# `usage limit` token). This pins the removal of the over-broad bare `limit reached` token from
-# CAP_NOTICE_RE.
-# shellcheck source=/dev/null
-if ( source "$SCRIPT_SRC" >/dev/null 2>&1; printf '%s\n' "max retries limit reached" | grep -qiE "$CAP_NOTICE_RE" ); then
-  fail "(m) CAP_NOTICE_RE still matches benign 'max retries limit reached'"
+# notice "Claude usage limit reached" must STILL be detected (via the `usage limit` token). #163
+# lifted classification into the single-source Python classifier (sail cap-recovery classify), so
+# these cases now pin THAT classifier directly instead of the retired bash CAP_NOTICE_RE regex.
+if ( cd "$SRC_DIR" && printf '%s\n' "max retries limit reached" | python3 -m sail cap-recovery classify >/dev/null 2>&1 ); then
+  fail "(m) classifier still matches benign 'max retries limit reached'"
 else
-  pass "(m) CAP_NOTICE_RE no longer matches benign 'max retries limit reached'"
+  pass "(m) classifier no longer matches benign 'max retries limit reached'"
 fi
-# shellcheck source=/dev/null
-if ( source "$SCRIPT_SRC" >/dev/null 2>&1; printf '%s\n' "Claude usage limit reached" | grep -qiE "$CAP_NOTICE_RE" ); then
-  pass "(m) CAP_NOTICE_RE still matches genuine 'Claude usage limit reached'"
+if ( cd "$SRC_DIR" && printf '%s\n' "Claude usage limit reached" | python3 -m sail cap-recovery classify >/dev/null 2>&1 ); then
+  pass "(m) classifier still matches genuine 'Claude usage limit reached'"
 else
-  fail "(m) CAP_NOTICE_RE lost genuine 'Claude usage limit reached' coverage"
+  fail "(m) classifier lost genuine 'Claude usage limit reached' coverage"
 fi
 seed_charter
 rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"

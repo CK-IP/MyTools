@@ -214,6 +214,19 @@ inherit a non-interactive permission posture.
 - Recommend **opus** for this orchestrating session:
   > "For best results the `/surf` session should run **opus** — it makes all the merge and
   > park decisions. Switch now if you're not on opus."
+- **Subscription preflight (#163, AC6).** The whole cap-recovery model assumes a **subscription**
+  (usage caps reset on a schedule that `sail cap-recovery` parses and waits out). A run on an **API
+  key** instead is billed/rate-limited differently and the reset-based recovery does not apply — so
+  warn if this session is on an API key. Read the effective `apiKeySource` and classify it with the
+  tested predicate (never eyeballed here): `apiKeySource=none` == no API key == subscription → quiet
+  (the healthy case; #112: don't cry wolf on every normal run); anything else → an **ALERT-tier**
+  WARN. The classification borrows convoy's `_convoy_check_apikeysource` as a *pattern* only:
+  ```bash
+  # $SRC is the session's apiKeySource (e.g. from the stream-json init event / claude config).
+  python3 -m sail cap-recovery apikey-preflight --source "$SRC"   # rc 0 + quiet on 'none'; rc 1 + an ALERT line on an API key
+  ```
+  This is a **surface-once WARN, not a gate** — the run still proceeds; the operator just knows
+  auto-resume across a usage cap will not fire on an API-key session.
 
 ### Step 3b (optional): Supervised (panes) visibility lens
 
@@ -621,6 +634,57 @@ error to surface, not to build through.
    ```
    A `green` verdict requires the positive run-dir confirmation above (no `wip-handoff.md`; all
    `run-state.json` gates pass; clean `review.json`); anything else parks (fail-closed).
+
+   **Layer-1 cap-recovery — classify a cap wall BEFORE parking (#163).** The fail-closed park above is
+   correct for a genuine build failure, but a **usage-cap wall is not a build failure** — a
+   cap-refused worker often writes **no** terminus artifacts (no `run-state.json`/`review.json`, no
+   `wip-handoff.md`), so `surf_worker_result` would park a perfectly good issue and the run would
+   stall until a human noticed (the #148 incident). So on an **exited-but-NOT-green** verdict, and
+   **before** recording a park, run a **separate** cap-classification branch — `surf_worker_result`
+   stays artifact-only for the green/merge decision (it never scrapes logs); this branch reads the
+   worker's captured terminal output. Classification + reset parsing + floor arming are single-sourced
+   in the tested `sail cap-recovery` module (never eyeballed here, never a bash regex — CLAUDE.md
+   infra placement), and cap text is passed via a **file** (never interpolated on the command line —
+   the interface is injection-safe):
+   ```bash
+   # Capture the worker's terminal output to a file (harness task output), then classify. The text is
+   # read from the FILE — never spliced into the command line (OWASP LLM01; the output can carry
+   # attacker-influenced diff/issue content).
+   WORKER_OUT=".surf/runs/<issue>/worker-out.txt"   # written from the harness background-task output
+   if python3 -m sail cap-recovery classify --text-file "$WORKER_OUT" >/dev/null 2>&1; then
+     # CAP WALL, not a build-park. Arm the shared, durable, forward-only floor + per-issue cap-state,
+     # then WAIT — never relaunch immediately (the LOAD-BEARING invariant: zero relaunches before
+     # resume-after). `arm` re-parses the reset (5h clock+TZ OR weekly weekday/date/in-N-days), pushes
+     # `.surf/resume-after` FORWARD (a premature re-cap re-arms forward without counting; only a
+     # post-reset-still-capped retry increments the anomaly-count), and caps the wait at the wall-clock
+     # ceiling (>= 8 days). It writes BOTH .surf/resume-after and .surf/runs/<issue>/cap-state.json —
+     # the SAME state the Step 16 watcher reads, so a supervisor death mid-wait is picked up by the
+     # watcher at the identical reset (scenario 9).
+     ARMED="$(python3 -m sail cap-recovery arm --surf-dir .surf --issue <issue> \
+                --now "$(date -u +%s)" --text-file "$WORKER_OUT")"
+     echo "sail: [INFO] issue <issue> hit a usage cap — armed resume-after=$ARMED; waiting for reset (no premature relaunch)."
+     # ScheduleWakeup to the reset (+margin already folded into $ARMED). ONE correct long wait, not
+     # many short probes. On wake, re-check the gate before relaunching:
+     #   python3 -m sail cap-recovery gate --surf-dir .surf --now "$(date -u +%s)"  (rc 0 => relaunch this issue's worker once; rc 1 => still waiting)
+     # A relaunch that re-caps just re-arms the floor FORWARD (never a give-up-by-count). Recovery is
+     # bounded ONLY by the wall-clock ceiling.
+   else
+     :   # genuine build-park (no cap signature) → record the fail-closed park as before.
+   fi
+   ```
+   **Supervisor self-relinquish (scenario 5).** The branch above covers a *worker* cap while the
+   supervisor lives. When the **supervisor's OWN** calls cap (it is alive but every call it makes is
+   refused), it must not sit as a live-but-useless pid that locks the Step-16 watcher out (the
+   watcher stands down whenever `.surf/active` names a live pid with a fresh heartbeat). So the
+   supervisor calls the single-sourced **`sail cap-recovery relinquish --surf-dir .surf --now
+   "$(date -u +%s)" --text-file "$SUPERVISOR_OUT"`**, which arms the **same** shared, forward-only,
+   ceiling-bounded `resume-after` (global cap-state) **and** writes the durable **`.surf/capped`**
+   marker in one call — then the supervisor **relinquishes** (stops its heartbeat keeper / exits).
+   The watcher **consumes** that marker — a live pid **plus** `.surf/capped` is treated as
+   recoverable — and takes over the relaunch at the armed reset. The marker is cleared on a clean
+   (uncapped) relaunch (`sail cap-recovery clear --surf-dir .surf`), so it never sticks past recovery
+   (a stuck marker would otherwise let the watcher double-drive a later healthy session).
+
    - **Green → auto-merge** — *but first, the stacked-parent guard.* Before merging,
      verify every dependency parent of this issue is **itself already merged to `main`**. If any
      parent is still parked, **park this dependent too** — never auto-merge a stacked branch whose
@@ -1432,7 +1496,10 @@ not run headless — a premise now verified false).
   `/surf` is already working — do not launch on top of it; a stale marker with a dead PID is
   ignored and cleaned, so a crash self-heals. A live pid is only a blocker while `.surf/heartbeat`
   is fresh; if the heartbeat is stale or missing, the watcher treats the live pid as stalled and
-  continues through the rest of the gate instead of double-driving); the armed `.surf/resume-after`
+  continues through the rest of the gate instead of double-driving. **A live pid that has posted a
+  `.surf/capped` relinquish marker (#163 supervisor self-relinquish, scenario 5) is ALSO treated as
+  recoverable** — the supervisor is alive but every call it makes is cap-refused, so the watcher must
+  not let its live pid lock recovery out); the armed `.surf/resume-after`
   floor is absent or has passed; and **real unfinished work remains**. Otherwise it exits
   immediately.
 - **"Work remains" = charter present AND no done-marker.** If the newest `.surf/charter-*.md` (by
@@ -1450,11 +1517,23 @@ not run headless — a premise now verified false).
 - **The takeover relaunch overwrites `.surf/active`.** If the watcher takes over a stalled live
   session, the fresh relaunch pid replaces the stale pid in `.surf/active` so the resumed run owns
   the marker again.
-- **Reset capture (conservative floor).** When the relaunched run hits the cap again, the watcher
-  parses the reset time from the run's **own output** (a structured signal, not pane-scraping) and
-  arms `resume-after = max(parsed_reset, now + MIN_BACKOFF)`. If the reset time is **unparseable**,
-  it arms a long default (`now + DEFAULT_BACKOFF`, multi-hour — subscription windows are
-  multi-hour). A parse-miss is therefore a *long* wait, never a per-tick hot-loop.
+- **Reset capture (conservative floor) — single-sourced with the supervisor (#163).** When the
+  relaunched run hits the cap again, the watcher classifies + parses the reset from the run's **own
+  output** via the **same** tested `sail cap-recovery` module the supervisor's Layer-1 branch uses
+  (`classify --text-file` then `parse-reset`), never a bash regex — so the two layers can never
+  disagree. It arms `resume-after = max(parsed_reset + margin, now + MIN_BACKOFF)`; an **unparseable**
+  reset arms a long multi-hour default. The module now parses **both** horizons — a 5h clock+IANA-TZ
+  reset **and** a weekly weekday/date/"in N days" reset (fixing the old bash `parse_reset_time`
+  `+1 day` roll-forward that could not represent a 7-day reset) — and caps any single wait at the
+  wall-clock ceiling (>= 8 days). A parse-miss is therefore a *long* wait, never a per-tick hot-loop.
+- **Shared durable state (scenarios 5 & 9).** `.surf/resume-after` and the per-issue
+  `.surf/runs/<issue>/cap-state.json` are written by whichever layer notices the cap and read by the
+  other — one mechanism over durable, watcher-visible state. So if the supervisor arms a floor and
+  then **dies mid-wait** (reboot, terminal close, its own cap), the watcher reads the identical
+  `resume-after` and resumes at the **same** reset (scenario 9); and a live-but-cap-blocked
+  supervisor that posted `.surf/capped` is taken over by the watcher (scenario 5, gate bullet above).
+  A clean (uncapped) relaunch clears both artifacts (`sail cap-recovery clear`) so stale state never
+  gates a later run.
 - **Anti-pattern guard.** Never put the "is it time yet?" decision inside a Claude call — that would
   burn tokens on every idle tick and can't run while the API is capped. The decision lives in the
   pure-shell gate; `/surf resume` is relaunched only once the gate has already said yes.
