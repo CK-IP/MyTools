@@ -18,11 +18,12 @@ KIND_BY_ARTIFACT = {
     "gitleaks.sarif": "sarif",
     "npm-audit.json": "npmaudit",
     "diff-coverage.json": "diffcoverage",
+    "shell-runtime.json": "shellruntime",
 }
 
 # Artifacts whose gate is meaningful ONLY in diff mode (coverage of CHANGED lines vs a
 # compare ref). The runner skips these in whole-repo mode and during baseline generation.
-DIFF_ONLY_ARTIFACTS = {"diff-coverage.json"}
+DIFF_ONLY_ARTIFACTS = {"diff-coverage.json", "shell-runtime.json"}
 
 
 
@@ -136,6 +137,25 @@ def _npmaudit_records(path, root):
     return out
 
 
+def _shellruntime_records(path, root=None):
+    try:
+        doc = _load_json(path)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, list):
+        return None
+    out = []
+    for entry in doc:
+        if not isinstance(entry, dict):
+            continue
+        surface = _rel(entry.get("surface", "") or entry.get("path", ""), root)
+        probe = entry.get("probe", "") or ""
+        detail = entry.get("detail", "") or ""
+        rc = entry.get("rc")
+        out.append({"fp": (surface, probe, detail, rc), "record": entry})
+    return out
+
+
 def diffcoverage_records(path, threshold):
     # diff-cover --json-report schema: {"total_percent_covered": F, "src_stats": {file:
     # {"violation_lines": [int, ...]}}}. Emit ONE finding per uncovered changed line — but
@@ -206,6 +226,7 @@ _EXTRACTORS = {
     "pipaudit": _pipaudit_records,
     "shellcheck": _shellcheck_records,
     "npmaudit": _npmaudit_records,
+    "shellruntime": _shellruntime_records,
 }
 
 

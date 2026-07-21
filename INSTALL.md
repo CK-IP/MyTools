@@ -226,6 +226,8 @@ brew install gitleaks semgrep
 
 # Shell-script linting (powers sail's shellcheck gate — this repo is shell-heavy)
 brew install shellcheck
+# Shell-RUNTIME gate (#145) executes changed shell libs under the real login shell — needs `zsh`
+# on PATH (macOS ships it by default; the gate skips cleanly with a logged note if absent).
 
 # Python sail-gate CLI tools (use pipx to avoid venv conflicts on modern macOS/Linux)
 for pkg in ruff mypy pip-audit bandit diff-cover; do pipx install "$pkg"; done
