@@ -15,7 +15,6 @@ from sail.runstate import _utc_now_iso
 from sail.review import degraded_lenses, degraded_tone
 
 
-_BLOCKED_TERMINI = {"parked", "parked+blocked", "parked+review-blocked"}
 _SHIPPED_TERMINI = {"merged-green", "proceed-hardening", "proceed-dissent"}
 _KNOWN_SEVERITIES = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
 
