@@ -23,32 +23,31 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # --- Tunables (overridable by env, e.g. for the functional test) ---
-MIN_BACKOFF="${SURF_RESUME_MIN_BACKOFF:-300}"        # never relaunch sooner than 5 min after a cap
-DEFAULT_BACKOFF="${SURF_RESUME_DEFAULT_BACKOFF:-18000}"  # parse-miss → 5h long default
 MAX_RUN_AGE="${SURF_RESUME_MAX_RUN_AGE:-7200}"       # a lockdir older than 2h is stale → reclaim
 HEARTBEAT_STALE_SECS="${SURF_HEARTBEAT_STALE_SECS:-2700}"  # live active pid older than 45 min heartbeat → stalled
 LOG="${SURF_RESUME_LOG:-/tmp/surf-resume.log}"
-CAP_NOTICE_RE='weekly limit|hit your .*limit|usage limit|usage cap|rate limit|try again later|limit will reset|resets at|/usage-credits'
+# #163: cap classification, reset parsing AND floor arming are single-sourced in the tested Python
+# module (sail cap-recovery), not a bash regex / bash math — so the supervisor and this watcher can
+# never drift. The backoff tunables (SURF_RESUME_MIN_BACKOFF / SURF_RESUME_DEFAULT_BACKOFF and the
+# SAIL_CAP_RECOVERY_* knobs) are read by that module directly from the environment.
 
 SURF_DIR="${SURF_RESUME_DIR:-$REPO_ROOT/.surf}"   # overridable so the functional test can point at a fixture dir
 RESUME_AFTER="$SURF_DIR/resume-after"
 LOCKDIR="$SURF_DIR/resume.lock"
 ACTIVE="$SURF_DIR/active"
 HEARTBEAT="$SURF_DIR/heartbeat"
+CAPPED="$SURF_DIR/capped"
+
+cap_recovery() {
+  # launchd sets no WorkingDirectory, so main() runs from `/` (or $HOME) where the `sail` package is
+  # not importable. Run the module from REPO_ROOT so `python3 -m sail` resolves (#127/#128 runtime
+  # escape). All paths passed in (--text-file, --surf-dir) are absolute, so the cd is safe.
+  ( cd "$REPO_ROOT" && python3 -m sail cap-recovery "$@" )
+}
 
 log() { printf '%s surf-resume: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >>"$LOG" 2>/dev/null || true; }
 
 now_epoch() { date +%s; }
-
-# RFC3339 (UTC, Z) string for an epoch.
-rfc3339_of_epoch() {
-  local e="$1"
-  if date -u -r "$e" "+%Y-%m-%dT%H:%M:%SZ" >/dev/null 2>&1; then
-    date -u -r "$e" "+%Y-%m-%dT%H:%M:%SZ"
-  else
-    date -u -d "@$e" "+%Y-%m-%dT%H:%M:%SZ"
-  fi
-}
 
 # Epoch for an RFC3339 (UTC, Z) string. Empty on failure.
 epoch_of_rfc3339() {
@@ -149,6 +148,15 @@ active_session() {
   local pid
   pid="$(cat "$ACTIVE" 2>/dev/null || true)"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    # Scenario 5: a live supervisor that cap-relinquished (wrote .surf/capped) must be taken over,
+    # even with a FRESH heartbeat — so the capped marker overrides the heartbeat check below by
+    # design. Guard against a STALE lone marker double-driving a healthy session: only honor it when
+    # an armed resume-after floor is ALSO present (relinquish writes the pair; clear removes the
+    # pair). should_launch then still waits until that floor passes before relaunching.
+    if [ -f "$CAPPED" ] && [ -f "$RESUME_AFTER" ]; then
+      log "live .surf/active (pid $pid) + capped marker + armed floor — supervisor self-relinquished, treating as recoverable"
+      return 1
+    fi
     if heartbeat_is_stale; then
       log "live .surf/active (pid $pid) but stale heartbeat — treating as stalled"
       return 1
@@ -215,81 +223,16 @@ should_launch() {
   return 0
 }
 
-# Best-effort parse of a cap reset time (RFC3339 Z) from the relaunched run's OWN output. Empty if
-# none. Anchored: only consider RFC3339 timestamps on lines that actually mention the cap/reset
-# (the same wording hit_cap uses), so an unrelated timestamp can't be mistaken for the reset time.
-parse_reset_time() {
-  local out="$1"
-  local line ts time tz
-  # Anchor to the SAME tail buffer hit_cap matched (#124 r3): only consider a cap-wording line within
-  # the last N non-empty lines, so a reset time is never parsed from unrelated board content earlier
-  # in the output (the timestamp that hit_cap's tail anchor already refused to treat as a cap notice).
-  line="$(cap_tail "$out" | grep -iE "$CAP_NOTICE_RE" 2>/dev/null | head -1 || true)"
-  [ -n "$line" ] || return 0
-
-  # Preferred: an explicit RFC3339 Z timestamp on the cap line.
-  ts="$(printf '%s\n' "$line" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z' 2>/dev/null | head -1 || true)"
-  if [ -n "$ts" ]; then
-    printf '%s\n' "$ts"
-    return 0
-  fi
-
-  # Fallback (#119 weekly cap): a relative am/pm clock time + an IANA TZ, e.g.
-  # "resets 8pm (America/New_York)". Roll it FORWARD to the next future epoch and emit RFC3339 Z.
-  time="$(printf '%s\n' "$line" | sed -nE 's/.*([0-9]{1,2}(:[0-9]{2})?[[:space:]]*[AaPp][Mm]).*/\1/p' | head -1 || true)"
-  tz="$(printf '%s\n' "$line" | sed -nE 's/.*\(([A-Za-z_]+\/[A-Za-z_]+)\).*/\1/p' | head -1 || true)"
-  if [ -z "$time" ] || [ -z "$tz" ] || ! command -v python3 >/dev/null 2>&1; then
-    return 0
-  fi
-  python3 - "$time" "$tz" <<'PY' 2>/dev/null || true
-import re
-import sys
-from datetime import datetime, timedelta, timezone
-
-try:
-    from zoneinfo import ZoneInfo
-except Exception:
-    raise SystemExit(0)
-
-token = sys.argv[1].strip().lower().replace(" ", "")
-match = re.fullmatch(r"(?P<h>\d{1,2})(?::(?P<m>\d{2}))?(?P<ampm>am|pm)", token)
-if not match:
-    raise SystemExit(0)
-
-hour = int(match.group("h")) % 12
-if match.group("ampm") == "pm":
-    hour += 12
-minute = int(match.group("m") or 0)
-
-zone = ZoneInfo(sys.argv[2])
-now = datetime.now(zone)
-candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-if candidate <= now:
-    candidate += timedelta(days=1)
-
-print(candidate.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-PY
-}
-
-# Did the relaunched run hit the usage cap? ANCHORED TO THE TAIL (#124 R2-6): read only the last N
-# non-empty lines, because a genuine cap notice is the TERMINAL state of a capped run (the run stops
-# at it), never buried mid-output. This stops ordinary board content mentioning "rate limit"/"resets
-# at" earlier in the output from triggering a spurious multi-hour backoff. A cap notice WITHOUT a
-# parseable reset time is still detected here (it then arms the conservative DEFAULT_BACKOFF floor),
-# so the never-hot-loop guarantee holds whether or not a reset token co-occurs.
-# The last N non-empty lines of the relaunch output — the only window where a genuine cap notice
-# (the TERMINAL state of a capped run) can legitimately appear. Shared by hit_cap and
-# parse_reset_time so the two can never drift (#124 r3). N is env-overridable.
-cap_tail() {
-  local out="$1" tail_n="${SURF_RESUME_CAP_TAIL:-3}"
-  grep -v '^[[:space:]]*$' "$out" 2>/dev/null | tail -n "$tail_n" || true
-}
-
+# Did the relaunched run hit the usage cap? #163: classification is single-sourced in the tested
+# Python module (sail cap-recovery classify), which reads only the TERMINAL tail of the output — the
+# only window where a genuine cap notice (the terminal state of a capped run) can legitimately appear
+# — so ordinary board content mentioning "rate limit"/"resets at" earlier in the output cannot
+# trigger a spurious multi-hour backoff. Cap text is passed via the output FILE (never interpolated
+# on the command line), keeping the shell↔Python interface injection-safe.
 hit_cap() {
-  local out="$1" tail_buf
-  tail_buf="$(cap_tail "$out")"
-  [ -n "$tail_buf" ] || return 1
-  printf '%s\n' "$tail_buf" | grep -qiE "$CAP_NOTICE_RE" 2>/dev/null
+  local out="$1"
+  [ -n "$out" ] || return 1
+  cap_recovery classify --text-file "$out" >/dev/null 2>&1
 }
 
 main() {
@@ -306,6 +249,13 @@ main() {
   # from a genuinely-dead one by liveness, not by age alone (#124 R5-4). This tick holds the lock
   # for the relaunch's whole lifetime; should_launch keeps the lock live while this pid is alive.
   printf '%s\n' "$$" >"$LOCKDIR/pid" 2>/dev/null || true
+  # This tick has committed to taking over, so the self-relinquish `capped` marker has done its job —
+  # remove it NOW (#163 review): its meaning is "a live supervisor is cap-blocked, take over," which
+  # this takeover fulfills. Leaving it until the relaunch's exit would let it outlive its purpose. The
+  # LOCKDIR (not the marker) is what serializes ticks during the relaunch, so clearing it here is safe;
+  # the resume-after floor still gates the relaunch. If the relaunched run re-caps, it arms a fresh
+  # marker/floor of its own.
+  rm -f "$CAPPED" 2>/dev/null || true
   local out
   out="$(mktemp)"
   trap 'rm -rf "$LOCKDIR"; rm -f "${out:-}"' EXIT
@@ -329,28 +279,22 @@ main() {
   wait "$claude_pid" || true
   cat "$out" >>"$LOG" 2>/dev/null || true
 
-  # If the relaunched run hit the cap again, arm a conservative resume-after floor so the next tick
-  # waits rather than hot-looping.
+  # If the relaunched run hit the cap again, arm the shared resume-after floor so the next tick waits
+  # rather than hot-looping. #163: ALL the floor logic — forward-only merge, wall-clock ceiling,
+  # post-reset margin, the never-hot-loop MIN_BACKOFF floor, dual-horizon reset parse, and the
+  # default-backoff on a parse-miss — lives in the single-source `sail cap-recovery arm` (no bash
+  # floor math here). The watcher is issue-agnostic (whole-board resume), so it arms the GLOBAL
+  # cap-state (no --issue). `arm` writes `$RESUME_AFTER` itself.
   if hit_cap "$out"; then
-    local parsed parsed_epoch floor_epoch chosen_epoch
-    parsed="$(parse_reset_time "$out")"
-    floor_epoch=$(( $(now_epoch) + MIN_BACKOFF ))
-    if [ -n "$parsed" ]; then parsed_epoch="$(epoch_of_rfc3339 "$parsed")"; else parsed_epoch=""; fi
-    if [ -n "$parsed_epoch" ]; then
-      if [ "$parsed_epoch" -gt "$floor_epoch" ]; then chosen_epoch="$parsed_epoch"; else chosen_epoch="$floor_epoch"; fi
-      log "cap hit; parsed reset $parsed → resume-after $(rfc3339_of_epoch "$chosen_epoch")"
-    else
-      chosen_epoch=$(( $(now_epoch) + DEFAULT_BACKOFF ))
-      log "cap hit; reset unparseable → long default resume-after $(rfc3339_of_epoch "$chosen_epoch")"
-    fi
-    rfc3339_of_epoch "$chosen_epoch" >"$RESUME_AFTER"
+    local armed
+    armed="$(cap_recovery arm --surf-dir "$SURF_DIR" --now "$(now_epoch)" --text-file "$out" || true)"
+    log "cap hit; armed resume-after ${armed:-<arm returned nothing>}"
   else
-    # Clean relaunch (no cap on the rerun): clear any crossed floor so the next tick is not gated by
-    # a stale resume-after. (We only reach the relaunch when should_launch already passed — i.e. the
-    # floor was absent or crossed — so removing it here is safe and restores the floor-cleared
-    # behavior the pre-#124 revive model had. #124 R2-3.)
-    rm -f "$RESUME_AFTER" 2>/dev/null || true
-    log "run finished without hitting the cap — cleared any crossed resume-after floor"
+    # Clean relaunch (no cap on the rerun): clear the shared floor + cap-state AND any self-relinquish
+    # `capped` marker, so the next tick is not gated by stale state and a later healthy live session
+    # is never mis-read as recoverable (#163 redteam). Safe because should_launch already passed.
+    cap_recovery clear --surf-dir "$SURF_DIR" >/dev/null 2>&1 || true
+    log "run finished without hitting the cap — cleared resume-after / cap-state / capped marker"
   fi
 
   # Takeover/cleanup: only remove the marker if it still names this relaunch's launch pid.

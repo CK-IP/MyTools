@@ -76,6 +76,12 @@ def main() -> int:
     waves_state_parser.add_argument("--in-flight", dest="in_flight", default="")
     waves_state_parser.add_argument("--awaiting-merge", dest="awaiting_merge", default="")
 
+    # #163: cap-recovery owns its OWN subcommand CLI in sail/cap_recovery.py (single source of
+    # truth). Capture everything after `cap-recovery` and delegate parsing there, rather than
+    # duplicating the sub-subparser definitions here (a parallel list would drift).
+    cap_recovery_parser = subparsers.add_parser("cap-recovery")
+    cap_recovery_parser.add_argument("cap_recovery_args", nargs=argparse.REMAINDER)
+
     build_parser = subparsers.add_parser("build")
     build_parser.add_argument("--target")
     build_parser.add_argument("--run-dir")
@@ -193,6 +199,9 @@ def main() -> int:
     if args.command == "waves":
         from sail.waves import run_waves
         return run_waves(args)
+    if args.command == "cap-recovery":
+        from sail.cap_recovery import run_cap_recovery
+        return run_cap_recovery(args.cap_recovery_args)
     if args.command == "build":
         from sail.build import run_build
         return run_build(args.target or ".", args.run_dir, mode=args.mode, round=args.round, change_class=args.change_class)
