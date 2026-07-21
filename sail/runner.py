@@ -659,6 +659,16 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
             # and its findings already live in the cached `findings`.) Mirrors the --tidiness guard.
             reuse_candidate = None
             decision_log.review_marker("prior review stale (--red-team requested but cache has no red_team block); re-reviewing")
+        if reuse_candidate is not None and not review_mod.depth_reuse_ok(
+                reuse_candidate, target_root, diff_ref, red_team=red_team, dual_lens=dual_lens):
+            # #148: risk-scaled review-depth reuse guard — the freshness companion to
+            # diff_hash/plan_hash. The DEPTH decision itself (is the focus pass the designated
+            # second perspective for the CURRENT diff, and does the cache carry it?) is computed by
+            # review.py's tested depth_reuse_ok — the owner of the depth semantics — so this call
+            # site only consults it. Mirrors the --dual-lens / --tidiness / --red-team reuse
+            # guards above.
+            reuse_candidate = None
+            decision_log.review_marker("prior review stale (high-stakes focus perspective absent from cache); re-reviewing")
         if reuse_candidate is not None:
             # Resume of the same scope: reuse the completed review rather than re-invoking the
             # backend, but recompute blocking from its findings AND its recorded plan_verification
