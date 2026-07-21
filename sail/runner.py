@@ -688,4 +688,9 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
                 )
                 review_rc = 1
 
+    # NOTE (#146): the metrics ledger line is emitted ONCE per converge CYCLE by the driver at the
+    # Stage-4 terminus (`sail metrics record --terminus <converge-decision>`), NOT here. run() is
+    # per-ROUND and cannot know the cycle terminus (proceed / park / proceed-hardening /
+    # proceed-dissent — a driver/converge-oracle decision), so a per-round emit here would persist a
+    # wrong outcome and, under run_id idempotence, latch the first round's guess for the whole cycle.
     return 1 if (blocking_failed or review_rc) else 0
