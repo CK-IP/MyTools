@@ -28,6 +28,12 @@ grep -qiE 'single-lens-by-design|single-lens by design' "$SURF" \
 # ('single-by-design'), not a paraphrase like 'single' — else a supervisor matching the literal
 # verdict would not recognize the default mode and could park a green default build (#136 review).
 EXPECTED_VERDICT="$(python3 -c 'import sys; sys.path.insert(0,"'"$REPO_ROOT"'"); from sail.review import dual_lens_status; print(dual_lens_status({"dual_lens_requested": False}))')"
+# Vacuous-test guard (#140 item 3): if the python subprocess yields empty output (import failure,
+# unset $REPO_ROOT), EXPECTED_VERDICT becomes '' and `grep -qF ''` matches every line → the next
+# assertion would pass VACUOUSLY. Fail loudly on an empty token before the grep can rubber-stamp.
+[ -n "$EXPECTED_VERDICT" ] \
+  && pass "AC1: dual_lens_status yielded a non-empty verdict token (guard against vacuous grep)" \
+  || fail "AC1: EXPECTED_VERDICT is EMPTY (dual_lens_status import/subprocess failed) — refusing to run a vacuous 'grep -qF \"\"' that matches everything"
 grep -qF "$EXPECTED_VERDICT" "$SURF" \
   && pass "AC1: surf.md guard uses the exact dual_lens_status verdict token ('$EXPECTED_VERDICT')" \
   || fail "AC1: surf.md guard does not use the exact verdict token '$EXPECTED_VERDICT'"

@@ -1393,6 +1393,14 @@ keep alive, so there is nothing special about a cap versus any other stop.
      **new** `.sail/runs/sail-<issue>-<ts>/` (resolved via `surf_worker_resolve_run_dir`) and
      re-derives `--diff main` against **current** `main` — so a parent that merged since is included.
      An orphaned issue is never treated as done just because its branch exists.
+     **Worktree reuse is collision-free (no cleanup needed here, #140).** A parked/orphaned run
+     leaves its `sail/<issue>` worktree (`.claude/worktrees/sail-<issue>`) intact. The relaunched
+     `/sail` worker's Stage 0.5 isolate calls `sail_setup_isolation`, which is **idempotent**
+     (#65/#92/#115): an existing worktree already checked out on `sail/<issue>` is **reused as-is**
+     (preserving any parked work-in-progress inside it), and a stale/mismatched occupant is safely
+     cleared via `ship_safe_cleanup_orphan_dir`. So `/surf` does **not** detect/clean the worktree
+     itself before relaunch — that reuse lives once in the shared `sail_setup_isolation` lib (adding
+     it here would duplicate it). Regression-pinned by `tests/test_sail_140_followups.sh` T1.
   4. **Branch absent, or its build corrupt/partial** (a crash mid-write) → discard and build the issue
      **fresh**.
   5. **No branch at all** → build the issue **fresh**.

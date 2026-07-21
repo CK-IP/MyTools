@@ -155,4 +155,44 @@ git -C "$R9" rev-parse --verify sail/dirty >/dev/null 2>&1 || fail "T9: branch d
 [ -d "$WT9" ] || fail "T9: dirty worktree was removed (data loss!)"
 echo "PASS T9: prune refuses a dirty linked worktree — work preserved"
 
+# --- T10: prune vs /sail's in-worktree run-dir — the #140 item-4 investigation, pinned ---
+# #140 worried that /sail's run-dir written INSIDE the worktree (.claude/worktrees/sail-<n>/.sail/
+# runs/…) leaves untracked files that make `git worktree remove` refuse, orphaning the worktree
+# after a merge. Investigation (this test) shows it does NOT, and that a `--force` "fix" would be
+# UNSAFE — so sail_prune_merged_branch is intentionally left UNCHANGED (no --force); these tests
+# pin the reasons. Two pinned cases, both with a realistic .gitignore (`.sail/` ignored, as in the repo):
+#
+#   T10a — GITIGNORED telemetry only: the real /sail scenario. `git worktree remove` (no --force)
+#          ignores gitignored files, so the worktree removes CLEANLY — no orphan, no force. If this
+#          ever regresses (e.g. /sail writes its run-dir somewhere NOT gitignored) it fails loudly.
+#   T10b — a genuine UNTRACKED (non-ignored) DRAFT: prune must REFUSE (no data loss). This is why
+#          `--force` was rejected: forcing would silently destroy an un-`git add`ed draft with no
+#          recovery. (T9 above pins the same no-data-loss guarantee for a TRACKED modification.)
+R10="$TMP_ROOT/r10"; make_repo "$R10" main
+printf '.sail/\n' > "$R10/.gitignore"; git -C "$R10" add .gitignore && git -C "$R10" commit -qm "gitignore .sail"
+# T10a: gitignored telemetry only → clean no-force removal.
+WT10="$TMP_ROOT/wt10"
+git -C "$R10" worktree add -q "$WT10" -b sail/telemetry
+echo u > "$WT10/u.txt"; git -C "$WT10" add -A && git -C "$WT10" commit -qm "committed work"
+MSG10="$TMP_ROOT/msg10.txt"; echo "land sail/telemetry (#140)" > "$MSG10"
+sail_merge_to_default "$R10" sail/telemetry main "$MSG10" >/dev/null || fail "T10a: merge failed"
+mkdir -p "$WT10/.sail/runs/sail-140-20260101T000000Z"     # gitignored /sail run-dir inside the worktree
+printf 'land-comment' > "$WT10/.sail/runs/sail-140-20260101T000000Z/land-comment.md"
+[ -z "$(git -C "$WT10" status --porcelain)" ] || fail "T10a: gitignored telemetry should not show in porcelain (fixture bug)"
+sail_prune_merged_branch "$R10" sail/telemetry || fail "T10a: prune must remove a gitignored-telemetry-only worktree with NO --force (no orphan) — #140 item-4"
+refute "T10a: merged branch should be gone after prune" -- git -C "$R10" rev-parse --verify sail/telemetry
+[ ! -d "$WT10" ] || fail "T10a: gitignored-only worktree was not removed (item-4 orphan persists)"
+echo "PASS T10a: gitignored-telemetry-only worktree removes cleanly, NO --force (item-4 verified non-reproducing)"
+# T10b: a genuine untracked (non-ignored) draft → REFUSE (forcing would destroy it — no data loss).
+WT10B="$TMP_ROOT/wt10b"
+git -C "$R10" worktree add -q "$WT10B" -b sail/draft
+echo v > "$WT10B/v.txt"; git -C "$WT10B" add -A && git -C "$WT10B" commit -qm "committed"
+MSG10B="$TMP_ROOT/msg10b.txt"; echo "land sail/draft (#140)" > "$MSG10B"
+sail_merge_to_default "$R10" sail/draft main "$MSG10B" >/dev/null || fail "T10b: merge failed"
+printf 'work never git-added\n' > "$WT10B/draft.txt"    # untracked, NOT ignored
+refute "T10b: prune must refuse a worktree with a genuine untracked draft (no --force data loss)" -- sail_prune_merged_branch "$R10" sail/draft
+git -C "$R10" rev-parse --verify sail/draft >/dev/null 2>&1 || fail "T10b: branch destroyed despite an untracked draft (data loss!)"
+[ -f "$WT10B/draft.txt" ] || fail "T10b: untracked draft was destroyed (the unsafe --force behavior #140 rejected)"
+echo "PASS T10b: prune refuses a genuine-untracked-draft worktree — draft preserved (why --force was rejected)"
+
 echo "ALL PASS ($PASS assertions)"
