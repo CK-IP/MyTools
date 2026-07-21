@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
 import stat
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 
 
@@ -107,8 +109,25 @@ def is_bug_fix_title(title):
     return bool(_FIX_RE.match(str(title or "").strip()))
 
 
-def should_mutation_verify(is_bug_fix, test_paths, source_paths):
-    return bool(is_bug_fix and test_paths and source_paths)
+def should_mutation_verify(test_paths, source_paths):
+    return bool(test_paths and source_paths)
+
+
+def _budget_seconds():
+    raw = os.environ.get("SAIL_MUTVERIFY_BUDGET_SECONDS")
+    if raw is None or not str(raw).strip():
+        raw = os.environ.get("SAIL_MUTATION_VERIFY_BUDGET_SECS")
+    if raw is None or not str(raw).strip():
+        return 300.0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 300.0
+    if not math.isfinite(value):
+        return 300.0
+    if value <= 0:
+        return None
+    return value
 
 
 def classify_rc(rc, kind):
@@ -196,18 +215,48 @@ def _snapshot_files(target, paths):
 
 
 def _restore_files(target, snapshots):
+    failures = []
+    forced = os.environ.get("SAIL_MUTVERIFY_FORCE_RESTORE_FAIL") == "1"
     for path, snap in snapshots.items():
         full = os.path.join(target, path)
-        if not snap.get("exists"):
-            try:
-                os.remove(full)
-            except FileNotFoundError:
-                pass
-            continue
-        os.makedirs(os.path.dirname(full), exist_ok=True)
-        with open(full, "wb") as fh:
-            fh.write(snap["data"])
-        os.chmod(full, snap["mode"])
+        try:
+            if forced:
+                raise OSError("forced restore failure")
+            if not snap.get("exists"):
+                try:
+                    os.remove(full)
+                except FileNotFoundError:
+                    pass
+                continue
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "wb") as fh:
+                fh.write(snap["data"])
+            os.chmod(full, snap["mode"])
+        except OSError as exc:
+            failures.append({"path": path, "exists": bool(snap.get("exists")), "error": str(exc)})
+    return failures
+
+
+def _restore_failure_message(failures):
+    paths = [failure.get("path", "") for failure in failures if failure.get("path")]
+    tracked = [failure.get("path", "") for failure in failures if failure.get("exists")]
+    untracked = [failure.get("path", "") for failure in failures if not failure.get("exists")]
+    msg = "restore failed for " + ", ".join(paths or ["<unknown>"]) + "; tree is partially reverted"
+    recovery = []
+    if tracked:
+        recovery.append(f"git checkout -- {' '.join(tracked)}")
+    if untracked:
+        recovery.append(f"re-create untracked files: {' '.join(untracked)}")
+    if recovery:
+        msg += "; recover with " + " / ".join(recovery)
+    return msg
+
+
+class RestoreError(RuntimeError):
+    def __init__(self, failures):
+        self.failures = list(failures or [])
+        self.tree_state = "partially-reverted"
+        super().__init__(_restore_failure_message(self.failures))
 
 
 def _run_test_file(target, path):
@@ -317,12 +366,31 @@ def runner_absent_alert(payload):
     return "[ALERT] mutation-verify: tests were not actually run — pytest runner was absent"
 
 
+def budget_exceeded_alert(payload):
+    if not isinstance(payload, dict) or not payload.get("budget_exceeded"):
+        return None
+    seconds = payload.get("budget_seconds")
+    if isinstance(seconds, (int, float)) and seconds > 0:
+        return f"[INFO] mutation-verify: budget {seconds:.3f}s exhausted; remaining tests were skipped"
+    return "[INFO] mutation-verify: budget exhausted; remaining tests were skipped"
+
+
+def restore_failure_alert(payload):
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("status") != "error" or payload.get("tree_state") != "partially-reverted":
+        return None
+    reason = payload.get("reason") or ""
+    if not reason:
+        return None
+    return f"[ALERT] mutation-verify: {reason}"
+
+
 def run_mutation_verify(target, diff_ref, run_dir=None, bug_fix=False, title=None):
     target = os.path.abspath(target or ".")
-    # The bug-fix decision is a DETERMINISTIC, tested predicate (is_bug_fix_title), not an
-    # orchestrator judgment call (CLAUDE.md infra-placement: deterministic decisions live in tested
-    # Python, never the markdown prompt). Prefer deriving it from the issue --title; --bug-fix stays
-    # an explicit operator override for the rare bug-fix that lacks a conventional-commit title.
+    # The bug-fix decision is still deterministic and tested, but qualification now depends on the
+    # changed test/source shape rather than title semantics. Keep the flag/title plumbing for
+    # provenance and explicit operator override.
     is_fix = bool(bug_fix) or is_bug_fix_title(title)
     if run_dir is None:
         run_dir = _default_run_dir()
@@ -335,17 +403,16 @@ def run_mutation_verify(target, diff_ref, run_dir=None, bug_fix=False, title=Non
         diff_hash = _sha256(diff_text)
         tracked, untracked, changed = _changed_paths(target, diff_ref)
         test_paths, source_paths = partition_changed(changed)
-        if not should_mutation_verify(is_fix, test_paths, source_paths):
+        budget_seconds = _budget_seconds()
+        trigger_kind = "bug-fix" if is_fix else "feature"
+        if not should_mutation_verify(test_paths, source_paths):
             payload = {
                 "status": "skipped",
                 "verdict": "skipped",
-                "reason": (
-                    "non-bug-fix diff"
-                    if not is_fix
-                    else "no new/changed test files or no non-test source changes"
-                ),
+                "reason": "no new/changed test files or no non-test source changes",
                 "diff_hash": diff_hash,
                 "findings": [],
+                "trigger_kind": trigger_kind,
             }
             return 0, payload, artifact_path
 
@@ -373,7 +440,25 @@ def run_mutation_verify(target, diff_ref, run_dir=None, bug_fix=False, title=Non
             if os.environ.get("SAIL_MUTVERIFY_FORCE_RAISE") == "after-revert":
                 raise RuntimeError("forced mutation-verify crash after revert")
 
-            test_results = [_run_test_file(target, path) for path in test_paths]
+            test_results = []
+            budget_exceeded = False
+            started_at = time.monotonic()
+            for index, path in enumerate(test_paths):
+                if budget_seconds is not None and (time.monotonic() - started_at) > budget_seconds:
+                    budget_exceeded = True
+                    for remaining in test_paths[index:]:
+                        test_results.append(
+                            {
+                                "file": remaining,
+                                "runner": None,
+                                "rc": 0,
+                                "status": "skipped",
+                                "reason": "mutation-verify budget exhausted",
+                                "skip_kind": "over-budget",
+                            }
+                        )
+                    break
+                test_results.append(_run_test_file(target, path))
             statuses = [result.get("status") for result in test_results]
             verdict = collective_verdict(statuses)
             if verdict == "no-runnable-tests":
@@ -385,29 +470,31 @@ def run_mutation_verify(target, diff_ref, run_dir=None, bug_fix=False, title=Non
                     "findings": [],
                     "tests": test_results,
                     "runner_absent": _runner_absent(test_results),
+                    "trigger_kind": trigger_kind,
+                    "budget_seconds": budget_seconds,
                 }
                 return 0, payload, artifact_path
 
-            findings = _vacuous_findings(test_results) if verdict == "vacuous" else []
+            findings = _vacuous_findings(test_results) if verdict == "vacuous" and not budget_exceeded else []
             payload = {
                 "status": "completed",
-                "verdict": verdict,
+                "verdict": "budget-exceeded" if budget_exceeded else verdict,
                 "diff_hash": diff_hash,
                 "findings": findings,
                 "tests": test_results,
                 "runner_absent": _runner_absent(test_results),
+                "trigger_kind": trigger_kind,
+                "budget_seconds": budget_seconds,
+                "budget_exceeded": budget_exceeded,
             }
             return 0, payload, artifact_path
         finally:
-            # Restore the tree to EXACTLY the pre-check state by rewriting the captured working
-            # bytes — never `git apply`. This touches only the working tree (never the index), so a
-            # file that was modified-but-unstaged before stays modified-but-unstaged after, and a
-            # pre-staged file keeps its staged state: mutation-verify must not `git add`/unstage the
-            # source (the #131 T6/T7/T10/T10c index-neutral invariant). Byte-rewrite is also robust
-            # to a non-hermetic test that mutated a tracked source mid-run (T10b / redteam-3800).
             if reverted:
-                _restore_files(target, tracked_snapshots)
-                _restore_files(target, untracked_snapshots)
+                failures = []
+                failures.extend(_restore_files(target, tracked_snapshots))
+                failures.extend(_restore_files(target, untracked_snapshots))
+                if failures:
+                    raise RestoreError(failures)
     except Exception as exc:
         payload = {
             "status": "error",
@@ -416,6 +503,8 @@ def run_mutation_verify(target, diff_ref, run_dir=None, bug_fix=False, title=Non
             "diff_hash": diff_hash,
             "findings": [],
         }
+        if isinstance(exc, RestoreError):
+            payload["tree_state"] = exc.tree_state
         return 1, payload, artifact_path
     finally:
         if payload is not None:

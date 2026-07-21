@@ -206,11 +206,22 @@ def main() -> int:
         from sail.build import run_build
         return run_build(args.target or ".", args.run_dir, mode=args.mode, round=args.round, change_class=args.change_class)
     if args.command == "mutation-verify":
-        from sail.mutation_verify import run_mutation_verify, runner_absent_alert
+        from sail.mutation_verify import (
+            budget_exceeded_alert,
+            restore_failure_alert,
+            run_mutation_verify,
+            runner_absent_alert,
+        )
 
         rc, payload, _artifact_path = run_mutation_verify(
             args.target or ".", args.diff, args.run_dir, bug_fix=args.bug_fix, title=args.title
         )
+        restore_alert = restore_failure_alert(payload)
+        if restore_alert:
+            print(restore_alert, file=sys.stderr)
+        budget_alert = budget_exceeded_alert(payload)
+        if budget_alert:
+            print(budget_alert, file=sys.stderr)
         alert = runner_absent_alert(payload)
         if alert:
             print(alert, file=sys.stderr)
