@@ -488,6 +488,10 @@ def build_record(
         "redteam_ran": bool(review.get("redteam_ran")),
         "redteam_configured": bool(review.get("redteam_configured")),
         "redteam_latched": bool(review.get("redteam_latched")),
+        # #148 risk-scaled depth: mirror the same-family focus perspective's signals so the ledger
+        # can distinguish a run whose review actually widened to the focus lens.
+        "focus_requested": bool(review.get("focus_requested")),
+        "focus_ran": bool(review.get("focus_ran")),
     }
 
     backends_map = _coerce_backend_map(backends)
