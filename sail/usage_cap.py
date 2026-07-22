@@ -8,10 +8,13 @@ from typing import Any
 DEFAULT_THRESHOLD = 90
 DEFAULT_REFRESH_SECS = 30
 DEFAULT_MARGIN_SECS = 120
+DEFAULT_WALL_CEILING_SECS = 6 * 60 * 60
 
 UNKNOWN = "unknown"
 OK = "ok"
 BACKOFF = "backoff"
+WAIT_IN_WINDOW = "wait-in-window"
+PARK_AND_HANDOFF = "park-and-handoff"
 
 
 def _env_int(names: tuple[str, ...], default: int) -> int:
@@ -38,6 +41,10 @@ def default_refresh_secs() -> int:
 
 def default_margin_secs() -> int:
     return _env_int(("SAIL_USAGE_MARGIN_SECS",), DEFAULT_MARGIN_SECS)
+
+
+def wall_ceiling_secs() -> int:
+    return _env_int(("SAIL_WALL_CEILING_SECONDS",), DEFAULT_WALL_CEILING_SECS)
 
 
 def _coerce_percentage(value: object) -> int | float | None:
@@ -161,6 +168,20 @@ def reset_wakeup_epoch(resets_at: int, now: int, margin_secs: int) -> int:
     target = resets_at + margin_secs
     floor = now + margin_secs
     return target if target >= floor else floor
+
+
+def next_hop(wake: int, now: int) -> int:
+    remaining = wake - now
+    if remaining <= 0:
+        return 0
+    return min(3600, remaining)
+
+
+def wall_policy(wake: int, now: int) -> str:
+    remaining = wake - now
+    if remaining <= wall_ceiling_secs():
+        return WAIT_IN_WINDOW
+    return PARK_AND_HANDOFF
 
 
 def decide(

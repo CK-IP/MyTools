@@ -1039,6 +1039,12 @@ supervisor spawns opus workers (`--unattended` runs `/sail`, whose own backends 
 the `SAIL_*` env, so the worker need not be told a model). `/surf` builds quality-critical issues,
 so the build host should match the manager's tier rather than drop to sonnet.
 
+**Foreground interactive orchestrator only.** The `/surf` supervisor itself stays in the
+foreground as the live interactive session; it is not a background job. That is the shape proven by
+the Stage-1/2 lock-survival runs, and it avoids the #157 background-reap failure mode that killed a
+backgrounded supervisor on lock. Only the per-issue worker is delegated to the harness background
+task.
+
 **Fresh worker per issue, reaped at terminus.** Spawn a new worker for each issue; it exits at the
 issue's terminus and is `wait`-reaped (Step 7 step 5). Never reuse a worker across issues — stale
 context is exactly the drift `/surf` is built to avoid.
@@ -1503,6 +1509,35 @@ Threshold/cadence/margin default to 90% / 30s / 120s, overridable via `SAIL_USAG
 remains the always-on floor: proactive avoids the wall; reactive catches misses (and headless-only
 runs, which have no statusline feed, fall back to it entirely).
 
+On a `backoff` result, `/surf` writes the wake target into the durable resume artifacts
+(`.surf/resume-after` and `.surf/runs/<issue>/cap-state.json`), then decides how to wait by
+**classifying the wall length** — never eyeballing it (the deterministic call lives in tested
+`sail/usage_cap.py`, dispatched via the CLI the loop consumes):
+
+```bash
+WAKE=$(cat .surf/resume-after)   # resets_at + margin, forward-only (written on backoff)
+POLICY="$(python3 -m sail usage-state wall-policy --wake "$WAKE" --now "$(date -u +%s)")"
+# wait-in-window  → chain ScheduleWakeup toward WAKE in <=3600s hops, resuming IN THIS WINDOW:
+#   HOP="$(python3 -m sail usage-state hop --wake "$WAKE" --now "$(date -u +%s)")"
+#   HOP==0 → wake reached, resume launching workers; HOP>0 → ScheduleWakeup(HOP) and re-check on wake.
+# park-and-handoff → see below.
+```
+
+- **`wait-in-window`** (a ~5h wall, `<= SAIL_WALL_CEILING_SECONDS`, default 6h): the **foreground**
+  orchestrator chains `ScheduleWakeup` toward `WAKE` in `<= 3600s` hops (the ScheduleWakeup cap) and
+  **resumes in the same window** — visibility and board position are preserved across the wall. A
+  woken turn re-reads the durable `WAKE` and continues; it never recomputes the wait from scratch
+  (forward-only). This is the same-window path the Stage-1/2 lock-survival results make viable.
+- **`park-and-handoff`** (a multi-day / 7d wall, `> ceiling`): too long to hold a window open (the
+  machine will lock/sleep and — accepted-unfixable — the OAuth token may expire across days), so
+  `/surf` does **not** try to sleep through it in-window. It writes the durable park handoff (the
+  same `wip-handoff.md` / board-position state the reactive relaunch reads) and stops; recovery is
+  the **#163 reactive durable-file relaunch** (Step 16 watcher / `/surf resume`) once the long window
+  resets — no live window is required. This is the convoy-adapted split: short walls wait in-window,
+  long walls park + hand off.
+
+The `#166` sensing path and the `#163` reactive floor are reused here, not duplicated.
+
 **The model: durable-file headless relaunch (the #53 model, restored).** Because a headless
 `claude -p` process **can** host `/sail`'s crew (Step 8 — depth-0 subagents, verified), the default
 cap-recovery is simply to **relaunch `/surf resume` headlessly** once the cap resets:
@@ -1560,6 +1595,10 @@ not run headless — a premise now verified false).
   supervisor that posted `.surf/capped` is taken over by the watcher (scenario 5, gate bullet above).
   A clean (uncapped) relaunch clears both artifacts (`sail cap-recovery clear`) so stale state never
   gates a later run.
+- **Follow-up splits.** Keep the stream-json worker plumbing and auth-liveness surface separate:
+  `rate_limit_event` (authoritative reset signal) is tracked as **#168** and the `auth_dead`
+  sentinel + auth-liveness precheck as **#169**. This step only reuses the existing `#163` reactive
+  floor and `#166` sensing path, not duplicating them.
 - **Anti-pattern guard.** Never put the "is it time yet?" decision inside a Claude call — that would
   burn tokens on every idle tick and can't run while the API is capped. The decision lives in the
   pure-shell gate; `/surf resume` is relaunched only once the gate has already said yes.
