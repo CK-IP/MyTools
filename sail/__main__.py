@@ -170,6 +170,20 @@ def main() -> int:
     metrics_escape_parser.add_argument("--ledger")
     metrics_escape_parser.add_argument("--now")
 
+    usage_state_parser = subparsers.add_parser("usage-state")
+    usage_state_subparsers = usage_state_parser.add_subparsers(dest="usage_state_command", required=True)
+
+    usage_state_write_parser = usage_state_subparsers.add_parser("write")
+    usage_state_write_parser.add_argument("--out", required=True)
+    usage_state_write_parser.add_argument("--now", type=int, required=True)
+
+    usage_state_check_parser = usage_state_subparsers.add_parser("check")
+    usage_state_check_parser.add_argument("--state", required=True)
+    usage_state_check_parser.add_argument("--now", type=int, required=True)
+    usage_state_check_parser.add_argument("--threshold", type=int, default=None)
+    usage_state_check_parser.add_argument("--refresh-secs", dest="refresh_secs", type=int, default=None)
+    usage_state_check_parser.add_argument("--margin", type=int, default=None)
+
     # #147: post-terminus learning loop — group a finished run's blocking findings by root cause
     # and turn domain-gap causes into PROPOSED domain.md rules (human-approved, never auto-applied).
     learn_parser = subparsers.add_parser("learn")
@@ -265,6 +279,39 @@ def main() -> int:
                 now=args.now,
             )
             return 0
+    if args.command == "usage-state":
+        from sail.usage_cap import (
+            BACKOFF,
+            OK,
+            default_margin_secs,
+            default_refresh_secs,
+            default_threshold,
+            decide,
+            load_state,
+            write_usage_state,
+        )
+
+        if args.usage_state_command == "write":
+            state = write_usage_state(sys.stdin.read(), args.out, args.now)
+            return 0 if state is not None else 1
+        if args.usage_state_command == "check":
+            threshold = args.threshold if args.threshold is not None else default_threshold()
+            refresh_secs = (
+                args.refresh_secs if args.refresh_secs is not None else default_refresh_secs()
+            )
+            margin = args.margin if args.margin is not None else default_margin_secs()
+            decision, resume = decide(
+                load_state(args.state),
+                args.now,
+                threshold,
+                refresh_secs,
+                margin,
+            )
+            if decision == BACKOFF:
+                print(f"{BACKOFF} {resume}")
+                return 1
+            print(decision)
+            return 0 if decision == OK else 2
     if args.command == "converge":
         from sail.convergence import (
             area_saturated,

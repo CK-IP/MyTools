@@ -126,6 +126,11 @@ mkdir -p ~/.claude/lib
 rm -f ~/.claude/lib/surf-worker.sh
 ln -s "$(pwd)/config/surf-worker.sh" ~/.claude/lib/surf-worker.sh
 
+# statusline usage-state wrapper — captures rate_limits into ~/.claude/usage-state.json while
+# preserving the existing statusline rendering path.
+rm -f ~/.claude/statusline-usage-state.sh
+ln -s "$(pwd)/home/statusline-usage-state.sh" ~/.claude/statusline-usage-state.sh
+
 # --- Agents ---
 
 # explore-first — read-only research investigator (no edit tools)

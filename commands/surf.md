@@ -1477,6 +1477,32 @@ The subscription usage window is **not** API-readable (the `anthropic-ratelimit-
 API-key per-minute throughput, a different pool), so auto-resume is **reactive**: capture the reset
 time the cap reports and resume after it — not a proactive remaining-quota monitor.
 
+**Branch A is the locked design.** The build-step-1 result confirmed that
+`statusLine.refreshInterval` re-fires the statusline command on a token-free timer while idle, the
+`.rate_limits` payload is fresh and account-wide, and `claude -p` workers emit no statusline
+traffic. That rules out watcher/self-wake loops here: `/surf` does not keep its own timer alive or
+try to wake itself early.
+
+**Checkpoint sequence (#166).** At each issue boundary (before launching the next worker), `/surf`
+consults the deterministic predicate — never eyeballs the JSON (CLAUDE.md infra-placement; the
+threshold/staleness/wakeup decisions live in tested `sail/usage_cap.py`):
+
+```bash
+DECISION="$(python3 -m sail usage-state check --state "$HOME/.claude/usage-state.json" --now "$(date -u +%s)")" && RC=0 || RC=$?
+# rc 0 ("ok")               → proceed: launch the next worker as normal.
+# rc 1 ("backoff <epoch>")  → finish the current issue, STOP launching workers,
+#                             ScheduleWakeup(<epoch> − now) — the printed epoch already folds in
+#                             resets_at + margin (forward-only, never in the past) — then resume.
+# rc 2 ("unknown")          → stale/missing usage-state (statusline stalled or not opted in):
+#                             conservative HOLD — same stop-launching behavior, but wake on a short
+#                             re-check interval instead of a reset epoch.
+```
+
+Threshold/cadence/margin default to 90% / 30s / 120s, overridable via `SAIL_USAGE_THRESHOLD` /
+`SAIL_USAGE_REFRESH_SECS` / `SAIL_USAGE_MARGIN_SECS`. The reactive `#163` cap-message handler
+remains the always-on floor: proactive avoids the wall; reactive catches misses (and headless-only
+runs, which have no statusline feed, fall back to it entirely).
+
 **The model: durable-file headless relaunch (the #53 model, restored).** Because a headless
 `claude -p` process **can** host `/sail`'s crew (Step 8 — depth-0 subagents, verified), the default
 cap-recovery is simply to **relaunch `/surf resume` headlessly** once the cap resets:
