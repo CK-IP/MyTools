@@ -216,6 +216,14 @@ print('id/lens overwrite OK')
 " || { echo "FAIL T11c: backend-supplied id/lens not overwritten"; exit 1; }
 echo "PASS T11c: backend-supplied id/lens overwritten (Gate F MED-1)"
 
+# --- T11d: review rounds log the advisory-finding count in the decision log. ---
+RD11d="$WORK/rd11d"
+ADVISORY_JSON='{"findings":[{"severity":"LOW","category":"design","file":"mod.py","issue":"minor nudge","recommendation":"maybe rename"},{"severity":"MEDIUM","category":"scope","file":"mod.py","issue":"could be narrower","recommendation":"consider trimming"}],"summary":"2 advisory"}'
+set +e; SAIL_REVIEW_CMD="bash $MOCK" MOCK_OUT="$ADVISORY_JSON" run_review "$RD11d" >/dev/null 2>&1; rc=$?; set -e
+[ "$rc" = "0" ] || { echo "FAIL T11d: advisory findings should not block, got $rc"; exit 1; }
+grep -q 'advisory-findings \[round=1\]: 2' "$RD11d/decision-log.md" || { echo "FAIL T11d: advisory count not recorded in decision log"; exit 1; }
+echo "PASS T11d: run_review logs the advisory-finding count for the round"
+
 # ============================================================================
 # #47 Step 3 — --dual-lens risk-gated second-lens escalation
 # ============================================================================

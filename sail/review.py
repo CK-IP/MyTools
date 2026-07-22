@@ -20,6 +20,19 @@ DEFAULT_BACKEND = ["claude", "-p"]
 
 _VALID_SEV = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
 
+# Shared negative-prompting section (#152). Appended to the review, red-team, and tidiness lens
+# prompts so all three consistently suppress the top false-positive classes (Cloudflare found
+# "what NOT to flag" their single biggest FP lever across 131K production reviews): fewer bogus
+# findings → fewer convergence rounds. The "outside the diff" bullet carries an explicit carve-out
+# so it never neuters the red-team lens, whose whole mandate is to flag out-of-diff CALLERS that
+# THIS diff breaks. Brace-free (no `{`/`}`) so the `.format(diff=...)` sites stay safe.
+DO_NOT_FLAG = """DO NOT FLAG (negative prompting — the top false-positive sources; excluding them cuts convergence churn):
+- style/naming nits on PRE-EXISTING code the diff did not change
+- speculative hardening with no concrete, demonstrable exploit path
+- pre-existing issues in code OUTSIDE the diff that this change neither introduces nor breaks (a diff change that demonstrably breaks an out-of-diff caller IS in scope)
+- documentation tone, wording, or phrasing preferences
+- anything a deterministic gate already enforces — lint/formatting, type errors, or issues a security scanner (bandit/semgrep/pip-audit) already reports"""
+
 REVIEW_PROMPT = """You are an adversarial code reviewer. Review the git diff below for genuine \
 defects that a linter, type-checker, or security scanner would NOT catch: design flaws, \
 correctness bugs, security issues, and scope/spec problems. Be specific and skeptical.
@@ -163,6 +176,13 @@ If the diff is already tidy, return {{"findings": [], "summary": "tidy"}}.
 {diff}
 === END DIFF ==="""
 
+# Splice the shared DO_NOT_FLAG section in just before the DIFF block of the two .format()-ed
+# prompts (the red-team lens appends it explicitly in build_redteam_prompt). Referencing the one
+# constant at all three sites is what keeps the lenses in sync (AC2 — guards against prompt drift).
+_DO_NOT_FLAG_SPLICE = "\n\n" + DO_NOT_FLAG + "\n\n=== DIFF ===\n"
+REVIEW_PROMPT = REVIEW_PROMPT.replace("\n\n=== DIFF ===\n", _DO_NOT_FLAG_SPLICE, 1)
+TIDINESS_PROMPT = TIDINESS_PROMPT.replace("\n\n=== DIFF ===\n", _DO_NOT_FLAG_SPLICE, 1)
+
 # Gear 2 (#80): the independent cross-family verifier. A "block"-tier candidate from Gear 1 gets
 # teeth ONLY if THIS lens (a different model family — Codex) confirms it. It is a deliberate
 # false-positive filter (mirrors the #69 scanner-triage FP filter): default to NOT confirming.
@@ -252,7 +272,7 @@ the questions that plainly do not apply — do not pad):
 def build_redteam_prompt(diff_text, stride=False):
     # No .format() here (so the JSON-schema braces above stay single, not doubled): the diff is
     # appended by concatenation, and the STRIDE block is folded in only for security-relevant diffs.
-    prompt = RED_TEAM_PROMPT
+    prompt = RED_TEAM_PROMPT + "\n\n" + DO_NOT_FLAG
     if stride:
         prompt += STRIDE_LITE_BLOCK
     return prompt + "\n\n=== DIFF ===\n" + diff_text + "\n=== END DIFF ==="
@@ -1532,6 +1552,8 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
 
     findings = merge_mutation_verify_findings(findings, run_dir, result.get("diff_hash"))
     counts = severity_counts(findings)
+    advisory_count = counts.get("MEDIUM", 0) + counts.get("LOW", 0)
+    log.record_advisory_count(round, advisory_count)
 
     # plan_verification (#47): the traceability spine. A malformed plan.json fails closed
     # (RT-2) — never silently degraded to "no-plan". Only a genuinely absent plan is no-plan.

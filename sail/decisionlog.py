@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 
 from sail.runstate import _utc_now_iso
 
@@ -27,6 +28,20 @@ class DecisionLog:
                 raise OSError(f"short write to {self.path}")
         finally:
             os.close(fd)
+
+    def _replace_lines(self, lines) -> None:
+        os.makedirs(self.run_dir, exist_ok=True)
+        payload = "\n".join(lines)
+        if payload:
+            payload += "\n"
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", delete=False, dir=self.run_dir
+        ) as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+            tmp_path = fh.name
+        os.replace(tmp_path, self.path)
 
     def _read_lines(self, repair_partial_tail=False):
         try:
@@ -175,6 +190,20 @@ class DecisionLog:
             f"- resolution: [{_sanitize_text(finding_id)}] "
             f"{_sanitize_text(disposition)} — {_sanitize_text(rationale)}{suffix}"
         )
+
+    def record_advisory_count(self, round, count):
+        # Round-keyed advisory-count marker (#152): a cheap churn signal for the review loop.
+        # Later writes for the same round overwrite the prior row so a resumed round never
+        # double-counts.
+        round = int(round)
+        count = int(count)
+        marker_prefix = f"- advisory-findings [round={round}]:"
+        lines = self._read_lines(repair_partial_tail=True)
+        if HEADER not in lines:
+            lines = [HEADER] + lines if lines else [HEADER]
+        lines = [line for line in lines if not line.startswith(marker_prefix)]
+        lines.append(f"{marker_prefix} {count}")
+        self._replace_lines(lines)
 
     def read_resolutions(self, round=None, before=None):
         # Read the resolution trail back into a dict keyed by finding id. Later markers
