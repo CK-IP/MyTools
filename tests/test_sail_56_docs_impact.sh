@@ -54,10 +54,15 @@ echo "PASS T3: docs-impact check is marked advisory (not a new gate)"
 # checker is present. Reads registry NAMES only — no git, no diff, no branch dependence.
 REGISTRY="$(python3 -c 'from sail.checkers import build_registry; print(" ".join(c.name for c in build_registry()))' 2>/dev/null || true)"
 [ -n "$REGISTRY" ] || fail "T4a: could not read the live sail checker registry"
+# Exact-name match, not substring/grep -w: "docs-currency" (#150 — a deliberately DIFFERENT,
+# blocking gate) shares the "docs" substring with these #56-specific names and would false-trip
+# a word-boundary grep (hyphens count as boundaries), even though #150 is not #56 growing a gate.
 for gate in docs-impact docs-check install-docs docs; do
-  if echo "$REGISTRY" | grep -qw "$gate"; then
-    fail "T4a: #56 is advisory-only but a '$gate' gate is registered: $REGISTRY"
-  fi
+  for name in $REGISTRY; do
+    if [ "$name" = "$gate" ]; then
+      fail "T4a: #56 is advisory-only but a '$gate' gate is registered: $REGISTRY"
+    fi
+  done
 done
 echo "PASS T4a: #56 registered no new sail gate (advisory prose only) — registry: $REGISTRY"
 

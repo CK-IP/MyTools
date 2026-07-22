@@ -385,6 +385,37 @@ class DiffCoverageChecker(Checker):
         return diff_coverage_threshold(target) is not None
 
 
+class DocsCurrencyChecker(Checker):
+    # Deterministic diff-scoped docs-currency gate. The checker itself is pure/diff-derived, so
+    # it emits findings via a tiny Python helper and is diff-only in the runner.
+    def affected_by(self, changed_files) -> bool:
+        if not changed_files:
+            return True
+        return any(
+            (
+                f.replace("\\", "/").startswith("sail/") and f.endswith(".py")
+            )
+            or (
+                f.replace("\\", "/").startswith("commands/") and f.endswith(".md")
+            )
+            for f in changed_files
+        )
+
+    def build_command(self, target: str, artifact_path: str, ctx: "Optional[CheckerContext]" = None) -> List[str]:
+        diff_ref = ctx.diff_ref if ctx and ctx.diff_ref else None
+        if not diff_ref:
+            return ["printf", "[]"]
+        return [
+            "python3",
+            "-m",
+            "sail.docs_currency",
+            "--target",
+            target,
+            "--diff-ref",
+            diff_ref,
+        ]
+
+
 class ShellRuntimeChecker(Checker):
     def available(self) -> bool:
         try:
@@ -425,11 +456,12 @@ def build_registry() -> list[Checker]:
         Checker("gitleaks", "gitleaks", "gitleaks.sarif"),
         Checker("npm-audit", "npm", "npm-audit.json", stdout_artifact=True),
         DiffCoverageChecker("diff-coverage", "diff-cover", "diff-coverage.json", blocking=False),
+        DocsCurrencyChecker("docs-currency", "python3", "docs-currency.json", stdout_artifact=True),
         ShellRuntimeChecker("shell-runtime", "zsh", "shell-runtime.json"),
     ]
     # Opt-in allowlist (comma-separated checker names) to restrict the registry — e.g. fast
     # hermetic test runs that only need ruff/pytest as background gates (#51). Unset/empty =
-    # all eight (unchanged). Order follows the registry, not the allowlist. Unknown names are
+    # all twelve (unchanged). Order follows the registry, not the allowlist. Unknown names are
     # ignored (never crash); a fully-unknown allowlist yields an empty registry, which the
     # runner handles (no gates) and the LLM-review arm is unaffected.
     allow = os.environ.get("SAIL_CHECKERS")

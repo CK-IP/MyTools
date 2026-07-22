@@ -58,8 +58,8 @@ gates = data.get("gates")
 if not isinstance(gates, list):
     print("FAIL: run-state.json field 'gates' must be a list", file=sys.stderr)
     raise SystemExit(1)
-if len(gates) != 11:
-    print(f"FAIL: expected 11 gates in run-state.json, got {len(gates)}", file=sys.stderr)
+if len(gates) != 12:
+    print(f"FAIL: expected 12 gates in run-state.json, got {len(gates)}", file=sys.stderr)
     raise SystemExit(1)
 
 gates[0]["status"] = "passed"

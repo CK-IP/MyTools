@@ -41,7 +41,7 @@ import json
 import sys
 
 path = sys.argv[1]
-expected_gates = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage", "shell-runtime"]
+expected_gates = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage", "docs-currency", "shell-runtime"]
 valid_statuses = {"pending", "running", "passed", "failed", "skipped"}
 
 try:
