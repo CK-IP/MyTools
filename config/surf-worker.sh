@@ -71,7 +71,15 @@ surf_worker_command() {
   # issue id is the only interpolated value, and it was validated above).
   local contract='=== HEADLESS-WORKER CONTRACT (overrides any default async behavior) === You are a headless claude -p worker: your process EXITS when this turn ends and you are NOT re-invoked, so any work you background is LOST. Run EVERY /sail stage SYNCHRONOUSLY in this single turn: plan, build (codex), review (codex, all rounds), commit. Do NOT use run_in_background, do NOT background a command with an ampersand, do NOT use ScheduleWakeup, and do NOT background a stage and end your turn expecting to be re-invoked. Instead, BLOCK in-turn: invoke each codex build and review as a foreground call and WAIT for it to return (a blocking foreground wait is correct and required — it is NOT the prohibited behavior), then proceed straight to the next stage in this same turn. A -p worker is NOT bound by any 10-minute tool cap, so long blocking codex calls are expected and fine. Drive all the way to the Stage-4 commit terminus before ending the turn; only end once /sail has committed or genuinely parked with a wip-handoff.md.'
   prompt="${prompt} ${contract}"
-  printf '%s\n' "claude --dangerously-skip-permissions -p \"${prompt}\""
+  # #168: launch with stream-json output so the worker emits machine-readable `rate_limit_event`
+  # lines — the AUTHORITATIVE cap/reset signal (fresher + false-positive-free vs the #166 statusline
+  # and the retired #126 cap-text regex). `--output-format stream-json` REQUIRES `--verbose` under
+  # `-p` (Claude Code contract). The supervisor tees this JSONL stream to
+  # `.surf/runs/<issue>/worker-stream.jsonl` and feeds it to `sail cap-recovery rate-limit-event`
+  # (surf.md Step 8). The flags precede `-p`; the injection-safe numeric-id-only `-p "..."` prompt is
+  # unchanged. The worker→supervisor merge decision still reads ONLY the durable run-dir artifacts
+  # (never this stream); the stream is consumed solely for cap sensing.
+  printf '%s\n' "claude --dangerously-skip-permissions --output-format stream-json --verbose -p \"${prompt}\""
 }
 
 # surf_worker_resolve_run_dir <issue> [repo_root] — print the NEWEST /sail SESSION run-dir for

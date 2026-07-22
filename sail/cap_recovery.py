@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -365,6 +366,130 @@ def parse_reset_text(text: str, now_epoch: int):
     return _parse_reset(tail, now_epoch)
 
 
+# ---------------------------------------------------------------------------------------------------
+# #168 — the AUTHORITATIVE cap/reset signal: the worker's stream-json `rate_limit_event` lines.
+#
+# A convoy `ship-tide.py` port (`_parse_resets_at` / `_find_last_event_by_type` /
+# `_usage_limit_decision`). The event carries `status` / `rateLimitType` / `utilization` / `resetsAt`
+# and is fresher + authoritative than the minutes-stale statusline (#166) and the false-positive-prone
+# cap-text regex (#126). It supersedes the #126 regex on the /surf WORKER path (which now emits
+# stream-json); the regex (classify_cap_text/parse_reset_text above) stays only for the supervisor
+# self-relinquish path, which has no worker stream.
+#
+# five_hour and seven_day are INDEPENDENT limit windows evaluated separately (convoy #469 — a single
+# "last event wins" scan would let one window mask the other); the LONGEST-wait held window dominates
+# the single wake target. Fields are parsed as JSON DATA only (never shell-interpolated) so the input
+# is injection-safe. Returns the RAW resetsAt epoch — `arm` adds the post-reset margin + floor +
+# ceiling, keeping that math single-sourced.
+
+RLE_WINDOWS = ("five_hour", "seven_day")
+# Per-window utilization thresholds for an `allowed_warning` hold (convoy live values). A `rejected`
+# status is a hard block regardless of window/utilization.
+RLE_UTIL_THRESHOLD = {"five_hour": 0.90, "seven_day": 0.98}
+
+
+def _parse_resets_at(value: object) -> Optional[int]:
+    # Epoch-seconds / epoch-milliseconds / ISO-8601 → epoch SECONDS (int), else None (fail to absence).
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        v = float(value)
+    elif isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            v = float(s)
+        except ValueError:
+            try:
+                iso = s[:-1] + "+00:00" if s.endswith("Z") else s
+                dt = datetime.fromisoformat(iso)
+            except (ValueError, TypeError):
+                return None
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp())
+    else:
+        return None
+    if not math.isfinite(v):
+        return None
+    if v > 1e12:  # epoch-milliseconds → seconds
+        v /= 1000.0
+    return int(v)
+
+
+def _find_last_event_by_type(lines, rate_limit_type: str) -> Optional[dict]:
+    last = None
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(obj, dict) or obj.get("type") != "rate_limit_event":
+            continue
+        info = obj.get("rate_limit_info")
+        if not isinstance(info, dict):
+            continue
+        if info.get("rateLimitType") == rate_limit_type:
+            last = obj
+    return last
+
+
+def _rle_hold_reset(event: Optional[dict], now_epoch: int) -> Optional[int]:
+    # Return the RAW resetsAt epoch iff `event` is a hold-worthy, non-elapsed cap for a known window;
+    # else None (fail-open — never fabricate a wake target on an ambiguous/advisory/allowed event).
+    if not isinstance(event, dict):
+        return None
+    info = event.get("rate_limit_info")
+    info = info if isinstance(info, dict) else {}
+    status = info.get("status", "")
+    window = info.get("rateLimitType", "")
+    if window not in RLE_WINDOWS or not status or status == "allowed":
+        return None
+    if status == "rejected":
+        pass  # hard block — window-agnostic, no utilization gate
+    elif status == "allowed_warning":
+        threshold = RLE_UTIL_THRESHOLD.get(window)
+        util = info.get("utilization")
+        if threshold is None or not isinstance(util, (int, float)) or isinstance(util, bool):
+            return None
+        if util < threshold:
+            return None
+    else:
+        return None  # unknown status → fail-open
+    reset = _parse_resets_at(info.get("resetsAt"))
+    if reset is None or reset <= now_epoch:  # unparseable, or window already reset (elapsed) → no hold
+        return None
+    return reset
+
+
+def parse_rate_limit_event(text: str, now_epoch: int):
+    # Evaluate both windows independently; the LONGEST-wait held window dominates. Returns
+    # (raw_reset_epoch, limit_type) or (None, None) when no window is a hold-worthy, non-elapsed cap.
+    lines = text.splitlines()
+    best_epoch: Optional[int] = None
+    best_window: Optional[str] = None
+    for window in RLE_WINDOWS:
+        reset = _rle_hold_reset(_find_last_event_by_type(lines, window), now_epoch)
+        if reset is None:
+            continue
+        if best_epoch is None or reset > best_epoch:
+            best_epoch, best_window = reset, window
+    return best_epoch, best_window
+
+
+def saw_rate_limit_event(text: str) -> bool:
+    # True iff the stream carried at least one rate_limit_event for a known window — regardless of
+    # hold-worthiness. Lets `arm` distinguish "a fresh event said NOT-capped" (authoritative → do NOT
+    # fall back to cap-text) from "no event at all" (fall back to cap-text). Kills the #126 FP class:
+    # a stale cap-text tail can never arm once a structured event has spoken (even to say `allowed`).
+    lines = text.splitlines()
+    return any(_find_last_event_by_type(lines, w) is not None for w in RLE_WINDOWS)
+
+
 def _load_json(path: str):
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -470,21 +595,52 @@ def arm(
     text: str,
     now_epoch: int,
     ceiling_secs: Optional[int] = None,
+    reset_epoch: Optional[int] = None,
+    limit_type_override: Optional[str] = None,
+    event_text: Optional[str] = None,
 ):
     # issue is optional (None -> the whole-board GLOBAL cap-state, used by the launchd watcher). This
     # is the SINGLE arming path for BOTH layers (supervisor Layer-1 and watcher) so they can never
     # drift: it owns the never-hot-loop floor, the wall-clock ceiling, the post-reset margin, the
     # forward-only merge, and the anomaly-count.
+    #
+    # #168 SOURCE PRECEDENCE (single-sourced + tested here, never scattered across bash):
+    #   1. reset_epoch  — an explicit raw resetsAt epoch (already parsed by the caller).
+    #   2. event_text   — a worker's stream-json log; the AUTHORITATIVE rate_limit_event is parsed and,
+    #                     if a hold-worthy window is present, wins over the cap-text (the #126 regex is
+    #                     RETIRED wherever an event stream is provided).
+    #   3. text         — the legacy #126 cap-text (self-relinquish / watcher fallback ONLY, when no
+    #                     structured event is available).
+    # Downstream (post-reset margin, never-hot-loop floor, wall-clock ceiling, forward-only merge) is
+    # applied identically for every source, so a replayed/older signal can never move the floor back.
     normalized_issue = _validate_issue(issue)
     ceiling = ceiling_secs if ceiling_secs and ceiling_secs > 0 else ceiling_seconds()
     os.makedirs(surf_dir, exist_ok=True)
     if normalized_issue is not None:
         os.makedirs(_issue_root(surf_dir, normalized_issue), exist_ok=True)
 
-    if not classify_cap_text(text):
-        return {"armed": False, "reason": "not-cap"}
+    if reset_epoch is None and event_text:
+        ev_epoch, ev_type = parse_rate_limit_event(event_text, now_epoch)
+        if ev_epoch is not None:
+            reset_epoch = ev_epoch
+            if not limit_type_override:
+                limit_type_override = ev_type
+        elif saw_rate_limit_event(event_text):
+            # A structured event was present but is NOT a hold-worthy cap (e.g. status: allowed). The
+            # event is AUTHORITATIVE, so do NOT fall through to the FP-prone #126 cap-text — that is
+            # exactly the false positive #168 retires. Not a cap.
+            return {"armed": False, "reason": "not-cap"}
 
-    parsed_epoch, limit_type = parse_reset_text(text, now_epoch)
+    if reset_epoch is not None:
+        # An event/explicit epoch is a REAL, typed reset (five_hour/seven_day) — never the "weekly"
+        # text-parser placeholder. Fall back to "unknown" (a recognized _merge_floor placeholder) only
+        # when the window is genuinely unknown, never mislabel it "weekly".
+        parsed_epoch: Optional[int] = int(reset_epoch)
+        limit_type = limit_type_override or "unknown"
+    elif not classify_cap_text(text):
+        return {"armed": False, "reason": "not-cap"}
+    else:
+        parsed_epoch, limit_type = parse_reset_text(text, now_epoch)
     if parsed_epoch is None:
         chosen_epoch = now_epoch + default_backoff_seconds()
         limit_type = "default"
@@ -614,6 +770,17 @@ def run_cap_recovery(argv=None) -> int:
     arm_parser.add_argument("--now", required=True)
     arm_parser.add_argument("--ceiling-secs", type=int, default=None)
     arm_parser.add_argument("--text-file")
+    # #168: the AUTHORITATIVE-event path. `--log-file` points at a worker's stream-json log; arm parses
+    # its rate_limit_event and, if hold-worthy, uses it over --text-file cap-text (precedence lives in
+    # arm(), not scattered across bash). `--reset-epoch` supplies an already-parsed raw epoch directly;
+    # `--limit-type` carries the window (five_hour/seven_day) for the forward-only merge.
+    arm_parser.add_argument("--reset-epoch", type=int, default=None)
+    arm_parser.add_argument("--limit-type", default=None)
+    arm_parser.add_argument("--log-file", default=None)
+
+    rle_parser = subparsers.add_parser("rate-limit-event")
+    rle_parser.add_argument("--now", required=True)
+    rle_parser.add_argument("--log-file")
 
     relinquish_parser = subparsers.add_parser("relinquish")
     relinquish_parser.add_argument("--surf-dir", required=True)
@@ -657,10 +824,64 @@ def run_cap_recovery(argv=None) -> int:
         return 0
 
     if args.command == "arm":
-        text = _read_text(text_file=args.text_file)
-        result = arm(args.surf_dir, args.issue, text, _read_now(args.now), args.ceiling_secs)
+        # Source resolution for the single arming path (precedence itself lives in arm()):
+        #   --reset-epoch  → explicit epoch; no text/stream read.
+        #   --log-file     → AUTHORITATIVE stream-json (fail-OPEN on a missing/unreadable stream so arm
+        #                    falls through, never crashes). --text-file, if ALSO given, is the cap-text
+        #                    fallback (watcher path); with --log-file alone the cap-text is retired
+        #                    (worker path — event-only).
+        #   neither        → legacy cap-text from --text-file or stdin (self-relinquish path).
+        event_text: Optional[str] = None
+        if args.reset_epoch is None and args.log_file is not None:
+            try:
+                event_text = _read_text(text_file=args.log_file)
+            except (OSError, UnicodeDecodeError):
+                # Fail-OPEN on a missing/unreadable OR non-UTF-8 stream (UnicodeDecodeError is a
+                # ValueError, NOT an OSError — convoy _read_lines catches both). arm then falls through.
+                event_text = None
+        def _read_cap_text(text_file) -> str:
+            # Fail-OPEN on a missing/unreadable/non-UTF-8 cap-text file too (the watcher passes the
+            # SAME persisted stream as --log-file AND --text-file, so a non-UTF-8 byte must not crash
+            # the fallback read after the event read already failed open). Legacy stdin (text_file
+            # None) is left to raise as before — an interactive self-relinquish always supplies text.
+            try:
+                return _read_text(text_file=text_file)
+            except (OSError, UnicodeDecodeError):
+                return ""
+
+        if args.reset_epoch is not None:
+            text = ""
+        elif args.log_file is not None:
+            # Event mode: read cap-text ONLY if an explicit --text-file fallback was provided (never
+            # block on stdin in event mode).
+            text = _read_cap_text(args.text_file) if args.text_file else ""
+        else:
+            text = _read_text(text_file=args.text_file)  # legacy: --text-file or stdin
+        result = arm(
+            args.surf_dir, args.issue, text, _read_now(args.now), args.ceiling_secs,
+            reset_epoch=args.reset_epoch, limit_type_override=args.limit_type,
+            event_text=event_text,
+        )
         if result.get("armed"):
             print(_rfc3339_from_epoch(int(result["reset-after"])))
+        return 0
+
+    if args.command == "rate-limit-event":
+        # Parse the AUTHORITATIVE cap/reset signal from a worker's stream-json log (file-fed, never
+        # shell-interpolated). Prints "<raw_reset_epoch>\t<limit_type>" and rc 0 on a hold-worthy,
+        # non-elapsed cap event; rc 1 with no output otherwise (so the #166/#163 fallback engages).
+        # Fail-OPEN on a missing/unreadable OR non-UTF-8 stream (a worker that never wrote one, or a
+        # stream with a stray non-UTF-8 byte): rc 1, no output, no traceback — the /surf branch then
+        # records the fail-closed build park (convoy _read_lines catches OSError+UnicodeDecodeError).
+        # Never fabricate a wake target from an absent/unreadable stream.
+        try:
+            text = _read_text(text_file=args.log_file)
+        except (OSError, UnicodeDecodeError):
+            return 1
+        epoch, limit_type = parse_rate_limit_event(text, _read_now(args.now))
+        if epoch is None:
+            return 1
+        print(f"{epoch}\t{limit_type}")
         return 0
 
     if args.command == "relinquish":

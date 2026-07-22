@@ -74,11 +74,12 @@ trap 'rm -rf "$FIX"' EXIT   # the TEST may clean its own tmpdir; the helper unde
 CMD="$(surf_worker_command 42 2>/dev/null || true)"
 # #136 AC1+AC2: the emitted command carries the SUPPORTED launch flag (--dangerously-skip-permissions,
 # never the old --dangerously-bypass-permissions which the current CLI rejects) plus the /sail
-# invocation, then a headless-worker-contract clause. So this is a PREFIX + marker check, not an
-# exact-match against a fixed string.
+# invocation, then a headless-worker-contract clause. #168: it ALSO carries the stream-json launch
+# flags (--output-format stream-json --verbose) BEFORE -p so the worker emits rate_limit_event lines.
+# So this is a PREFIX + marker check, not an exact-match against a fixed string.
 case "$CMD" in
-  'claude --dangerously-skip-permissions -p "/sail 42 --unattended '*)
-    pass "(1) surf_worker_command 42 → skip-permissions flag + /sail 42 --unattended prefix" ;;
+  'claude --dangerously-skip-permissions --output-format stream-json --verbose -p "/sail 42 --unattended '*)
+    pass "(1) surf_worker_command 42 → skip-permissions + stream-json + /sail 42 --unattended prefix" ;;
   *) fail "(1) surf_worker_command emitted unexpected prefix: '$CMD'" ;;
 esac
 case "$CMD" in
@@ -482,7 +483,7 @@ GIT_CLEANUP_DIRTY_TEST
 if command -v zsh >/dev/null 2>&1; then
   # 7a. Sources cleanly under zsh AND surf_worker_command emits the exact command.
   zout="$(zsh -c ". '$WORKER_SRC' && surf_worker_command 42" 2>&1)" && zrc=0 || zrc=$?
-  { [ "${zrc:-1}" -eq 0 ] && case "$zout" in 'claude --dangerously-skip-permissions -p "/sail 42 --unattended '*) true ;; *) false ;; esac; } \
+  { [ "${zrc:-1}" -eq 0 ] && case "$zout" in 'claude --dangerously-skip-permissions --output-format stream-json --verbose -p "/sail 42 --unattended '*) true ;; *) false ;; esac; } \
     && pass "(7a) helper sources + emits the skip-permissions /sail command under the zsh runtime" \
     || fail "(7a) helper not source-safe under zsh (rc=${zrc:-?}, out='$zout')"
   # 7b. The bad id must be REJECTED (non-zero) AND that non-zero return must NOT abort the zsh caller

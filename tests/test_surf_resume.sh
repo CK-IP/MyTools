@@ -106,6 +106,31 @@ if [ -s "$WORK/.surf/resume-after" ]; then pass "(b) cap on relaunch → resume-
 ra="$(cat "$WORK/.surf/resume-after" 2>/dev/null || true)"
 rae="$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$ra" "+%s" 2>/dev/null || date -u -d "$ra" "+%s" 2>/dev/null || echo 0)"
 if [ "${rae:-0}" -gt "$(now_epoch)" ]; then pass "(b) armed floor is in the future (no hot-loop)"; else fail "(b) floor not in future ($ra)"; fi
+# #168: the relaunch must carry the stream-json flags so a re-cap emits an authoritative rate_limit_event.
+if grep -qF -- '--output-format stream-json' "$CLAUDE_REC" 2>/dev/null && grep -qF -- '--verbose' "$CLAUDE_REC" 2>/dev/null; then
+  pass "(b#168) relaunch carries --output-format stream-json --verbose"
+else
+  fail "(b#168) relaunch missing stream-json/verbose ($(grep INVOKE "$CLAUDE_REC" | tail -1))"
+fi
+
+# --- (b2 #168) capped via an authoritative rate_limit_event (stream-json) → armed from event -------
+# The relaunch's OWN re-cap emits a rate_limit_event on its stream; arm --log-file parses it (fresher
+# + FP-free) as the reset source, ahead of the #126 cap-text fallback.
+seed_charter
+rm -f "$WORK/.surf/active" "$WORK/.surf/resume-after"
+FUT=$(( $(now_epoch) + 4000 ))
+CLAUDE_OUT="$(printf '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour","resetsAt":%s}}' "$FUT")" run_watcher
+if [ -s "$WORK/.surf/resume-after" ]; then pass "(b2#168) rate_limit_event on relaunch → resume-after armed (event path)"; else fail "(b2#168) event did not arm resume-after"; fi
+ra2="$(cat "$WORK/.surf/resume-after" 2>/dev/null || true)"
+rae2="$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$ra2" "+%s" 2>/dev/null || date -u -d "$ra2" "+%s" 2>/dev/null || echo 0)"
+if [ "${rae2:-0}" -gt "$(now_epoch)" ]; then pass "(b2#168) event-armed floor is in the future"; else fail "(b2#168) event floor not in future ($ra2)"; fi
+# #168 AC4: the relaunch's stream-json output is PERSISTED to a durable .surf marker (not just the
+# EXIT-trap mktemp) before the wake decision, and carries the event line.
+if [ -s "$WORK/.surf/resume-stream.jsonl" ] && grep -q 'rate_limit_event' "$WORK/.surf/resume-stream.jsonl"; then
+  pass "(b2#168) relaunch stream persisted to durable .surf/resume-stream.jsonl"
+else
+  fail "(b2#168) durable resume-stream.jsonl missing or has no event"
+fi
 
 # --- (c) done-marker present → gate closed → NO relaunch ----------------------
 seed_charter
