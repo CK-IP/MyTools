@@ -106,9 +106,10 @@
     ]
   },
   "statusLine": {
-    "_comment": "cc-dotfiles: shows pipeline stage + issue in the status bar",
+    "_comment": "cc-dotfiles: shows pipeline stage + issue in the status bar; CK-Skills wrapper adds usage-state capture on the same timer",
     "type": "command",
-    "command": "~/.claude/statusline.sh"
+    "command": "~/.claude/statusline-usage-state.sh",
+    "refreshInterval": 30
   },
   "enabledPlugins": {
     "_comment": "Optional — enable as needed",
