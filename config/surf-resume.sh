@@ -33,6 +33,10 @@ LOG="${SURF_RESUME_LOG:-/tmp/surf-resume.log}"
 
 SURF_DIR="${SURF_RESUME_DIR:-$REPO_ROOT/.surf}"   # overridable so the functional test can point at a fixture dir
 RESUME_AFTER="$SURF_DIR/resume-after"
+# #168: the relaunch's stream-json output is persisted here (durable, under SURF_DIR — NOT the
+# EXIT-trap mktemp) so the authoritative `rate_limit_event` survives the tick and is the input to the
+# wake decision. Overwritten each relaunch; small (a single supervisor session's stream).
+RESUME_STREAM="$SURF_DIR/resume-stream.jsonl"
 LOCKDIR="$SURF_DIR/resume.lock"
 ACTIVE="$SURF_DIR/active"
 HEARTBEAT="$SURF_DIR/heartbeat"
@@ -223,17 +227,12 @@ should_launch() {
   return 0
 }
 
-# Did the relaunched run hit the usage cap? #163: classification is single-sourced in the tested
-# Python module (sail cap-recovery classify), which reads only the TERMINAL tail of the output — the
-# only window where a genuine cap notice (the terminal state of a capped run) can legitimately appear
-# — so ordinary board content mentioning "rate limit"/"resets at" earlier in the output cannot
-# trigger a spurious multi-hour backoff. Cap text is passed via the output FILE (never interpolated
-# on the command line), keeping the shell↔Python interface injection-safe.
-hit_cap() {
-  local out="$1"
-  [ -n "$out" ] || return 1
-  cap_recovery classify --text-file "$out" >/dev/null 2>&1
-}
+# Cap detection + arming are single-sourced in `sail cap-recovery arm` (#168): it parses the
+# AUTHORITATIVE stream-json `rate_limit_event` from the captured output first, falls back to the #126
+# cap-text tail only when no structured event is present, and PRINTS the armed RFC3339 wake iff it is
+# a cap — so `main` reads arm's output directly, with no separate bash classify step. Both inputs are
+# passed via the output FILE (never interpolated on the command line), keeping the interface
+# injection-safe.
 
 main() {
   mkdir -p "$SURF_DIR"
@@ -269,26 +268,40 @@ main() {
     log "claude not found (PATH=${PATH:-}) — cannot relaunch /surf resume"
     exit 1
   fi
-  log "relaunching: (cd $REPO_ROOT) $claude_bin --dangerously-skip-permissions -p \"/surf resume\""
+  log "relaunching: (cd $REPO_ROOT) $claude_bin --dangerously-skip-permissions --output-format stream-json --verbose -p \"/surf resume\""
   # launchd sets no WorkingDirectory, so this script can run from `/` or `$HOME`. cd to the repo
   # root before relaunch so /surf resume — and /sail's cwd-relative run-dir discovery — resolve
   # against the right repo, not launchd's inherited cwd (#136 review).
-  ( cd "$REPO_ROOT" && "$claude_bin" --dangerously-skip-permissions -p "/surf resume" ) >"$out" 2>&1 &
+  # #168: relaunch with stream-json so THIS relaunch's own cap (a re-cap on resume) emits an
+  # AUTHORITATIVE `rate_limit_event`; `$out` (the captured JSONL) is fed to `arm --log-file` below,
+  # event-first with the #126 cap-text as fallback. (`--output-format stream-json` requires `--verbose`.)
+  ( cd "$REPO_ROOT" && "$claude_bin" --dangerously-skip-permissions --output-format stream-json --verbose -p "/surf resume" ) >"$out" 2>&1 &
   claude_pid=$!
   printf '%s\n' "$claude_pid" >"$ACTIVE" 2>/dev/null || true
   wait "$claude_pid" || true
   cat "$out" >>"$LOG" 2>/dev/null || true
+  # #168: persist the relaunch's stream-json output to the DURABLE marker BEFORE deciding the wake
+  # target, so the authoritative `rate_limit_event` is not lost with the EXIT-trap mktemp. This is the
+  # input the arm call below reads.
+  cp "$out" "$RESUME_STREAM" 2>/dev/null || true
 
   # If the relaunched run hit the cap again, arm the shared resume-after floor so the next tick waits
-  # rather than hot-looping. #163: ALL the floor logic — forward-only merge, wall-clock ceiling,
-  # post-reset margin, the never-hot-loop MIN_BACKOFF floor, dual-horizon reset parse, and the
-  # default-backoff on a parse-miss — lives in the single-source `sail cap-recovery arm` (no bash
-  # floor math here). The watcher is issue-agnostic (whole-board resume), so it arms the GLOBAL
-  # cap-state (no --issue). `arm` writes `$RESUME_AFTER` itself.
-  if hit_cap "$out"; then
-    local armed
-    armed="$(cap_recovery arm --surf-dir "$SURF_DIR" --now "$(now_epoch)" --text-file "$out" || true)"
-    log "cap hit; armed resume-after ${armed:-<arm returned nothing>}"
+  # rather than hot-looping. #163/#168: ALL the source-precedence AND floor logic — the AUTHORITATIVE
+  # rate_limit_event first (via --log-file), the #126 cap-text as fallback (via --text-file), then the
+  # forward-only merge, wall-clock ceiling, post-reset margin, the never-hot-loop MIN_BACKOFF floor,
+  # dual-horizon reset parse, and the default-backoff on a parse-miss — lives in the single-source
+  # `sail cap-recovery arm` (no bash floor math, no bash precedence). --log-file reads the persisted
+  # JSONL stream (authoritative event); --text-file is a BEST-EFFORT cap-text fallback over that same
+  # stream — under stream-json output the cap surfaces as a rate_limit_event, so the text tail is
+  # usually pure JSON and the fallback is a harmless no-op; it still catches a cap that leaked to the
+  # tail as plain text (e.g. a non-JSON error line). arm PRINTS the RFC3339 wake iff it armed (cap),
+  # nothing otherwise — so its output IS the cap-vs-clean signal (no separate classify). The watcher
+  # is issue-agnostic (whole-board resume), so it arms the GLOBAL cap-state (no --issue). `arm` writes
+  # `$RESUME_AFTER`.
+  local armed
+  armed="$(cap_recovery arm --surf-dir "$SURF_DIR" --now "$(now_epoch)" --log-file "$RESUME_STREAM" --text-file "$RESUME_STREAM" || true)"
+  if [ -n "$armed" ]; then
+    log "cap hit; armed resume-after ${armed}"
   else
     # Clean relaunch (no cap on the rerun): clear the shared floor + cap-state AND any self-relinquish
     # `capped` marker, so the next tick is not gated by stale state and a later healthy live session

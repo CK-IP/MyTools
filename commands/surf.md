@@ -495,7 +495,11 @@ error to surface, not to build through.
    # the unbound BASH_SOURCE guard and leaks set -e — #128). Stable ~/.claude/lib path (symlinked at
    # install, INSTALL.md), not cwd-relative (#127).
    worker_cmd="$(bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_command <issue>')"
-   #   worker_cmd is: claude --dangerously-skip-permissions -p "/sail <issue> --unattended <HEADLESS-WORKER CONTRACT …>"
+   #   worker_cmd is: claude --dangerously-skip-permissions --output-format stream-json --verbose -p "/sail <issue> --unattended <HEADLESS-WORKER CONTRACT …>"
+   #   #168: the stream-json flags make the worker emit machine-readable `rate_limit_event` lines (the
+   #   authoritative cap signal — Step 8 Layer-1). The supervisor tees the harness task output to
+   #   `.surf/runs/<issue>/worker-stream.jsonl`; the merge/green decision still reads ONLY the durable
+   #   run-dir artifacts, never this stream.
    #   The emitted prompt carries a headless-worker-contract clause (#139): a headless `claude -p`
    #   worker EXITS at turn-end and is never re-invoked, so the clause FORBIDS run_in_background /
    #   background `&` / ScheduleWakeup and REQUIRES the codex build+review stages to run synchronously
@@ -635,41 +639,75 @@ error to surface, not to build through.
    A `green` verdict requires the positive run-dir confirmation above (no `wip-handoff.md`; all
    `run-state.json` gates pass; clean `review.json`); anything else parks (fail-closed).
 
-   **Layer-1 cap-recovery — classify a cap wall BEFORE parking (#163).** The fail-closed park above is
-   correct for a genuine build failure, but a **usage-cap wall is not a build failure** — a
+   **Cap-sensing layers & precedence (#166/#168/#163).** Three *distinct* layers, not one linear
+   cascade — each with its own trigger:
+   1. **Proactive sensor — `#166` statusline** (Step 16, at every issue boundary, account-wide): the
+      token-free `.rate_limits` feed. It *avoids* the wall before launching the next worker and is
+      independent of any worker's output. Unchanged by #168.
+   2. **Reactive authoritative — `#168` `rate_limit_event`** (this Layer-1, after a worker exits
+      not-green): the worker's stream-json event is the *authoritative* reset source when a worker
+      actually hits the wall mid-build.
+   3. **Reactive fallback — `#163` cap-text** (self-relinquish, and the watcher's plain-text tail):
+      the retired-on-the-worker-path #126 regex, kept only where there is no structured event stream.
+   Within the reactive path the precedence is **event → cap-text → not-cap (build-park)**; the
+   proactive `#166` layer runs on its own schedule (Step 16) and is not a reactive cascade tier.
+
+   **Layer-1 cap-recovery — detect a cap wall BEFORE parking (#163, #168).** The fail-closed park above
+   is correct for a genuine build failure, but a **usage-cap wall is not a build failure** — a
    cap-refused worker often writes **no** terminus artifacts (no `run-state.json`/`review.json`, no
    `wip-handoff.md`), so `surf_worker_result` would park a perfectly good issue and the run would
    stall until a human noticed (the #148 incident). So on an **exited-but-NOT-green** verdict, and
-   **before** recording a park, run a **separate** cap-classification branch — `surf_worker_result`
-   stays artifact-only for the green/merge decision (it never scrapes logs); this branch reads the
-   worker's captured terminal output. Classification + reset parsing + floor arming are single-sourced
-   in the tested `sail cap-recovery` module (never eyeballed here, never a bash regex — CLAUDE.md
-   infra placement), and cap text is passed via a **file** (never interpolated on the command line —
-   the interface is injection-safe):
+   **before** recording a park, run a **separate** cap-detection branch — `surf_worker_result` stays
+   artifact-only for the green/merge decision (it never scrapes logs); this branch reads the worker's
+   **stream-json** output.
+
+   **The AUTHORITATIVE signal is the worker's `rate_limit_event` (#168), NOT the #126 cap-text regex.**
+   Because Step 8 launches the worker with `--output-format stream-json --verbose`
+   (`surf_worker_command`), the worker emits machine-readable `rate_limit_event` lines carrying
+   `status` / `rateLimitType` / `utilization` / `resetsAt` — the same signal convoy's `ship-tide.py`
+   reads, and *fresher + false-positive-free* vs the minutes-stale statusline (#166) and the
+   FP-prone cap-text regex (#126). The supervisor **tees the harness background-task output** (the
+   JSONL stream) to a durable file and feeds it to the tested `sail cap-recovery rate-limit-event`
+   parser (never eyeballed here, never a bash regex — CLAUDE.md infra placement; the stream is passed
+   by **file**, never interpolated on the command line — OWASP LLM01, the stream can carry
+   attacker-influenced diff/issue content). **The #126 cap-text regex is RETIRED on this worker path**
+   — `resetsAt` is the sole reset source here (it remains only for the supervisor self-relinquish
+   path below, which has no worker stream):
+   The worker was launched (Step 8, `surf_worker_command`) with `--output-format stream-json
+   --verbose`; the supervisor **tees the harness background-task output to
+   `.surf/runs/<issue>/worker-stream.jsonl` BEFORE any cap decision reads it** — this durable JSONL is
+   the parser's only input (surviving worker/supervisor death). The single arming path parses the
+   authoritative event and arms in one call:
    ```bash
-   # Capture the worker's terminal output to a file (harness task output), then classify. The text is
-   # read from the FILE — never spliced into the command line (OWASP LLM01; the output can carry
-   # attacker-influenced diff/issue content).
-   WORKER_OUT=".surf/runs/<issue>/worker-out.txt"   # written from the harness background-task output
-   if python3 -m sail cap-recovery classify --text-file "$WORKER_OUT" >/dev/null 2>&1; then
-     # CAP WALL, not a build-park. Arm the shared, durable, forward-only floor + per-issue cap-state,
-     # then WAIT — never relaunch immediately (the LOAD-BEARING invariant: zero relaunches before
-     # resume-after). `arm` re-parses the reset (5h clock+TZ OR weekly weekday/date/in-N-days), pushes
-     # `.surf/resume-after` FORWARD (a premature re-cap re-arms forward without counting; only a
-     # post-reset-still-capped retry increments the anomaly-count), and caps the wait at the wall-clock
-     # ceiling (>= 8 days). It writes BOTH .surf/resume-after and .surf/runs/<issue>/cap-state.json —
-     # the SAME state the Step 16 watcher reads, so a supervisor death mid-wait is picked up by the
-     # watcher at the identical reset (scenario 9).
-     ARMED="$(python3 -m sail cap-recovery arm --surf-dir .surf --issue <issue> \
-                --now "$(date -u +%s)" --text-file "$WORKER_OUT")"
-     echo "sail: [INFO] issue <issue> hit a usage cap — armed resume-after=$ARMED; waiting for reset (no premature relaunch)."
+   # The worker's stream-json output (harness background-task output) is teed to this durable JSONL.
+   WORKER_STREAM=".surf/runs/<issue>/worker-stream.jsonl"
+   # `arm --log-file` parses the AUTHORITATIVE rate_limit_event (rejected, OR allowed_warning with
+   # utilization >= the window threshold: 0.90 five_hour / 0.98 seven_day; the LONGEST-wait window
+   # dominates) and arms the shared, durable, forward-only floor from its resetsAt. NO --text-file is
+   # passed here → the #126 cap-text regex is RETIRED on the worker path (the event is the sole
+   # signal). arm bypasses the cap-text classify, applies the post-reset margin + never-hot-loop floor
+   # + wall-clock ceiling (>= 8 days), and pushes `.surf/resume-after` FORWARD (a replayed/older/
+   # duplicate event can never move the floor backward). It writes BOTH .surf/resume-after (RFC3339)
+   # AND .surf/runs/<issue>/cap-state.json (integer reset-after == usage_cap.reset_wakeup_epoch(...),
+   # the value the #167 hop/wall-policy chain consumes — Step 16). arm PRINTS the RFC3339 wake on a
+   # cap, nothing when it is not a cap. arm reads the stream from the FILE (never the command line —
+   # OWASP LLM01), and fails OPEN on a missing stream (a worker that wrote none → not-a-cap).
+   ARMED="$(python3 -m sail cap-recovery arm --surf-dir .surf --issue <issue> \
+              --now "$(date -u +%s)" --log-file "$WORKER_STREAM")"
+   if [ -n "$ARMED" ]; then
+     # CAP WALL, not a build-park. Never relaunch immediately (the LOAD-BEARING invariant: zero
+     # relaunches before resume-after). A supervisor death mid-wait is picked up by the Step 16 watcher
+     # at the identical reset (scenario 9).
+     echo "sail: [INFO] issue <issue> hit a usage cap (rate_limit_event) — armed resume-after=$ARMED; waiting for reset (no premature relaunch)."
      # ScheduleWakeup to the reset (+margin already folded into $ARMED). ONE correct long wait, not
      # many short probes. On wake, re-check the gate before relaunching:
      #   python3 -m sail cap-recovery gate --surf-dir .surf --now "$(date -u +%s)"  (rc 0 => relaunch this issue's worker once; rc 1 => still waiting)
      # A relaunch that re-caps just re-arms the floor FORWARD (never a give-up-by-count). Recovery is
      # bounded ONLY by the wall-clock ceiling.
    else
-     :   # genuine build-park (no cap signature) → record the fail-closed park as before.
+     :   # no rate_limit_event → genuine build-park; record the fail-closed park as before. (A cap the
+         # worker didn't report on its stream is still caught account-wide by the #166 proactive check
+         # at the next issue boundary — Step 16.)
    fi
    ```
    **Supervisor self-relinquish (scenario 5).** The branch above covers a *worker* cap while the
@@ -968,7 +1006,12 @@ partner. One worker per issue:
 # and capture stdout (never source a bash `set -e` lib into the zsh runtime — #128). Stable
 # ~/.claude/lib path (symlinked at install, INSTALL.md), not cwd-relative (#127):
 worker_cmd="$(bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_command <issue>')"
-#   worker_cmd PRINTS (no fork): claude --dangerously-skip-permissions -p "/sail <issue> --unattended <HEADLESS-WORKER CONTRACT …>"
+#   worker_cmd PRINTS (no fork): claude --dangerously-skip-permissions --output-format stream-json --verbose -p "/sail <issue> --unattended <HEADLESS-WORKER CONTRACT …>"
+#   #168: the worker launches with stream-json output so it emits machine-readable `rate_limit_event`
+#   lines — the AUTHORITATIVE cap/reset signal (Step 8 Layer-1). The supervisor TEES the harness
+#   background-task output (the JSONL stream) to `.surf/runs/<issue>/worker-stream.jsonl` so the cap
+#   parser can read it from a durable file (survives worker/supervisor death). The merge/green
+#   decision still reads ONLY the durable run-dir artifacts (never this stream).
 #   The emitted prompt carries a headless-worker contract (#139) forbidding run_in_background /
 #   background `&` / ScheduleWakeup and requiring synchronous codex build+review to the Stage-4
 #   commit terminus — a headless `-p` worker exits at turn-end and never gets a wakeup, so a
@@ -1515,7 +1558,13 @@ On a `backoff` result, `/surf` writes the wake target into the durable resume ar
 `sail/usage_cap.py`, dispatched via the CLI the loop consumes):
 
 ```bash
-WAKE=$(cat .surf/resume-after)   # resets_at + margin, forward-only (written on backoff)
+# The wake target is the INTEGER epoch armed into cap-state.json (resets_at + margin, forward-only).
+# Read it via `cap-recovery status` (`resume-after-epoch`), NOT `cat .surf/resume-after` — that file
+# is RFC3339 text and `usage-state hop`/`wall-policy --wake` require an integer epoch (#168). Whether
+# the reset came from a #168 rate_limit_event or the #163 cap-text path, it is armed the SAME way, so
+# the authoritative `resetsAt` feeds this exact chain.
+WAKE="$(python3 -m sail cap-recovery status --surf-dir .surf --issue <issue> --now "$(date -u +%s)" \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["resume-after-epoch"])')"
 POLICY="$(python3 -m sail usage-state wall-policy --wake "$WAKE" --now "$(date -u +%s)")"
 # wait-in-window  → chain ScheduleWakeup toward WAKE in <=3600s hops, resuming IN THIS WINDOW:
 #   HOP="$(python3 -m sail usage-state hop --wake "$WAKE" --now "$(date -u +%s)")"
@@ -1596,9 +1645,11 @@ not run headless — a premise now verified false).
   A clean (uncapped) relaunch clears both artifacts (`sail cap-recovery clear`) so stale state never
   gates a later run.
 - **Follow-up splits.** Keep the stream-json worker plumbing and auth-liveness surface separate:
-  `rate_limit_event` (authoritative reset signal) is tracked as **#168** and the `auth_dead`
-  sentinel + auth-liveness precheck as **#169**. This step only reuses the existing `#163` reactive
-  floor and `#166` sensing path, not duplicating them.
+  `rate_limit_event` (authoritative reset signal) is **SHIPPED as #168** — the worker launches with
+  `--output-format stream-json --verbose`, and Step 8 Layer-1 parses its `rate_limit_event` lines via
+  `sail cap-recovery rate-limit-event` as the authoritative reset source (the #126 cap-text regex is
+  retired on the worker path; the #166 statusline sensing + #163 reactive floor remain as the
+  fallbacks). The `auth_dead` sentinel + auth-liveness precheck stay tracked as **#169**.
 - **Anti-pattern guard.** Never put the "is it time yet?" decision inside a Claude call — that would
   burn tokens on every idle tick and can't run while the API is capped. The decision lives in the
   pure-shell gate; `/surf resume` is relaunched only once the gate has already said yes.
