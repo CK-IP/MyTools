@@ -18,12 +18,13 @@ KIND_BY_ARTIFACT = {
     "gitleaks.sarif": "sarif",
     "npm-audit.json": "npmaudit",
     "diff-coverage.json": "diffcoverage",
+    "docs-currency.json": "docscurrency",
     "shell-runtime.json": "shellruntime",
 }
 
 # Artifacts whose gate is meaningful ONLY in diff mode (coverage of CHANGED lines vs a
 # compare ref). The runner skips these in whole-repo mode and during baseline generation.
-DIFF_ONLY_ARTIFACTS = {"diff-coverage.json", "shell-runtime.json"}
+DIFF_ONLY_ARTIFACTS = {"diff-coverage.json", "docs-currency.json", "shell-runtime.json"}
 
 
 
@@ -156,6 +157,31 @@ def _shellruntime_records(path, root=None):
     return out
 
 
+def _docscurrency_records(path, root=None):
+    try:
+        doc = _load_json(path)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(doc, list):
+        return None
+    out = []
+    for entry in doc:
+        if not isinstance(entry, dict):
+            continue
+        out.append({
+            "fp": (
+                entry.get("kind", "") or "",
+                entry.get("token", "") or "",
+                _rel(entry.get("file", ""), root),
+                entry.get("line"),
+                bool(entry.get("blocking")),
+                entry.get("message", "") or "",
+            ),
+            "record": entry,
+        })
+    return out
+
+
 def diffcoverage_records(path, threshold):
     # diff-cover --json-report schema: {"total_percent_covered": F, "src_stats": {file:
     # {"violation_lines": [int, ...]}}}. Emit ONE finding per uncovered changed line — but
@@ -191,7 +217,7 @@ def finding_descriptor(record):
     if not isinstance(record, dict):
         return str(record)
     rule = (record.get("ruleId") or record.get("code") or record.get("id")
-            or record.get("advisory") or "")
+            or record.get("advisory") or record.get("token") or "")
     msg = ""
     m = record.get("message")
     if isinstance(m, dict):
@@ -226,6 +252,7 @@ _EXTRACTORS = {
     "pipaudit": _pipaudit_records,
     "shellcheck": _shellcheck_records,
     "npmaudit": _npmaudit_records,
+    "docscurrency": _docscurrency_records,
     "shellruntime": _shellruntime_records,
 }
 

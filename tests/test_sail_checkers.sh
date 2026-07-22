@@ -31,7 +31,7 @@ if ! python3 - <<'PY' >"$LOG_FILE" 2>&1
 import shutil
 import sail.checkers as checkers
 
-expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage", "shell-runtime"]
+expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage", "docs-currency", "shell-runtime"]
 expected_artifacts = {
     "ruff": "ruff.sarif",
     "mypy": "mypy.junit.xml",
@@ -43,6 +43,7 @@ expected_artifacts = {
     "gitleaks": "gitleaks.sarif",
     "npm-audit": "npm-audit.json",
     "diff-coverage": "diff-coverage.json",
+    "docs-currency": "docs-currency.json",
     "shell-runtime": "shell-runtime.json",
 }
 
@@ -71,9 +72,9 @@ for checker in registry:
     # #48 Step 1: stdout_artifact field defaults False for every file-based-output checker.
     # shellcheck (#48 Step 2) emits findings to stdout and opts in explicitly (asserted below);
     # gitleaks (#48 Step 3) writes SARIF to a file, so it stays False (asserted below).
-    # shellcheck (#48) and npm-audit (#52) capture stdout (tools with no file flag / the
-    # no-Node sentinel); every other checker writes its own artifact file (default False).
-    if checker.name not in ("shellcheck", "npm-audit") and checker.stdout_artifact is not False:
+    # shellcheck (#48), npm-audit (#52), and docs-currency capture stdout (tools with no file
+    # flag / pure diff helper); every other checker writes its own artifact file (default False).
+    if checker.name not in ("shellcheck", "npm-audit", "docs-currency") and checker.stdout_artifact is not False:
         raise SystemExit(
             f"FAIL: {checker.name}.stdout_artifact must default False, got {checker.stdout_artifact!r}"
         )
@@ -370,17 +371,17 @@ if got != ["ruff", "pytest"]:
 
 # empty string = the full registry (backward compatible)
 os.environ["SAIL_CHECKERS"] = ""
-if len(checkers.build_registry()) != 11:
+if len(checkers.build_registry()) != 12:
     raise SystemExit("FAIL: empty SAIL_CHECKERS must yield the full registry")
 
 # whitespace-only = the full registry (treated as empty)
 os.environ["SAIL_CHECKERS"] = "   "
-if len(checkers.build_registry()) != 11:
+if len(checkers.build_registry()) != 12:
     raise SystemExit("FAIL: whitespace-only SAIL_CHECKERS must yield the full registry")
 
 # unset = the full registry in order (#52 adds npm-audit + diff-coverage after gitleaks)
 del os.environ["SAIL_CHECKERS"]
-if [c.name for c in checkers.build_registry()] != ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage", "shell-runtime"]:
+if [c.name for c in checkers.build_registry()] != ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage", "docs-currency", "shell-runtime"]:
     raise SystemExit("FAIL: unset SAIL_CHECKERS must yield the full registry in order")
 
 print("PASS: SAIL_CHECKERS allowlist restricts the registry; unset/empty = full registry (#51, #52)")

@@ -50,7 +50,7 @@ import sys
 
 state_path = sys.argv[1]
 log_path = sys.argv[2]
-expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage", "shell-runtime"]
+expected_names = ["ruff", "mypy", "pytest", "bandit", "semgrep", "pip-audit", "shellcheck", "gitleaks", "npm-audit", "diff-coverage", "docs-currency", "shell-runtime"]
 
 with open(state_path, "r", encoding="utf-8") as fh:
     data = json.load(fh)
@@ -89,7 +89,9 @@ legit_pytest_skips = {
     (5, "no tests collected (rc=5)"),
     (2, "collection/config error (rc=2) — not a test failure"),
 }
-# The gate's tool name matches its registry name for all eight checkers.
+# The gate's tool name matches its registry name for all checkers except the ones whose tool is
+# intentionally different (e.g. npm-audit uses npm, diff-coverage uses diff-cover, docs-currency
+# uses python3).
 for gate in gates:
     name = gate.get("name")
     status = gate.get("status")
@@ -104,7 +106,7 @@ for gate in gates:
     # a "diff-only gate" reason — regardless of whether diff-cover is installed. Accept that
     # legitimate skip explicitly (mirrors the pytest legit-skip whitelist) before the
     # tool-availability invariant below.
-    if name in ("diff-coverage", "shell-runtime"):
+    if name in ("diff-coverage", "docs-currency", "shell-runtime"):
         if status != "skipped":
             print(f"FAIL: {name} must be skipped in whole-repo mode, got {status!r}", file=sys.stderr)
             raise SystemExit(1)
@@ -156,9 +158,9 @@ if len(header_lines) != 1:
     raise SystemExit(1)
 
 seq_lines = [line for line in lines if "seq=" in line]
-if len(seq_lines) != 11:
+if len(seq_lines) != 12:
     print(
-        f"FAIL: decision-log.md expected 11 outcome lines with seq=, got {len(seq_lines)}",
+        f"FAIL: decision-log.md expected 12 outcome lines with seq=, got {len(seq_lines)}",
         file=sys.stderr,
     )
     raise SystemExit(1)

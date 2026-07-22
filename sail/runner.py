@@ -582,12 +582,18 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
                 gate["new_findings_count"] = None
                 gate["reason"] = f"mode={mode} artifact=unreadable rc={rc}"
             else:
-                n = len(new)
-                status = "failed" if n > 0 else "passed"
+                if kind == "docscurrency":
+                    blocking_new = [item for item in new if item.get("blocking")]
+                    n = len(blocking_new)
+                    status = "failed" if n > 0 else "passed"
+                else:
+                    blocking_new = new
+                    n = len(new)
+                    status = "failed" if n > 0 else "passed"
                 gate["status"] = status
                 gate["new_findings_count"] = n
                 gate["reason"] = f"mode={mode} new={n}"
-                if new and mode == "diff" and kind != "diffcoverage" and checker.is_blocking(target_root, mode):
+                if blocking_new and mode == "diff" and kind != "diffcoverage" and checker.is_blocking(target_root, mode):
                     # Thread this gate's new findings into the review's triage context (#69).
                     # The triage prompt frames these as real defects to corroborate, so the set
                     # must be exactly "real defect" signals: only BLOCKING gates, and NOT
@@ -597,7 +603,7 @@ def run(run_dir=None, target=None, cov_fail_under=0, run_id=None, diff_ref=None,
                     # coverage gaps out of the "corroborate as a real defect" framing.
                     scanner_findings.append({
                         "tool": checker.name,
-                        "lines": [delta.finding_descriptor(r) for r in new],
+                        "lines": [delta.finding_descriptor(r) for r in blocking_new],
                     })
 
         gate["finished_at"] = _utc_now_iso()
