@@ -184,6 +184,18 @@ def main() -> int:
     usage_state_check_parser.add_argument("--refresh-secs", dest="refresh_secs", type=int, default=None)
     usage_state_check_parser.add_argument("--margin", type=int, default=None)
 
+    # #167: same-window cap-wait dispatch. `hop` prints the next ScheduleWakeup hop toward a
+    # recorded wake epoch (chained in <=3600s steps, terminal 0 at/after wake); `wall-policy`
+    # classifies the wall length (wait-in-window vs park-and-handoff). Both are the deterministic
+    # decisions the surf.md cap-wait loop consumes — never eyeballed in the prompt (infra-placement).
+    usage_state_hop_parser = usage_state_subparsers.add_parser("hop")
+    usage_state_hop_parser.add_argument("--wake", type=int, required=True)
+    usage_state_hop_parser.add_argument("--now", type=int, required=True)
+
+    usage_state_wall_parser = usage_state_subparsers.add_parser("wall-policy")
+    usage_state_wall_parser.add_argument("--wake", type=int, required=True)
+    usage_state_wall_parser.add_argument("--now", type=int, required=True)
+
     # #147: post-terminus learning loop — group a finished run's blocking findings by root cause
     # and turn domain-gap causes into PROPOSED domain.md rules (human-approved, never auto-applied).
     learn_parser = subparsers.add_parser("learn")
@@ -288,12 +300,21 @@ def main() -> int:
             default_threshold,
             decide,
             load_state,
+            next_hop,
+            wall_policy,
             write_usage_state,
         )
 
         if args.usage_state_command == "write":
             state = write_usage_state(sys.stdin.read(), args.out, args.now)
             return 0 if state is not None else 1
+        if args.usage_state_command == "hop":
+            # Next ScheduleWakeup hop toward the recorded wake epoch (0 = terminal, wait is over).
+            print(next_hop(args.wake, args.now))
+            return 0
+        if args.usage_state_command == "wall-policy":
+            print(wall_policy(args.wake, args.now))
+            return 0
         if args.usage_state_command == "check":
             threshold = args.threshold if args.threshold is not None else default_threshold()
             refresh_secs = (
