@@ -205,6 +205,13 @@ def main() -> int:
     learn_parser.add_argument("--apply", dest="apply", action="store_true")
     learn_parser.add_argument("--indices", default="")
 
+    parked_aging_parser = subparsers.add_parser("parked-aging")
+    parked_aging_parser.add_argument("--runs-dir", required=True)
+    parked_aging_parser.add_argument("--issues", default="")
+    parked_aging_parser.add_argument("--now")
+    parked_aging_parser.add_argument(
+        "--threshold-days", dest="threshold_days", type=int, default=7)
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -515,6 +522,9 @@ def main() -> int:
             pass
         return 0
 
+    if args.command == "parked-aging":
+        from sail.parked_aging import run_parked_aging
+        return run_parked_aging(args)
     if args.command == "learn":
         from sail.learn import apply_proposals, run_learn
 

@@ -195,6 +195,40 @@ def read_domain_memory(target: str) -> Optional[str]:
         return None
 
 
+# #153: domain.md is injected into plan/review prompts as UNTRUSTED context (OWASP LLM01). Cap the
+# injected payload to bound both prompt cost and the blast radius of a bloated/poisoned domain.md.
+# ~10KB is generous for real project rules; hitting it signals bloat that should be trimmed.
+DOMAIN_MEMORY_CAP_BYTES = 10 * 1024
+
+# A visible, self-describing marker appended to the CAPPED payload when domain.md is truncated, so
+# the LLM consumer reading the injected memory KNOWS it was cut (and does not rely on it as complete)
+# — not merely the operator-facing stderr note. It is CONSTANT (no original-size number): a marker
+# that varied with the original size would make the freshness fingerprint sensitive to tail-only
+# changes beyond the cap, defeating the "invisible tail change ⇒ no re-review" property (#153).
+_DOMAIN_TRUNCATION_MARKER = "\n\n[… .ship/domain.md truncated to its first {limit} bytes — size cap #153 …]"
+
+
+def cap_domain_memory(text, limit: int = DOMAIN_MEMORY_CAP_BYTES):
+    # Bound domain-memory text to `limit` UTF-8 bytes before it is injected as untrusted context
+    # OR hashed for freshness (#153) — both must see the SAME capped payload, else a >cap domain.md
+    # would appear perpetually stale and force a re-review every round. Returns
+    # (capped_text, original_byte_len, truncated_bool). A None/empty input passes through as
+    # ("", 0, False). On truncation the returned text is the leading content (trimmed to leave room
+    # for the marker) PLUS a visible truncation marker, and the total stays within `limit` bytes.
+    # The slice is on the ENCODED bytes with errors="ignore" on decode, so a cap that lands
+    # mid-character drops the partial char cleanly rather than emitting mojibake.
+    if not text:
+        return "", 0, False
+    encoded = text.encode("utf-8")
+    original_len = len(encoded)
+    if original_len <= limit:
+        return text, original_len, False
+    marker = _DOMAIN_TRUNCATION_MARKER.format(limit=limit)
+    content_budget = max(0, limit - len(marker.encode("utf-8")))
+    capped = encoded[:content_budget].decode("utf-8", errors="ignore")
+    return capped + marker, original_len, True
+
+
 @dataclass(frozen=True)
 class CheckerContext:
     # Runtime context threaded into build_command / is_blocking so a checker can scope to the
