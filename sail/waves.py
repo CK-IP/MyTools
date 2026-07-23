@@ -42,6 +42,11 @@ def _coerce_issue_ids(values: Any) -> list[int]:
     return out
 
 
+def _priority_index(priority: Any) -> dict[int, int]:
+    ordered = _coerce_issue_ids(priority)
+    return {issue_id: index for index, issue_id in enumerate(ordered)}
+
+
 def _coerce_graph(graph: Any) -> dict[int, tuple[int, ...]]:
     if graph is None:
         return {}
@@ -91,12 +96,16 @@ def wave_eligible(graph: Any, merged: Any = None, exclude: Any = None) -> list[i
     return eligible
 
 
-def launchable(eligible: Any, cap: Any, in_flight: Any = None) -> list[int]:
+def launchable(eligible: Any, cap: Any, in_flight: Any = None, priority: Any = None) -> list[int]:
     cap_value = normalize_cap(cap)
     in_flight_set = set(_coerce_issue_ids(in_flight))
+    priority_index = _priority_index(priority)
+    ranked_eligible = list(_coerce_issue_ids(eligible))
+    if priority_index:
+        ranked_eligible.sort(key=lambda issue_id: (0, priority_index[issue_id]) if issue_id in priority_index else (1, issue_id))
     launch: list[int] = []
     live_count = len(in_flight_set)
-    for issue_id in _coerce_issue_ids(eligible):
+    for issue_id in ranked_eligible:
         if issue_id in in_flight_set or issue_id in launch:
             continue
         if live_count + len(launch) >= cap_value:
@@ -112,6 +121,7 @@ class WaveRunState:
     in_flight: tuple[int, ...]
     awaiting_merge: tuple[int, ...]
     cap: int
+    priority: tuple[int, ...] = ()
 
     def eligible(self) -> list[int]:
         # A live issue — actively building (in_flight) OR built-green-awaiting the serial merge
@@ -123,16 +133,24 @@ class WaveRunState:
         # only in_flight builds consume a slot. An awaiting_merge branch has finished building and
         # is merely queued for the serial merge re-check — it is excluded from eligibility (above)
         # but must NOT hold a build-cap slot, else throughput collapses as merges queue up.
-        return launchable(self.eligible(), self.cap, self.in_flight)
+        return launchable(self.eligible(), self.cap, self.in_flight, self.priority)
 
 
-def make_run_state(graph: Any, cap: Any, merged: Any = None, in_flight: Any = None, awaiting_merge: Any = None) -> WaveRunState:
+def make_run_state(
+    graph: Any,
+    cap: Any,
+    merged: Any = None,
+    in_flight: Any = None,
+    awaiting_merge: Any = None,
+    priority: Any = None,
+) -> WaveRunState:
     return WaveRunState(
         graph=_coerce_graph(graph),
         merged=tuple(_coerce_issue_ids(merged)),
         in_flight=tuple(_coerce_issue_ids(in_flight)),
         awaiting_merge=tuple(_coerce_issue_ids(awaiting_merge)),
         cap=normalize_cap(cap),
+        priority=tuple(_coerce_issue_ids(priority)),
     )
 
 
@@ -164,7 +182,8 @@ def run_waves(args: argparse.Namespace) -> int:
         if command == "launchable":
             eligible = _parse_json_or_list(getattr(args, "eligible", ""))
             in_flight = _parse_json_or_list(getattr(args, "in_flight", ""))
-            out = launchable(eligible, getattr(args, "cap", None), in_flight=in_flight)
+            priority = _parse_json_or_list(getattr(args, "priority", ""))
+            out = launchable(eligible, getattr(args, "cap", None), in_flight=in_flight, priority=priority)
             if out:
                 print(" ".join(str(issue) for issue in out))
             return 0
@@ -176,6 +195,7 @@ def run_waves(args: argparse.Namespace) -> int:
                 merged=getattr(args, "merged", ""),
                 in_flight=getattr(args, "in_flight", ""),
                 awaiting_merge=getattr(args, "awaiting_merge", ""),
+                priority=getattr(args, "priority", ""),
             )
             print(
                 json.dumps(
@@ -185,6 +205,7 @@ def run_waves(args: argparse.Namespace) -> int:
                         "in_flight": list(state.in_flight),
                         "awaiting_merge": list(state.awaiting_merge),
                         "cap": state.cap,
+                        "priority": list(state.priority),
                         "eligible": state.eligible(),
                         "launchable": state.launchable(),
                     },

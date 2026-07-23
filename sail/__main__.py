@@ -68,6 +68,7 @@ def main() -> int:
     waves_launchable_parser.add_argument("--eligible", required=True)
     waves_launchable_parser.add_argument("--cap", required=True)
     waves_launchable_parser.add_argument("--in-flight", dest="in_flight", default="")
+    waves_launchable_parser.add_argument("--priority", default="")
 
     waves_state_parser = waves_subparsers.add_parser("state")
     waves_state_parser.add_argument("--graph", required=True)
@@ -75,6 +76,7 @@ def main() -> int:
     waves_state_parser.add_argument("--merged", default="")
     waves_state_parser.add_argument("--in-flight", dest="in_flight", default="")
     waves_state_parser.add_argument("--awaiting-merge", dest="awaiting_merge", default="")
+    waves_state_parser.add_argument("--priority", default="")
 
     # #163: cap-recovery owns its OWN subcommand CLI in sail/cap_recovery.py (single source of
     # truth). Capture everything after `cap-recovery` and delegate parsing there, rather than
