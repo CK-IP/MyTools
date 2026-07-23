@@ -1049,6 +1049,7 @@ the `eligible` set and the `launchable` set in one shot:
 - **The cap counts concurrent _builds_.** `launchable` never exceeds the manual cap counting only
   the **in-flight builds**; an awaiting-merge branch has finished building, so it holds no build
   slot (it is excluded from eligibility, but it does not starve the cap).
+- **Within-wave launch honors the approved Step 5b priority order.** `/surf` reads the ordered work-list ids from the durable Step 5b charter artifact and passes them into `python3 -m sail waves state` as `--priority`, so a resume re-ranks the launchable slice from the same priority order instead of falling back to ascending id.
 
 `/surf` launches the `launchable` issues, then after **each merge** re-runs `waves state` against
 the updated `main`, so any issue newly unblocked by that merge joins the **next** wave. Sequential
