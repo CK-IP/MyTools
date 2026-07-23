@@ -437,6 +437,63 @@ def dual_lens_status(review):
     return "ok" if review.get("lens2_ran") else "degraded"
 
 
+def redteam_status(review, backend_available=None):
+    """Classify a review.json's RED-TEAM lens state for the /surf pre-merge gate (#151).
+
+    Mirrors dual_lens_status() for the repo-exploring red-team lens (#66), and adds the
+    compensable-vs-degraded split the fail-closed merge gate needs. Like #116's degraded_lenses(),
+    it classifies off backend CONFIGURED-ness (`redteam_configured`) + live AVAILABILITY, NEVER the
+    review.json latch marker alone — a stale/partial marker can never read as 'ran'. Returns:
+      - "single-by-design" : the diff did not gate for red-team, OR it gated for red-team but no
+                             backend was configured (`redteam_configured` false) — the operator's
+                             expected single-lens setup, reported INFO by #116, NEVER a park.
+      - "ok"               : gated for AND the red-team pass genuinely ran (`redteam_ran` true).
+      - "compensable"      : gated for, a backend WAS configured, the pass did NOT run, and a
+                             red-team backend is available NOW → the supervisor re-runs it before
+                             merge (same compensation pattern as lens2).
+      - "degraded"         : gated for, a backend WAS configured, the pass did NOT run, and NO
+                             red-team backend is available now → cannot compensate → park, never
+                             merge (the silent-degrade hole #151 closes, made fail-closed).
+
+    Unlike dual_lens_status (`dual_lens_requested` is an explicit --dual-lens flag), `redteam_requested`
+    is AUTO-gated by is_high_stakes, so an UNCONFIGURED red-team backend must NOT park every
+    high-stakes diff — hence the configured-ness gate that keeps it 'single-by-design'.
+
+    `backend_available` defaults to the live redteam_available() probe; pass an explicit bool in
+    tests (and the merge gate) for hermetic, deterministic decisions.
+    """
+    if not isinstance(review, dict) or not review.get("redteam_requested"):
+        return "single-by-design"
+    if review.get("redteam_ran"):
+        return "ok"
+    # Gated-for but absent. An unconfigured backend is the operator's expected single-lens setup
+    # (#116 INFO), not a degradation to park — mirrors dual_lens 'single-by-design'.
+    if not review.get("redteam_configured"):
+        return "single-by-design"
+    # Configured but did not run: the compensable/degraded split turns on live availability.
+    if backend_available is None:
+        backend_available = redteam_available()
+    return "compensable" if backend_available else "degraded"
+
+
+def redteam_gate_report(outcome, sha=None):
+    """Operator-facing report for the /surf red-team merge-gate OUTCOME (#151, AC6), distinguishing
+    a COMPENSATED red-team pass (re-run before merge, work accepted) from a still-DEGRADED one
+    (backend down → parked, never merged). Returns (tone, message); tone is the #112 taxonomy —
+    INFO for the expected/handled compensation, ALERT for the real deviation that forced a park.
+    `outcome` ∈ {"compensated", "degraded"}.
+    """
+    if outcome == "compensated":
+        msg = ("red-team lens compensated at merge time — the gated-for red-team pass was re-run "
+               "before merge; work accepted")
+        if sha:
+            msg += f" (commit {sha})"
+        return ("INFO", msg)
+    if outcome == "degraded":
+        return ("ALERT", "red-team gated-for but backend still down — PARKED, not merged (fail-closed)")
+    raise ValueError(f"redteam_gate_report: unknown outcome {outcome!r}")
+
+
 # Cross-family-lens degradation at the autonomous commit terminus (#116). Generalizes
 # dual_lens_status() to ALL cross-family lenses (lens2 + red-team) so the driver can detect a
 # commit made under a review weaker than the diff GATED FOR. Maintainer refinement (overrides the
