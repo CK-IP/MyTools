@@ -1539,6 +1539,19 @@ keep alive, so there is nothing special about a cap versus any other stop.
   process's PID before re-entering the loop, and remove it on clean exit (this is the live-session
   marker the cap-recovery watcher checks; see Step 16). **Clear the user-stop sentinel:** delete
   `.surf/<charter>-paused` if present (a manual `/surf resume` re-arms auto-recovery — #124 R5-5).
+- **Orphaned-park guard — surface parks aged >7 days with no activity (report-only, #153).** After
+  the parked set is rebuilt (above), flag any park that has sat **>7 days with no activity** — an
+  *orphaned* park nobody has re-worked. Last-activity is the durable `.surf/runs/<issue>/` dir mtime
+  (poll/journal writes touch it). Consult the deterministic predicate — never eyeball the dates
+  (CLAUDE.md infra-placement; the aging threshold lives in tested `sail/parked_aging.py`):
+  ```bash
+  # $PARKED_CSV = the reconstructed parked issue numbers, comma-separated.
+  python3 -m sail parked-aging --runs-dir .surf/runs --issues "$PARKED_CSV" --now "$(date -u +%s)"
+  ```
+  This is **report-only — no auto-action**: it prints the orphaned parks (or a clean "none" note) for
+  the operator/journal and **never** merges, closes, files, re-launches, or drops them. Surface the
+  output in the resume summary + journal; the human decides what to do with an aged park. The CLI
+  always exits 0 (a report, not a gate).
 - **Completion sentinel — orphan vs done (load-bearing, round-2 risk #1).** A worker writes a
   per-issue **completion sentinel** (`.surf/runs/<issue>/.done`, in `/surf`'s coordination
   namespace) **only on a clean terminus** (the supervisor writes it the moment it records the issue's

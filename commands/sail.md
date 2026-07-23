@@ -19,6 +19,29 @@ mkdir -p "$SESSION_DIR"
 
 Pass `--run-dir "$SESSION_DIR"` to **both** `sail plan` and `sail run --diff` below.
 
+### Stage 0.1 — Lens preflight (launch warning, #153)
+
+A `--dual-lens` run with no `SAIL_REVIEW_CMD2`, or a `--red-team` run with no `SAIL_REDTEAM_CMD`, **degrades cleanly to single-lens** by design — but *silently*, which surprises an operator who explicitly asked for the second lens and never sees it run. Keep the clean degrade; add a **loud launch note** so the operator knows the requested lens will not fire. This is a **warning, never a failure** — it must not `exit` or abort the run. Per the #112 tone taxonomy the requested-lens-won't-run case is a real deviation from intent → **`⚠` / HEADS UP**, not a calm INFO.
+
+Emit it at launch, right after the front-door argument split parses the flags (see § Unattended mode), using the same `$@`-derived flag set:
+
+```bash
+# <!-- SAIL-LENS-PREFLIGHT-BEGIN -->
+# #153: a requested review lens with no backend degrades cleanly to single-lens (see Stage 3) — but
+# silently. WARN loudly at launch (never fail/exit): the degrade is KEPT, only made visible.
+case " $* " in *" --dual-lens "*) DUAL_LENS_REQUESTED=1;; *) DUAL_LENS_REQUESTED=0;; esac
+case " $* " in *" --red-team "*) RED_TEAM_REQUESTED=1;; *) RED_TEAM_REQUESTED=0;; esac
+if [ "$DUAL_LENS_REQUESTED" = "1" ] && [ -z "${SAIL_REVIEW_CMD2:-}" ]; then
+  echo "sail: [⚠ HEADS UP] --dual-lens was requested but SAIL_REVIEW_CMD2 is unset — the review will DEGRADE cleanly to single-lens; the second (cross-family) lens will NOT run. Set SAIL_REVIEW_CMD2 to get it." >&2
+fi
+if [ "$RED_TEAM_REQUESTED" = "1" ] && [ -z "${SAIL_REDTEAM_CMD:-}" ]; then
+  echo "sail: [⚠ HEADS UP] --red-team was requested but SAIL_REDTEAM_CMD is unset — the review will DEGRADE cleanly to single-lens; the repo-exploring red-team pass will NOT run. Set SAIL_REDTEAM_CMD to get it." >&2
+fi
+# <!-- SAIL-LENS-PREFLIGHT-END -->
+```
+
+This is a launch-time visibility note only — the deterministic degrade paths in Stage 3 (`--dual-lens` with no `SAIL_REVIEW_CMD2` → single-lens; a high-stakes diff with no `SAIL_REDTEAM_CMD` → single-lens) are unchanged.
+
 ### Metrics ledger (#146)
 
 `sail metrics` keeps a per-repo JSONL telemetry ledger at `.sail/metrics.jsonl` — the enabler for

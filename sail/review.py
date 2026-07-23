@@ -5,13 +5,14 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import uuid
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 import tempfile
 
 from sail import codexlatch
-from sail.checkers import read_domain_memory
+from sail.checkers import DOMAIN_MEMORY_CAP_BYTES, cap_domain_memory, read_domain_memory
 from sail.build import _backend_family
 from sail.decisionlog import DecisionLog
 from sail.mutation_verify import merge_mutation_verify_findings
@@ -1122,9 +1123,11 @@ def plan_fingerprint(run_dir):
 
 
 def domain_fingerprint(target):
-    # SHA-256 of <target>/.ship/domain.md, or the empty-string sentinel when the memory file is
-    # absent/unreadable. This is the third freshness component for review reuse.
-    return _sha256(read_domain_memory(target) or "")
+    # SHA-256 of the CAPPED <target>/.ship/domain.md (#153), or the empty-string sentinel when the
+    # memory file is absent/unreadable. This is the third freshness component for review reuse.
+    # It MUST hash the same capped payload that review() stores (below) and injects — else a >cap
+    # domain.md would hash-mismatch and appear perpetually stale, forcing a re-review every round.
+    return _sha256(cap_domain_memory(read_domain_memory(target))[0])
 
 
 def domain_hash_stale(target, stored_domain_hash):
@@ -1158,7 +1161,10 @@ def review(target, diff_ref, advisory=False, acs=None, lens="lens1", argv=None, 
     diff_text = _git_diff(target, diff_ref)
     diff_hash = _sha256(diff_text)
     if domain_memory is None:
-        domain_memory = read_domain_memory(target)
+        # Fallback for direct callers: read + cap (#153). run_review passes an already-capped value,
+        # so this only fires when review() is called standalone; capping keeps the stored hash
+        # consistent with domain_fingerprint (both hash the capped payload).
+        domain_memory = cap_domain_memory(read_domain_memory(target))[0]
     domain_hash = _sha256(domain_memory or "")
     if not diff_text.strip():
         return {"findings": [], "raw": "", "rc": 0, "parse_ok": True, "empty_diff": True,
@@ -1459,7 +1465,17 @@ def run_review(target, diff_ref, run_dir=None, advisory=False, dual_lens=False, 
 
     # Plan->review spine (#47): load the plan's acceptance criteria from the shared run-dir.
     acs, plan_status = load_plan_acs(run_dir)
-    domain_memory = read_domain_memory(target)
+    # #153: cap the UNTRUSTED domain.md before injecting it into the review lenses — bloat/poison
+    # guard, bounds prompt cost. The capped value flows to every lens AND is what review() hashes,
+    # keeping the stored domain_hash consistent with domain_fingerprint. Truncation is a designed
+    # guard firing (bloat to trim) → INFO per the #112 tone taxonomy.
+    domain_memory, _dm_bytes, _dm_truncated = cap_domain_memory(read_domain_memory(target))
+    if _dm_truncated:
+        print(
+            f"sail: [INFO] .ship/domain.md is {_dm_bytes} bytes — injecting only the first "
+            f"{DOMAIN_MEMORY_CAP_BYTES} bytes as domain memory (size cap, #153); trim domain.md "
+            f"to silence this.",
+            file=sys.stderr)
 
     prior_context = None
     if round > 1:

@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
-from sail.checkers import read_domain_memory
+from sail.checkers import DOMAIN_MEMORY_CAP_BYTES, cap_domain_memory, read_domain_memory
 from sail import codexlatch
 from sail.decisionlog import DecisionLog
 
@@ -575,7 +575,15 @@ def run_plan(target, run_dir=None, advisory=False, plan_adversary=False, grounde
     g_argv, g_source = _grounded_backend()
     run_grounded = grounded_escalate and g_argv is not None
     author_ok = backend_available()
-    domain_memory = read_domain_memory(target)
+    # #153: cap the UNTRUSTED domain.md before injecting it into the plan prompt(s) — bloat/poison
+    # guard, and bounds prompt cost. Truncation is a designed guard firing (bloat to trim) → INFO.
+    domain_memory, _dm_bytes, _dm_truncated = cap_domain_memory(read_domain_memory(target))
+    if _dm_truncated:
+        print(
+            f"sail: [INFO] .ship/domain.md is {_dm_bytes} bytes — injecting only the first "
+            f"{DOMAIN_MEMORY_CAP_BYTES} bytes as domain memory (size cap, #153); trim domain.md "
+            f"to silence this.",
+            file=sys.stderr)
 
     if not author_ok and not run_grounded:
         payload = {"status": "skipped", "reason": "no LLM backend available"}
