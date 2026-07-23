@@ -535,9 +535,10 @@ error to surface, not to build through.
    a codex review lens over codex-built code would be same-family self-review — the #83 rubber-stamp
    risk). `/surf` does **not** pass `--dual-lens` or a `--run-dir` to the worker: `/sail` risk-gates
    its own lenses and names its own run-dir. Step 8 explains why these **CLI-subprocess lenses** (not
-   `advisor()`) work inside a headless `-p` worker; the pre-merge guard below uses
-   `sail.review.dual_lens_status()` to compensate **only** a genuinely `degraded` review, never a
-   correct `single`-by-design one (#74, AC5).
+   `advisor()`) work inside a headless `-p` worker; the pre-merge guards below use
+   `sail.review.dual_lens_status()` (lens2, #74) and `sail.review.redteam_status()` (red-team, #151)
+   to compensate **only** a genuinely degraded review, never a correct `single`-by-design one — and
+   to **park fail-closed** when a configured cross-family lens gated-for but cannot be re-run.
 
    **`/sail` owns the run-dir; `/surf` discovers it.** `/sail`'s front door (sail.md Stage 0) always
    creates its **own** session run-dir `.sail/runs/sail-<issue>-<UTC-timestamp>/` and ignores any
@@ -790,7 +791,70 @@ error to surface, not to build through.
      the single-lens one), and the degradation *event* is preserved in the run journal (step 4) —
      the audit trail lives there, not in `review.json`.
 
-     With all parents confirmed merged and the dual-lens guard satisfied, **land** the
+     *Third pre-merge guard — the red-team degradation check (#151, fail-closed).* The lens2 guard
+     above covers **only** a missing dual-lens second pass. A diff that gated **for** the
+     repo-exploring red-team lens (#66) — `is_high_stakes` true, e.g. it touches
+     `SAIL_REDTEAM_SPINE_PATHS` — whose red-team never ran (`SAIL_REDTEAM_CMD` unavailable mid-run,
+     or a codex-family red-team backend latched off via #107) would otherwise merge with only a
+     post-hoc #116 INFO line — a **silent-degrade hole** inconsistent with the fail-closed merge
+     gate. Close it with the tested `sail.review.redteam_status(review, backend_available=<live probe>)`
+     — the single source of truth, mirroring `dual_lens_status` but split into compensable-vs-degraded
+     by whether a red-team backend is available **now** (classified off configured-ness + live
+     availability per #116, **never** the review.json latch marker, so a stale marker cannot wave a
+     degraded diff through). Pass the live probe explicitly:
+     ```bash
+     RTS="$(python3 -c 'import json,sys; from sail.review import redteam_status, redteam_available; print(redteam_status(json.load(open(sys.argv[1])), backend_available=redteam_available()))' "$RD/review.json")"
+     ```
+     Branch on the verdict:
+     - **`single-by-design`** → **NOT a degradation.** Either the diff did not gate for red-team, or
+       no red-team backend is configured (the operator's expected single-lens setup — reported INFO
+       by #116). **Proceed to merge** — do not compensate, do not park. (Auto-gated `redteam_requested`
+       means an UNCONFIGURED backend must never false-park every high-stakes diff — the #136 lens2
+       false-park lesson applied to red-team.)
+     - **`ok`** → the gated-for red-team pass genuinely ran → **proceed to merge**.
+     - **`compensable`** → gated for, configured, absent, and a red-team backend is available **now**
+       → **do not merge yet.** Run the red-team pass yourself before merging, soundly (same three
+       non-skippable sub-steps as the lens2 guard: check out the branch/worktree so the diff is
+       **real and non-empty** — an empty-diff re-review comes back trivially clean and would wave the
+       degraded build through; run it; then confirm `redteam_status == "ok"` on the overwritten
+       `review.json`). Its findings feed the **normal disposition flow** — a CRITICAL/HIGH red-team
+       finding blocks via `sail review`'s exit code exactly like any other, so a compensation that
+       surfaces a blocking finding **parks**, it does not merge:
+       ```bash
+       (
+         cd .claude/worktrees/sail-<issue> 2>/dev/null || git checkout sail/<issue>  # operate where /sail isolated the build
+         [ -n "$(git diff main --name-only)" ] || { echo "empty diff — park, do NOT merge"; exit 1; }
+         python3 -m sail review --target . --diff main --run-dir "$RD" --red-team    # SAIL_REDTEAM_CMD from env (availability already confirmed)
+       ) \
+         && python3 -c 'import json,sys; from sail.review import redteam_status; sys.exit(0 if redteam_status(json.load(open(sys.argv[1])), backend_available=True)=="ok" else 1)' "$RD/review.json" \
+         || { echo "red-team compensation blocked or did not run — park, do NOT merge"; exit 1; }
+       ```
+       On a clean compensation, surface the distinct **compensated** label (AC6) via the tested
+       reporter, then proceed to land:
+       ```bash
+       python3 -c 'import sys; from sail.review import redteam_gate_report; t,m=redteam_gate_report("compensated", sha=sys.argv[1]); print(f"surf: [{t}] #<issue> {m}")' "$(git -C .claude/worktrees/sail-<issue> rev-parse HEAD 2>/dev/null || echo pending)" >&2
+       ```
+     - **`degraded`** → gated for, configured, absent, and the backend is **still down** → the
+       compensation **cannot run** → **PARK, never merge** (the fail-closed guarantee). This rides
+       the **existing park path** (below): leave `sail/<issue>` + its worktree intact, write **no**
+       `.surf/runs/<issue>/.done` sentinel, and record the parking note in the journal **and**
+       `.surf/parked-issues.md` with the **explicit red-team-degraded reason** — so Resume (Step 15)
+       reconciles it as an unmerged, `.done`-absent branch and re-launches a fresh worker, **never**
+       silently re-merges the degraded build. Emit the ALERT via the same reporter:
+       ```bash
+       python3 -c 'from sail.review import redteam_gate_report; t,m=redteam_gate_report("degraded"); print(f"surf: [{t}] #<issue> {m}")' >&2
+       # then take the "Not green (park) → park" path below with reason: red-team gated-for but backend down
+       ```
+
+     *Guard mechanics.* The compensation path fires **only** on a `compensable` verdict; under the
+     live default (`SAIL_REDTEAM_CMD` set to a claude backend) a mid-run outage that recovers by
+     merge time is compensable, while one still down parks. Operate in the worker's worktree
+     `.claude/worktrees/sail-<issue>` **inside a subshell** so the cwd change is confined and the land
+     block keeps its primary-worktree-root basis. The compensation re-review overwrites the worker's
+     degraded `review.json` in place (the upgraded red-team review supersedes the single-lens one);
+     the degradation *event* is preserved in the run journal (step 4).
+
+     With all parents confirmed merged and both the dual-lens and red-team guards satisfied, **land** the
      issue via the **shared `sail land` logic** (the closing bookend, #59 — same source of truth
      `/sail` Stage 5 uses). The LOCAL git mechanics are single-sourced as `sail_merge_to_default` /
      `sail_prune_merged_branch` in `home/lib/sail-git-lifecycle.sh` (#82, tested by
@@ -812,10 +876,13 @@ error to surface, not to build through.
      sail_merge_to_default . sail/<issue> main "$RD/land-commit-msg.txt"   # checkout main + --no-ff merge; `Closes #<issue>` rides the msg file; prints the merge SHA
      git push origin main                                         # REQUIRED: only a merge on origin's DEFAULT branch fires GitHub auto-close + the board's Item-closed→Done automation; a local-only merge does neither
      git rev-parse HEAD                                            # capture this SHA into the journal/decision-log
-     # #116 degraded-merge visibility: the dual-lens guard above compensates ONLY lens2; a RED-TEAM
-     # lens that gated-for but did not run (codex latched / SAIL_REDTEAM_CMD down) would otherwise
-     # merge silently. Surface it — never block (proceed-but-track per #108). The published
-     # land-comment ALREADY carries the degraded note (`sail land` emits it from review.json); this
+     # #116 degraded-merge visibility. Both the lens2 AND red-team (#151) pre-merge guards run
+     # BEFORE this point, so a CONFIGURED cross-family lens that gated-for is now either compensated
+     # (re-ran → review.json shows it ran) or parked (never reaches here). The surviving note this
+     # line surfaces is therefore the EXPECTED single-lens case — a lens gated-for but with NO
+     # backend configured (INFO per #112, the operator's normal setup), never a silent
+     # configured-but-down degrade. Surface it — never block (proceed-but-track per #108). The
+     # published land-comment ALREADY carries the note (`sail land` emits it from review.json); this
      # adds the ALERT/INFO operator log line. Reads the merged review.json directly (no freshness args).
      DEGRADED="$(python3 -m sail degraded-review --run-dir "$RD" --sha "$(git rev-parse HEAD)")"
      [ -n "$DEGRADED" ] && echo "surf: [${DEGRADED%% *}] merged #<issue> under a DEGRADED review (${DEGRADED#* }) — a cross-family lens did not run; tracked in the land-comment, work accepted" >&2
