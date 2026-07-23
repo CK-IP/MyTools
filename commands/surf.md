@@ -500,10 +500,13 @@ error to surface, not to build through.
    #   authoritative cap signal — Step 8 Layer-1). The supervisor tees the harness task output to
    #   `.surf/runs/<issue>/worker-stream.jsonl`; the merge/green decision still reads ONLY the durable
    #   run-dir artifacts, never this stream.
-   #   The emitted prompt carries a headless-worker-contract clause (#139): a headless `claude -p`
-   #   worker EXITS at turn-end and is never re-invoked, so the clause FORBIDS run_in_background /
-   #   background `&` / ScheduleWakeup and REQUIRES the codex build+review stages to run synchronously
-   #   in-turn through the Stage-4 commit terminus. Without it the worker backgrounds the long codex
+   #   The emitted prompt carries a headless-worker-contract clause (#139, hardened by #172): a
+   #   headless `claude -p` worker EXITS at turn-end and is never re-invoked, so the clause FORBIDS
+   #   run_in_background / background `&` / ScheduleWakeup / a local_bash background task and REQUIRES
+   #   EVERY /sail stage on EVERY convergence round — plan re-runs, per-round mutation-verify, and
+   #   escalated/red-team review, not just the initial build/review (the #172 heavy-multi-round
+   #   re-trip) — to run synchronously in-turn through the Stage-4 commit terminus, then SELF-ATTEST
+   #   before turn-end that nothing was backgrounded. Without it the worker backgrounds the long codex
    #   stages, ends its turn expecting a wakeup that never fires in a headless process, and dies
    #   mid-build with no run-state.json/review.json/commit.
    ```
@@ -1080,10 +1083,16 @@ worker_cmd="$(bash -c '. ~/.claude/lib/surf-worker.sh && surf_worker_command <is
 #   background-task output (the JSONL stream) to `.surf/runs/<issue>/worker-stream.jsonl` so the cap
 #   parser can read it from a durable file (survives worker/supervisor death). The merge/green
 #   decision still reads ONLY the durable run-dir artifacts (never this stream).
-#   The emitted prompt carries a headless-worker contract (#139) forbidding run_in_background /
-#   background `&` / ScheduleWakeup and requiring synchronous codex build+review to the Stage-4
-#   commit terminus — a headless `-p` worker exits at turn-end and never gets a wakeup, so a
-#   backgrounded stage would die mid-build (no run-state.json / review.json / commit).
+#   The emitted prompt carries a headless-worker contract (#139, hardened by #172) forbidding
+#   run_in_background / background `&` / ScheduleWakeup / a local_bash background task and requiring
+#   synchronous codex build+review — on EVERY convergence round (plan re-runs, per-round
+#   mutation-verify, escalated/red-team review), not just the initial build/review — to the Stage-4
+#   commit terminus, plus a pre-turn-end SELF-ATTESTATION that nothing was backgrounded. A headless
+#   `-p` worker exits at turn-end and never gets a wakeup, so a backgrounded stage (the #172
+#   heavy-multi-round re-trip) would die mid-build (no run-state.json / review.json / commit).
+#   NOTE: #172 is the #139 backgrounding-hardening ONLY — it does NOT address the macOS
+#   screen-lock/display-sleep reaper (#157, cc#72851) that reaps run_in_background workers when the
+#   machine goes idle (the separate proximate cause of the #151/#154/#155 parks; tracked in #157).
 # The supervisor then runs THAT command with the Bash tool, run_in_background: true (harness-owned
 # lifecycle). It records the harness task id + the spawn time for the wall-clock cap.
 ```
